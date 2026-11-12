@@ -1368,7 +1368,7 @@ async fn individual_note_sharing() {
         .api
         .put(&format!("/vaults/{v}/objects/n1/key"), &req)
         .await;
-    let bob_pub: PublicUser = alice.api.get(&format!("/users/{}", bob.id)).await;
+    let bob_pub: PublicUser = bob.public();
     let env = engine::object_share_envelope(&ring, "n1", &bob_pub).unwrap();
     let _: ObjectShareInfo = alice
         .api
@@ -1379,6 +1379,13 @@ async fn individual_note_sharing() {
                 role: Role::Editor,
                 envelope: env,
                 log_entry: None,
+                invitation_id: Some(
+                    alice
+                        .invited_and_accepted(&v, Some("n1"), &bob.id, Role::Editor)
+                        .await
+                        .unwrap()
+                        .0,
+                ),
             },
         )
         .await;
@@ -1465,7 +1472,7 @@ async fn individual_note_sharing() {
     let vaults: Vec<VaultInfo> = bob.api.get("/vaults").await;
     assert!(vaults.is_empty());
     // Bob can't share it further or change its key.
-    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let carol_pub: PublicUser = carol.public();
     let env = engine::object_share_envelope(&bring, "n1", &carol_pub).unwrap();
     let st = bob
         .api
@@ -1477,6 +1484,7 @@ async fn individual_note_sharing() {
                 role: Role::Viewer,
                 envelope: env,
                 log_entry: None,
+                invitation_id: None,
             }),
         )
         .await;
@@ -1580,6 +1588,13 @@ async fn individual_note_sharing() {
                 role: Role::Viewer,
                 envelope: carol_env,
                 log_entry: None,
+                invitation_id: Some(
+                    alice
+                        .invited_and_accepted(&v, Some("n1"), &carol.id, Role::Viewer)
+                        .await
+                        .unwrap()
+                        .0,
+                ),
             },
         )
         .await;
@@ -2129,7 +2144,7 @@ async fn note_positions_count_from_where_sharing_last_started() {
         .api
         .put(&format!("/vaults/{v}/objects/n/key"), &start)
         .await;
-    let public: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let public: PublicUser = carol.public();
     let _: ObjectShareInfo = alice
         .api
         .post(
@@ -2139,6 +2154,13 @@ async fn note_positions_count_from_where_sharing_last_started() {
                 role: Role::Viewer,
                 envelope: engine::object_share_envelope(&fresh, "n", &public).unwrap(),
                 log_entry: None,
+                invitation_id: Some(
+                    alice
+                        .invited_and_accepted(&v, Some("n"), &carol.id, Role::Viewer)
+                        .await
+                        .unwrap()
+                        .0,
+                ),
             },
         )
         .await;
@@ -2453,7 +2475,7 @@ async fn role_dependent_writes_follow_role_changes() {
         .api
         .put(&format!("/vaults/{v}/objects/n1/key"), &req)
         .await;
-    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let carol_pub: PublicUser = carol.public();
     let _: ObjectShareInfo = alice
         .api
         .post(
@@ -2463,6 +2485,13 @@ async fn role_dependent_writes_follow_role_changes() {
                 role: Role::Viewer,
                 envelope: engine::object_share_envelope(&doc_ring, "n1", &carol_pub).unwrap(),
                 log_entry: None,
+                invitation_id: Some(
+                    alice
+                        .invited_and_accepted(&v, Some("n1"), &carol.id, Role::Viewer)
+                        .await
+                        .unwrap()
+                        .0,
+                ),
             },
         )
         .await;
@@ -2564,7 +2593,7 @@ async fn role_dependent_writes_follow_role_changes() {
 
     // Once removed, bob gets no envelope back, and everything is 404 to him.
     assert_eq!(alice.remove(&v, &bob.id).await, 204);
-    let bob_pub: PublicUser = alice.api.get(&format!("/users/{}", bob.id)).await;
+    let bob_pub: PublicUser = bob.public();
     let (epoch, key) = alice.ring(&v).current().unwrap();
     let grant = GrantKeysRequest {
         envelopes: vec![KeyEnvelope {
@@ -2756,6 +2785,7 @@ async fn only_the_owner_and_admins_delete_for_good() {
         role,
         key_envelope: None,
         log_entry: None,
+        invitation_id: None,
     };
     let members_path = format!("/vaults/{v}/members");
     let agent_member = format!("/vaults/{v}/members/{aid}");
@@ -2804,6 +2834,7 @@ async fn only_the_owner_and_admins_delete_for_good() {
         role: commenter(),
         key_envelope: None,
         log_entry: None,
+        invitation_id: None,
     };
     assert_eq!(
         alice
@@ -2834,6 +2865,7 @@ async fn only_the_owner_and_admins_delete_for_good() {
                 signed_by: None,
             },
             log_entry: None,
+            invitation_id: None,
         };
         assert_eq!(
             alice
@@ -3211,20 +3243,21 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
     assert_eq!(vk.shared, Some(vec![]), "a private key is not a share");
 
     // Nobody can be added before sharing starts with a fresh key.
-    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let carol_pub: PublicUser = carol.public();
     let early = engine::object_share_envelope(&doc, "n", &carol_pub).unwrap();
-    let add = |env: KeyEnvelope| AddObjectShareRequest {
+    let add = |env: KeyEnvelope, invitation_id: Option<String>| AddObjectShareRequest {
         user_id: carol.id.clone(),
         role: Role::Viewer,
         envelope: env,
         log_entry: None,
+        invitation_id,
     };
     let st = alice
         .api
         .status(
             Method::POST,
             &format!("/vaults/{v}/objects/n/shares"),
-            Some(&add(early)),
+            Some(&add(early, None)),
         )
         .await;
     assert_eq!(st, 409);
@@ -3246,9 +3279,13 @@ async fn notes_have_own_keys_and_recipients_never_get_the_history_before_sharing
     assert_eq!(put_key(&bob, &v, "n", &start).await.unwrap_err(), 403);
     put_key(&alice, &v, "n", &start).await.unwrap();
     let env = engine::object_share_envelope(&shared, "n", &carol_pub).unwrap();
+    let (invitation, _) = note_invitation_accepted(&alice, &v, "n", &carol, Role::Viewer).await;
     let _: ObjectShareInfo = alice
         .api
-        .post(&format!("/vaults/{v}/objects/n/shares"), &add(env))
+        .post(
+            &format!("/vaults/{v}/objects/n/shares"),
+            &add(env, Some(invitation)),
+        )
         .await;
     let vk: VaultKeysResponse = alice.api.get(&format!("/vaults/{v}/keys")).await;
     assert_eq!(vk.shared, Some(vec!["n".to_string()]));
@@ -3352,11 +3389,16 @@ async fn membership_changes_carry_owner_signed_log_entries() {
         .await;
     assert_eq!(st, 404);
 
+    let (invitation, _) = alice
+        .invited_and_accepted(&v, None, &bob.id, Role::Editor)
+        .await
+        .unwrap();
     let add = |entry: Option<LogEntry>, role: Role| AddMemberRequest {
         user_id: bob.id.clone(),
         role,
         key_envelope: None,
         log_entry: entry,
+        invitation_id: Some(invitation.clone()),
     };
     let members = format!("/vaults/{v}/members");
     let bob_member = LogMember::new(&bob.id, Role::Editor, &bob.account.public());
@@ -3543,27 +3585,37 @@ async fn membership_changes_carry_owner_signed_log_entries() {
     assert_eq!(s.epoch, 2);
     assert_eq!(s.check_key(2, ring.get(2).unwrap()), Ok(true));
 
-    // Someone added before they have keys is pinned later (`Rekey`).
-    let (dana_api, dana) = dev_login(&srv.base, "dana").await;
+    // Something added before it has keys (an agent, now: people accept
+    // invitations with theirs) is pinned later (`Rekey`).
+    let agent: CreateAgentResponse = alice
+        .api
+        .post(
+            "/agents",
+            &CreateAgentRequest {
+                name: "Dana".into(),
+            },
+        )
+        .await;
+    let dana = agent.agent.id;
     let e = alice
         .sign_next(
             &v,
             LogBody::Add {
-                member: LogMember::pending(&dana.user.id, Role::Editor),
+                member: LogMember::pending(&dana, Role::Editor),
             },
         )
         .await;
     let req = AddMemberRequest {
-        user_id: dana.user.id.clone(),
+        user_id: dana.clone(),
         role: Role::Editor,
         key_envelope: None,
         log_entry: Some(e),
+        invitation_id: None,
     };
     assert_eq!(
         alice.api.status(Method::POST, &members, Some(&req)).await,
         201
     );
-    drop(dana_api);
 }
 
 /// Add `who` to a signed vault as `owner` does: their key and a signed entry.
@@ -3580,6 +3632,13 @@ async fn add_signed(owner: &User, v: &str, who: &User, role: Role) -> u16 {
             },
         )
         .await;
+    let invitation = match owner
+        .invited_and_accepted(v, None, &who.id, role.clone())
+        .await
+    {
+        Ok((id, _)) => id,
+        Err((status, _)) => return status,
+    };
     owner
         .api
         .status(
@@ -3596,6 +3655,7 @@ async fn add_signed(owner: &User, v: &str, who: &User, role: Role) -> u16 {
                     signed_by: None,
                 }),
                 log_entry: Some(entry),
+                invitation_id: Some(invitation),
             }),
         )
         .await
@@ -3789,7 +3849,7 @@ async fn note_keys_say_which_owner_signed_them() {
         .api
         .put(&format!("/vaults/{v}/objects/n1/key"), &req)
         .await;
-    let public: PublicUser = bob.api.get(&format!("/users/{}", dave.id)).await;
+    let public: PublicUser = dave.public();
     let mut envelope = engine::object_share_envelope(&ring, "n1", &public).unwrap();
     let (epoch, key) = ring.current().unwrap();
     envelope.signature = Some(memberlog::sign_note_grant(
@@ -3818,6 +3878,12 @@ async fn note_keys_say_which_owner_signed_them() {
                 role: Role::Editor,
                 envelope,
                 log_entry: Some(entry),
+                invitation_id: Some(
+                    bob.invited_and_accepted(&v, Some("n1"), &dave.id, Role::Editor)
+                        .await
+                        .unwrap()
+                        .0,
+                ),
             },
         )
         .await;
@@ -4097,8 +4163,8 @@ async fn note_key_grants_carry_the_owners_signature() {
     )
     .unwrap();
     put_key(&alice, &v, "n", &start).await.unwrap();
-    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
-    let rita_pub: PublicUser = alice.api.get(&format!("/users/{}", rita.id)).await;
+    let carol_pub: PublicUser = carol.public();
+    let rita_pub: PublicUser = rita.public();
     let share = |who: &PublicUser, signed: bool| {
         let mut env = engine::object_share_envelope(&doc, "n", who).unwrap();
         if signed {
@@ -4117,11 +4183,19 @@ async fn note_key_grants_carry_the_owners_signature() {
             role: Role::Editor,
             envelope: env,
             log_entry: None,
+            invitation_id: None,
         }
     };
     let path = format!("/vaults/{v}/objects/n/shares");
-    let _: ObjectShareInfo = alice.api.post(&path, &share(&carol_pub, true)).await;
-    let _: ObjectShareInfo = alice.api.post(&path, &share(&rita_pub, false)).await;
+    for (who, signed) in [(&carol_pub, true), (&rita_pub, false)] {
+        let mut req = share(who, signed);
+        let invited = alice
+            .invited_and_accepted(&v, Some("n"), &who.id, Role::Editor)
+            .await
+            .unwrap();
+        req.invitation_id = Some(invited.0);
+        let _: ObjectShareInfo = alice.api.post(&path, &req).await;
+    }
     let list: Vec<ObjectShareInfo> = alice.api.get(&path).await;
     let signed = |id: &str| list.iter().find(|s| s.user.id == id).unwrap().key_signed;
     assert!(signed(&carol.id) && !signed(&rita.id));
@@ -4219,7 +4293,7 @@ async fn members_reload_one_notes_keys() {
     )
     .unwrap();
     put_key(&alice, &v, "n", &start).await.unwrap();
-    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let carol_pub: PublicUser = carol.public();
     let _: ObjectShareInfo = alice
         .api
         .post(
@@ -4229,6 +4303,13 @@ async fn members_reload_one_notes_keys() {
                 role: Role::Viewer,
                 envelope: engine::object_share_envelope(&doc2, "n", &carol_pub).unwrap(),
                 log_entry: None,
+                invitation_id: Some(
+                    alice
+                        .invited_and_accepted(&v, Some("n"), &carol.id, Role::Viewer)
+                        .await
+                        .unwrap()
+                        .0,
+                ),
             },
         )
         .await;
@@ -4388,19 +4469,25 @@ async fn a_rotation_can_leave_out_people_whose_key_changed_on_purpose() {
         .api
         .put(&format!("/vaults/{v}/objects/n1/key"), &req)
         .await;
-    let dave_pub: PublicUser = alice.api.get(&format!("/users/{}", dave.id)).await;
+    let dave_pub: PublicUser = dave.public();
     let share_dave = |ring: &keys::VaultKeyring| AddObjectShareRequest {
         user_id: dave.id.clone(),
         role: Role::Viewer,
         envelope: engine::object_share_envelope(ring, "n1", &dave_pub).unwrap(),
         log_entry: None,
+        invitation_id: None,
     };
+    let mut first = share_dave(&ring);
+    first.invitation_id = Some(
+        alice
+            .invited_and_accepted(&v, Some("n1"), &dave.id, Role::Viewer)
+            .await
+            .unwrap()
+            .0,
+    );
     let _: ObjectShareInfo = alice
         .api
-        .post(
-            &format!("/vaults/{v}/objects/n1/shares"),
-            &share_dave(&ring),
-        )
+        .post(&format!("/vaults/{v}/objects/n1/shares"), &first)
         .await;
 
     // Carol's and Dave's keys changed: leaving them out unannounced is refused.
@@ -4437,7 +4524,7 @@ async fn a_rotation_can_leave_out_people_whose_key_changed_on_purpose() {
     );
 
     // Once verified, both get the key again: Carol as members do...
-    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let carol_pub: PublicUser = carol.public();
     let (epoch, key) = alice.ring(&v).current().unwrap();
     let pk = carol_pub.account_key.as_ref().unwrap().verify().unwrap();
     let _: () = alice
@@ -4647,7 +4734,7 @@ async fn whoever_can_read_a_note_can_comment_on_it() {
         .api
         .put(&format!("/vaults/{v}/objects/m/key"), &req)
         .await;
-    let erin_pub: PublicUser = alice.api.get(&format!("/users/{}", erin.id)).await;
+    let erin_pub: PublicUser = erin.public();
     let env = engine::object_share_envelope(&ring, "m", &erin_pub).unwrap();
     let _: ObjectShareInfo = alice
         .api
@@ -4658,6 +4745,13 @@ async fn whoever_can_read_a_note_can_comment_on_it() {
                 role: Role::Viewer,
                 envelope: env,
                 log_entry: None,
+                invitation_id: Some(
+                    alice
+                        .invited_and_accepted(&v, Some("m"), &erin.id, Role::Viewer)
+                        .await
+                        .unwrap()
+                        .0,
+                ),
             },
         )
         .await;
@@ -4777,7 +4871,7 @@ async fn quick_notes_are_one_per_person_and_never_shared() {
     assert_eq!(pushed.results.len(), 1);
 
     // Nobody joins: not people, not agents.
-    let bob_key: PublicUser = alice.api.get(&format!("/users/{}", bob.id)).await;
+    let bob_key: PublicUser = bob.public();
     let public = bob_key.account_key.as_ref().unwrap().verify().unwrap();
     let (epoch, key) = alice.ring(&q).current().unwrap();
     let envelope = keys::wrap_vault_key(key, &q, epoch, &bob.id, &public.enc_public).unwrap();
@@ -4792,6 +4886,7 @@ async fn quick_notes_are_one_per_person_and_never_shared() {
             signed_by: None,
         }),
         log_entry: None,
+        invitation_id: None,
     };
     assert_eq!(
         alice
@@ -4812,6 +4907,7 @@ async fn quick_notes_are_one_per_person_and_never_shared() {
             signed_by: None,
         },
         log_entry: None,
+        invitation_id: None,
     };
     assert_eq!(
         alice
@@ -4976,11 +5072,16 @@ async fn a_signed_removal_carries_the_new_keys_entry() {
             },
         )
         .await;
+    let (invitation, _) = alice
+        .invited_and_accepted(&v, None, &bob.id, Role::Editor)
+        .await
+        .unwrap();
     let add = AddMemberRequest {
         user_id: bob.id.clone(),
         role: Role::Editor,
         key_envelope: None,
         log_entry: Some(e),
+        invitation_id: Some(invitation),
     };
     assert_eq!(
         alice
@@ -5055,11 +5156,16 @@ async fn keys_someone_who_left_still_knows_are_marked_for_rotation() {
     let member = |u: &User| format!("/vaults/{v}/members/{}", u.id);
 
     // Someone who never got the key leaves: nothing to rotate.
+    let (invitation, _) = alice
+        .invited_and_accepted(&v, None, &dana.id, Role::Viewer)
+        .await
+        .unwrap();
     let add = AddMemberRequest {
         user_id: dana.id.clone(),
         role: Role::Viewer,
         key_envelope: None,
         log_entry: None,
+        invitation_id: Some(invitation),
     };
     assert_eq!(
         alice
@@ -5572,4 +5678,470 @@ async fn srv_token(srv: &TestServer, agent: &CreateAgentResponse) -> String {
         .await
         .unwrap();
     tok.access_token
+}
+
+/// Sharing is by invitation (protocol.md §5.6): an address tells the
+/// sharer nothing about whether it has an account; the person accepts or
+/// declines (which the owners aren't told); only then does an owner's app
+/// add them, with the invitation's id. Nobody else can make or accept one.
+#[tokio::test]
+async fn sharing_is_by_invitation() {
+    use notekpr_core::invitation::{self, Invitee};
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_vault("Family").await;
+    let list = |u: &User| {
+        let api = u.api.clone();
+        async move { api.get::<InvitationsResponse>("/invitations").await }
+    };
+    let mut wb = Ws::connect(&srv.ws, bob.api.token.as_ref().unwrap()).await;
+    let mut wa = Ws::connect(&srv.ws, alice.api.token.as_ref().unwrap()).await;
+    let told = |m: &ServerMessage| match m {
+        ServerMessage::UserEvent {
+            event: UserEventKind::InvitationsChanged,
+        } => Some(()),
+        _ => None,
+    };
+
+    // An address with an account and one without: the same answer.
+    let to_bob = alice
+        .invite(&v, None, "Bob@Example.com ", Role::Editor)
+        .await
+        .unwrap();
+    let to_nobody = alice
+        .invite(&v, None, "nobody@example.com", Role::Editor)
+        .await
+        .unwrap();
+    for i in [&to_bob, &to_nobody] {
+        assert!(i.user.is_none() && i.accepted.is_none());
+    }
+    assert_eq!(to_bob.email.as_deref(), Some("bob@example.com"));
+    wb.until(told).await;
+    // (The owners hear of both.)
+    wa.until(told).await;
+    wa.until(told).await;
+    // Bob sees who invited him, never what to (its name is encrypted).
+    let got = list(&bob).await;
+    assert!(got.sent.is_empty());
+    let [r] = &got.received[..] else {
+        panic!("one invitation: {got:?}")
+    };
+    assert_eq!(r.id, to_bob.id);
+    assert_eq!(r.from.id, alice.id);
+    assert_eq!(r.from.email.as_deref(), Some("alice@example.com"));
+    assert!(!r.accepted);
+    assert_eq!(r.verified_inviter(), Some(alice.account.public()));
+    // Carol isn't invited: nothing, and she can't answer for Bob.
+    assert!(list(&carol).await.received.is_empty());
+    let sig = invitation::sign_acceptance(&carol.account, &r.terms().unwrap(), &carol.id);
+    let accept_path = format!("/invitations/{}/accept", to_bob.id);
+    let body = AcceptInvitationRequest { signature: sig };
+    assert_eq!(
+        carol
+            .api
+            .status(Method::POST, &accept_path, Some(&body))
+            .await,
+        404
+    );
+    // The owners see both, unanswered.
+    let sent = list(&alice).await.sent;
+    assert_eq!(sent.len(), 2);
+
+    // Nobody joins without having accepted.
+    let add = |u: &User, invitation_id: Option<String>| AddMemberRequest {
+        user_id: u.id.clone(),
+        role: Role::Editor,
+        key_envelope: None,
+        log_entry: None,
+        invitation_id,
+    };
+    let members = format!("/vaults/{v}/members");
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &members, Some(&add(&bob, None)))
+            .await,
+        400
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &members,
+                Some(&add(&bob, Some(to_bob.id.clone())))
+            )
+            .await,
+        409
+    );
+
+    // Declining: gone for Bob; the owners aren't told and see it unanswered.
+    let decline = format!("/invitations/{}/decline", to_bob.id);
+    assert_eq!(
+        bob.api.status::<()>(Method::POST, &decline, None).await,
+        204
+    );
+    wb.until(told).await;
+    wa.expect_silence(300).await;
+    assert!(list(&bob).await.received.is_empty());
+    let still = list(&alice).await.sent;
+    assert!(
+        still
+            .iter()
+            .any(|i| i.id == to_bob.id && i.accepted.is_none())
+    );
+    // Not again while it waits (Bob isn't asked twice), nor accepted now.
+    assert_eq!(
+        alice
+            .invite(&v, None, "bob@example.com", Role::Viewer)
+            .await
+            .unwrap_err()
+            .0,
+        409
+    );
+    assert_eq!(bob.accept(&to_bob.id).await.unwrap_err().0, 404);
+    // Cancelled: it ends for everyone; then a new one may go.
+    let cancel = format!("/vaults/{v}/invitations/{}", to_bob.id);
+    assert_eq!(
+        alice.api.status::<()>(Method::DELETE, &cancel, None).await,
+        204
+    );
+    assert_eq!(
+        alice.api.status::<()>(Method::DELETE, &cancel, None).await,
+        404
+    );
+    assert!(list(&alice).await.sent.iter().all(|i| i.id != to_bob.id));
+
+    // Accepting is signed with the key the owner's app wraps to.
+    let inv = alice
+        .invite(&v, None, "bob@example.com", Role::Editor)
+        .await
+        .unwrap();
+    let r = list(&bob).await.received.remove(0);
+    let path = format!("/invitations/{}/accept", inv.id);
+    for forged in [
+        invitation::sign_acceptance(&carol.account, &r.terms().unwrap(), &bob.id),
+        invitation::sign_acceptance(&bob.account, &r.terms().unwrap(), &carol.id),
+        vec![0; 64],
+    ] {
+        let body = AcceptInvitationRequest { signature: forged };
+        assert_eq!(bob.api.status(Method::POST, &path, Some(&body)).await, 400);
+    }
+    bob.accept(&inv.id).await.unwrap();
+    wa.until(told).await;
+    let accepted = list(&alice)
+        .await
+        .sent
+        .into_iter()
+        .find(|i| i.id == inv.id)
+        .unwrap();
+    let a = accepted.accepted.as_ref().unwrap();
+    assert_eq!(a.user.id, bob.id);
+    let key = a.user.account_key.as_ref().unwrap().verify().unwrap();
+    assert_eq!(key, bob.account.public());
+    assert!(invitation::verify_acceptance(
+        &key,
+        &accepted.terms().unwrap(),
+        &bob.id,
+        &a.signature
+    ));
+    assert!(list(&bob).await.received[0].accepted);
+    // Added as invited, by its id: not as another role, not someone else.
+    let mut wrong = add(&bob, Some(inv.id.clone()));
+    wrong.role = Role::Admin;
+    assert_eq!(
+        alice.api.status(Method::POST, &members, Some(&wrong)).await,
+        400
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &members,
+                Some(&add(&carol, Some(inv.id.clone())))
+            )
+            .await,
+        409
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(
+                Method::POST,
+                &members,
+                Some(&add(&bob, Some(inv.id.clone())))
+            )
+            .await,
+        201
+    );
+    // Done: it ends for both.
+    assert!(list(&bob).await.received.is_empty());
+    assert!(list(&alice).await.sent.iter().all(|i| i.id != inv.id));
+    alice.keyrings.remove(&v);
+
+    // Bob is someone Alice shares with now: invited by account too, and
+    // suggested. Carol isn't: she is invited by her address only.
+    let by_account = |to: &str, role: Role| {
+        let id = random_id();
+        let created_at = notekpr_core::now_ms();
+        let signature = invitation::sign(
+            &alice.account,
+            &invitation_terms(
+                &id,
+                &v,
+                None,
+                &alice.id,
+                Invitee::User(to),
+                &role,
+                created_at,
+            ),
+        );
+        CreateInvitationRequest {
+            id,
+            object_id: None,
+            user_id: Some(to.into()),
+            email: None,
+            role,
+            created_at,
+            signature,
+            with_comments: false,
+        }
+    };
+    let invitations = format!("/vaults/{v}/invitations");
+    let status = |req: CreateInvitationRequest| {
+        let api = alice.api.clone();
+        let path = invitations.clone();
+        async move { api.status(Method::POST, &path, Some(&req)).await }
+    };
+    assert_eq!(status(by_account(&carol.id, Role::Editor)).await, 404);
+    assert_eq!(status(by_account(&bob.id, Role::Editor)).await, 409);
+    assert_eq!(status(by_account(&alice.id, Role::Editor)).await, 400);
+    let found: Vec<PublicUser> = alice.api.get("/users/search?q=bo").await;
+    assert_eq!(found.len(), 1);
+    let found: Vec<PublicUser> = alice.api.get("/users/search?q=ca").await;
+    assert!(found.is_empty());
+    // Owners are made from members; nobody is invited as one.
+    assert_eq!(status(by_account(&bob.id, Role::Owner)).await, 400);
+    // Signed by the inviter, about now.
+    let mut forged = by_account(&bob.id, Role::Viewer);
+    forged.role = Role::Editor;
+    assert_eq!(status(forged).await, 400);
+    let mut late = by_account(&bob.id, Role::Viewer);
+    late.created_at -= 2 * invitation::CLOCK_SKEW_MS;
+    assert_eq!(status(late).await, 400);
+    // Members don't invite.
+    let to_carol = |by: &User| {
+        let (api, account, id) = (by.api.clone(), by.account.clone(), by.id.clone());
+        let v = v.clone();
+        async move {
+            let inv = random_id();
+            let created_at = notekpr_core::now_ms();
+            let role = Role::Viewer;
+            let signature = invitation::sign(
+                &account,
+                &invitation_terms(
+                    &inv,
+                    &v,
+                    None,
+                    &id,
+                    Invitee::Email("carol@example.com"),
+                    &role,
+                    created_at,
+                ),
+            );
+            api.status(
+                Method::POST,
+                &format!("/vaults/{v}/invitations"),
+                Some(&CreateInvitationRequest {
+                    id: inv,
+                    object_id: None,
+                    user_id: None,
+                    email: Some("carol@example.com".into()),
+                    role,
+                    created_at,
+                    signature,
+                    with_comments: false,
+                }),
+            )
+            .await
+        }
+    };
+    assert_eq!(to_carol(&bob).await, 403);
+
+    // Someone without an account yet sees theirs once they have one.
+    let erin_inv = alice
+        .invite(&v, None, "erin@example.com", Role::Viewer)
+        .await
+        .unwrap();
+    let erin = new_user(&srv.base, "erin").await;
+    assert_eq!(list(&erin).await.received[0].id, erin_inv.id);
+
+    // Limits: how many wait at once, how many go out a day.
+    srv.set(InstanceSettingsUpdate {
+        invitations_pending: Some(Limit::Max(3)),
+        ..Default::default()
+    })
+    .await;
+    // (nobody@, erin@ wait; one more fits.)
+    assert_eq!(to_carol(&alice).await, 201);
+    let full = alice
+        .invite(&v, None, "frank@example.com", Role::Viewer)
+        .await
+        .unwrap_err();
+    assert_eq!(full.0, 403);
+    assert!(full.1.contains(ERROR_LIMIT_REACHED));
+    srv.set(InstanceSettingsUpdate {
+        invitations_pending: Some(Limit::Unlimited),
+        invitations_per_day: Some(Limit::Max(5)),
+        ..Default::default()
+    })
+    .await;
+    // Five went out today (cancelled and done ones count).
+    assert_eq!(
+        alice
+            .invite(&v, None, "frank@example.com", Role::Viewer)
+            .await
+            .unwrap_err()
+            .0,
+        403
+    );
+
+    // Expired: gone for everyone, and the address forgotten.
+    let later = notekpr_core::now_ms() + 15 * 24 * 3600 * 1000;
+    notekpr_server::repo::invitations::expire(&srv.state.db, later)
+        .await
+        .unwrap();
+    assert!(list(&alice).await.sent.is_empty());
+    assert!(list(&erin).await.received.is_empty());
+    let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invitations WHERE email IS NOT NULL")
+        .fetch_one(&srv.state.db)
+        .await
+        .unwrap();
+    assert_eq!(kept, 0);
+}
+
+/// A note is shared by invitation too, once sharing started; and someone
+/// who stops being an owner leaves no invitation of theirs behind.
+#[tokio::test]
+async fn notes_are_shared_by_invitation_and_owners_invitations_end_with_them() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_signed_vault("Signed").await;
+
+    // Not before sharing started (a fresh key), nor as admin.
+    assert_eq!(
+        alice
+            .invite(&v, Some("n"), "carol@example.com", Role::Viewer)
+            .await
+            .unwrap_err()
+            .0,
+        409
+    );
+    let ring = share_note_started(&alice, &v, "n").await;
+    assert_eq!(
+        alice
+            .invite(&v, Some("n"), "carol@example.com", Role::Admin)
+            .await
+            .unwrap_err()
+            .0,
+        400
+    );
+    let (inv, carol_pub) = note_invitation_accepted(&alice, &v, "n", &carol, Role::Viewer).await;
+    // Someone invited to the vault isn't added to the note with it.
+    let path = format!("/vaults/{v}/objects/n/shares");
+    let entry = alice
+        .sign_next(
+            &v,
+            notekpr_core::memberlog::LogBody::Share {
+                object_id: "n".into(),
+                member: notekpr_core::memberlog::LogMember::new(
+                    &carol.id,
+                    Role::Viewer,
+                    &carol.account.public(),
+                ),
+            },
+        )
+        .await;
+    let req = |invitation_id: Option<String>| AddObjectShareRequest {
+        user_id: carol.id.clone(),
+        role: Role::Viewer,
+        envelope: notekpr_core::engine::object_share_envelope(&ring, "n", &carol_pub).unwrap(),
+        log_entry: Some(entry.clone()),
+        invitation_id,
+    };
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &path, Some(&req(None)))
+            .await,
+        400
+    );
+    assert_eq!(
+        alice
+            .api
+            .status(Method::POST, &path, Some(&req(Some(inv))))
+            .await,
+        201
+    );
+
+    // Bob becomes an owner and invites Dave; once he isn't one any more,
+    // his invitation ends.
+    alice.keyrings.remove(&v);
+    alice.load_keys(&v).await.unwrap();
+    assert_eq!(add_signed(&alice, &v, &bob, Role::Editor).await, 201);
+    assert_eq!(set_role(&alice, &v, &bob, Role::Owner).await, 204);
+    let mut bob = bob;
+    bob.load_keys(&v).await.unwrap();
+    let dave_inv = bob
+        .invite(&v, None, "dave@example.com", Role::Viewer)
+        .await
+        .unwrap();
+    assert!(
+        alice
+            .api
+            .get::<InvitationsResponse>("/invitations")
+            .await
+            .sent
+            .iter()
+            .any(|i| i.id == dave_inv.id)
+    );
+    assert_eq!(set_role(&alice, &v, &bob, Role::Editor).await, 204);
+    assert!(
+        alice
+            .api
+            .get::<InvitationsResponse>("/invitations")
+            .await
+            .sent
+            .is_empty()
+    );
+}
+
+/// Give note `o` some content and start sharing it (a fresh key), as an
+/// owner's app does before inviting anyone to it.
+async fn share_note_started(owner: &User, v: &str, o: &str) -> keys::VaultKeyring {
+    let note = NoteDoc::new();
+    let u = note.set_text("shared").unwrap();
+    let head = owner
+        .push(v, vec![owner.encrypt_update(v, o, &u)])
+        .await
+        .unwrap()
+        .head_seq;
+    let (ring, req) = notekpr_core::engine::start_sharing(
+        owner.ring(v),
+        o,
+        &notekpr_core::engine::ObjectMeta::titled("Shared"),
+        &note.encode_state(),
+        head,
+    )
+    .unwrap();
+    let _: () = owner
+        .api
+        .put(&format!("/vaults/{v}/objects/{o}/key"), &req)
+        .await;
+    ring
 }

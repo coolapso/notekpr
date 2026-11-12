@@ -119,7 +119,7 @@ async fn people_can_recover_their_notes_offline() {
         .api
         .put(&format!("/vaults/{v}/objects/n1/key"), &req)
         .await;
-    let carol_pub: PublicUser = alice.api.get(&format!("/users/{}", carol.id)).await;
+    let carol_pub: PublicUser = carol.public();
     let env = engine::object_share_envelope(&doc, "n1", &carol_pub).unwrap();
     let _: ObjectShareInfo = alice
         .api
@@ -130,6 +130,11 @@ async fn people_can_recover_their_notes_offline() {
                 role: Role::Viewer,
                 envelope: env,
                 log_entry: None,
+                invitation_id: Some(
+                    note_invitation_accepted(&alice, &v, "n1", &carol, Role::Viewer)
+                        .await
+                        .0,
+                ),
             },
         )
         .await;

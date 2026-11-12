@@ -88,6 +88,8 @@ pub(super) fn on_server_message(m: ServerMessage) {
             if offline_start {
                 leptos::task::spawn_local(offline::finish_online());
             }
+            // What changed while we weren't connected.
+            leptos::task::spawn_local(refresh_invitations());
         }
         ServerMessage::Changes { vault_id, changes } => {
             let applied = step(|c| {
@@ -293,6 +295,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 refresh_shares().await;
             }),
             UserEventKind::SharesChanged => leptos::task::spawn_local(refresh_shares_announcing()),
+            UserEventKind::InvitationsChanged => leptos::task::spawn_local(refresh_invitations()),
             UserEventKind::SessionRevoked => {
                 sign_out_local(Some("This session was signed out.".into()))
             }
@@ -301,6 +304,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
                 refresh_vaults().await;
                 refresh_shares().await;
                 refresh_pending_devices().await;
+                refresh_invitations().await;
             }),
         },
         ServerMessage::Error {

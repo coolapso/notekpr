@@ -6,7 +6,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use notekpr_core::protocol::{
-    DEV_ISSUER, DevLoginRequest, ExchangeRequest, ServerInfo, SessionEntry, SessionResponse,
+    DEV_EMAIL_DOMAIN, DEV_ISSUER, DevLoginRequest, ExchangeRequest, ServerInfo, SessionEntry,
+    SessionResponse,
 };
 use serde::Deserialize;
 
@@ -275,7 +276,10 @@ pub async fn dev_login(
                 .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
                 .unwrap_or_default()
         });
-    let user_id = auth::provision_user(&state, DEV_ISSUER, &username, &display, None).await?;
+    // An address of their own, to be invited by (no mail is ever sent).
+    let email = format!("{username}@{DEV_EMAIL_DOMAIN}");
+    let user_id =
+        auth::provision_user(&state, DEV_ISSUER, &username, &display, Some(&email)).await?;
     Ok(Json(
         session_response(&state, &user_id, "web", Some("dev login")).await?,
     ))

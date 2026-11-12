@@ -16,7 +16,7 @@ async fn shared_vault_reaches_running_sync_live() {
     let alice_hub = hub(&alice).await;
     let fam = alice_hub.resolve("Family").await.unwrap();
 
-    let shared = manage::share(&alice, &fam, "bob", Role::Editor, false)
+    let shared = share(&alice, &fam, "bob", Role::Editor, false)
         .await
         .unwrap();
     assert!(shared.key_shared);
@@ -81,13 +81,13 @@ async fn owners_share_a_vault_and_it_outlives_its_creator() {
 
     // Bob joins as an owner (an editor first, then owner), and as one
     // shares the vault with Carol.
-    manage::share(&alice, &fam, "bob", Role::Owner, false)
+    share(&alice, &fam, "bob", Role::Owner, false)
         .await
         .unwrap();
     let bob_hub = hub(&bob).await;
     let bfam = bob_hub.resolve("Family").await.unwrap();
     assert_eq!(bfam.lock().await.role(), Role::Owner);
-    manage::share(&bob, &bfam, "carol", Role::Viewer, false)
+    share(&bob, &bfam, "carol", Role::Viewer, false)
         .await
         .unwrap();
 
@@ -133,9 +133,7 @@ async fn offline_edits_reconcile_and_pending_queue_survives_restart() {
     let alice_hub = hub(&alice).await;
     let v = alice_hub.resolve("Notes").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     ops::put_document(
         &alice_hub,
         &vid,
@@ -275,9 +273,7 @@ async fn revocation_rotates_keys_and_keeps_local_copy_read_only() {
     let alice_hub = hub(&alice).await;
     let v = alice_hub.resolve("Team").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Viewer, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Viewer, false).await.unwrap();
     ops::put_document(&alice_hub, &vid, "A.md", "before", None)
         .await
         .unwrap();
@@ -354,9 +350,7 @@ async fn live_uploads_resume_after_a_reconnect_with_a_read_only_vault() {
     manage::create_vault(&alice, "Was shared").await.unwrap();
     let alice_hub = hub(&alice).await;
     let v = alice_hub.resolve("Was shared").await.unwrap();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     manage::create_vault(&bob, "Own").await.unwrap();
     drop(hub(&bob).await); // bob gets a local copy of both
     manage::unshare(&alice, &v, "bob").await.unwrap();
@@ -463,9 +457,7 @@ async fn oversized_changes_are_split_or_set_aside_and_never_block_the_rest() {
     let h = hub(&alice).await;
     let v = h.resolve("Big").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
 
     // 1. One ~250 KB paste becomes several updates the server accepts.
     let big: String = (0..6000)
@@ -539,9 +531,7 @@ async fn a_change_too_large_for_one_update_reaches_others_in_a_snapshot() {
     let ha = hub(&alice).await;
     let v = ha.resolve("Big").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     ops::put_document(&ha, &vid, "Notes.md", "start\n", None)
         .await
         .unwrap();
@@ -601,7 +591,7 @@ async fn an_owner_shares_a_new_vault_with_several_people_in_a_row() {
         live.hub.open_listed(&list).await.unwrap();
         let shared = live.hub.get(v.id()).unwrap();
         for o in others {
-            manage::share(&alice, &shared, o, Role::Editor, false)
+            share(&alice, &shared, o, Role::Editor, false)
                 .await
                 .unwrap_or_else(|e| panic!("sharing {name} with {o}: {e:#}"));
         }
@@ -619,9 +609,7 @@ async fn writing_into_a_note_before_it_arrived_still_merges() {
     manage::create_vault(&alice, "Team").await.unwrap();
     let ah = hub(&alice).await;
     let v = ah.resolve("Team").await.unwrap();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     let bh = hub(&bob).await;
     let vid = v.lock().await.id().to_string();
     // Alice starts a page; Bob writes into it before his copy has it.
@@ -658,9 +646,7 @@ async fn a_rename_from_an_older_copy_keeps_what_others_typed_meanwhile() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Team").await.unwrap();
     for p in ["bob", "carol"] {
-        manage::share(&alice, &v, p, Role::Editor, false)
-            .await
-            .unwrap();
+        share(&alice, &v, p, Role::Editor, false).await.unwrap();
     }
     let n1 = "# Goals 1\n\nSee also [[Goals 2]].\n\n## Bob\n\n## Carol\n";
     let n3 = "# Goals 3\n\nSee also [[Goals 1]], [[Plan]].\n\n## Bob\n\n## Carol\n";
@@ -733,7 +719,7 @@ async fn opening_a_new_vault_twice_at_once_keeps_one_copy() {
         let v = manage::create_vault(&alice, &name).await.unwrap();
         let ah = hub(&alice).await;
         let shared = ah.get(v.id()).unwrap();
-        manage::share(&alice, &shared, "bob", Role::Editor, false)
+        share(&alice, &shared, "bob", Role::Editor, false)
             .await
             .unwrap();
         // Two tasks of Bob's (say his live connection and a command) see
@@ -761,9 +747,7 @@ async fn typing_into_a_note_whose_key_has_not_arrived_keeps_the_text() {
     manage::create_vault(&alice, "Team").await.unwrap();
     let ah = hub(&alice).await;
     let v = ah.resolve("Team").await.unwrap();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     let bh = hub(&bob).await;
     let vid = v.lock().await.id().to_string();
     let page = ops::put_document(
@@ -824,7 +808,7 @@ async fn deleted_while_unsent(
         .unwrap();
     let av = ah.resolve("Home").await.unwrap();
     let vid = av.lock().await.id().to_string();
-    manage::share(&alice, &av, "bob", Role::Editor, false)
+    share(&alice, &av, "bob", Role::Editor, false)
         .await
         .unwrap();
     let bh = hub(&bob).await;
@@ -885,7 +869,7 @@ async fn deleting_for_good_can_be_undone() {
         .unwrap();
     let av = ah.resolve("Home").await.unwrap();
     let vid = av.lock().await.id().to_string();
-    manage::share(&alice, &av, "bob", Role::Editor, false)
+    share(&alice, &av, "bob", Role::Editor, false)
         .await
         .unwrap();
     let bh = hub(&bob).await;
@@ -942,7 +926,7 @@ async fn only_the_owner_and_admins_empty_the_trash() {
     }
     let av = ah.resolve("Home").await.unwrap();
     let vid = av.lock().await.id().to_string();
-    manage::share(&alice, &av, "bob", Role::Editor, false)
+    share(&alice, &av, "bob", Role::Editor, false)
         .await
         .unwrap();
     let bh = hub(&bob).await;
@@ -955,9 +939,7 @@ async fn only_the_owner_and_admins_empty_the_trash() {
     assert_eq!(bv.lock().await.trashed().len(), 1);
 
     // Made an admin, he can.
-    let out = manage::share(&alice, &av, "bob", Role::Admin, false)
-        .await
-        .unwrap();
+    let out = share(&alice, &av, "bob", Role::Admin, false).await.unwrap();
     assert!(out.updated_role);
     bob.refresh_vault(&bv).await.unwrap();
     assert_eq!(bv.lock().await.role(), Role::Admin);
@@ -973,7 +955,7 @@ async fn only_the_owner_and_admins_empty_the_trash() {
 
     // Agents are never admins.
     let agent = manage::create_agent(&alice, "Helper").await.unwrap();
-    let Err(err) = manage::share(&alice, &av, &agent.agent.id, Role::Admin, false).await else {
+    let Err(err) = share(&alice, &av, &agent.agent.id, Role::Admin, false).await else {
         panic!("an agent was made an admin");
     };
     assert!(

@@ -13,6 +13,7 @@ pub mod control;
 pub mod fsutil;
 pub mod gateway;
 pub mod hub;
+pub mod invitations;
 pub mod livesync;
 pub mod manage;
 pub mod mentions;

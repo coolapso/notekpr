@@ -16,11 +16,15 @@ use crate::state::AppState;
 /// those are then told to update. Administrators can raise it further
 /// (`oldest_app_version`, [`crate::instance::Instance::oldest_app`]).
 ///
-/// 0.8.0: vaults have several owners. Older apps check a vault's log against
-/// the key of the owner the server names, which is no longer its creator once
-/// they have gone — they would cry tampering — and check the keys of shared
-/// notes against that one owner only.
-pub const OLDEST_APP_VERSION: Version = Version(0, 8, 0);
+/// 0.17.0: sharing is by invitation (docs/protocol.md §5.6). Older apps add
+/// people to vaults and notes directly, which the server refuses now, and
+/// don't add whoever accepted an invitation.
+///
+/// (0.8.0: vaults have several owners. Older apps check a vault's log
+/// against the key of the owner the server names, which is no longer its
+/// creator once they have gone, and the keys of shared notes against that
+/// one owner only.)
+pub const OLDEST_APP_VERSION: Version = Version(0, 17, 0);
 
 /// Refuse an app older than `oldest`. Development builds, and requests that
 /// don't say which app they are (scripts, apps from before the header), are

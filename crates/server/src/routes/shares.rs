@@ -26,6 +26,7 @@ use crate::db;
 use crate::error::{AppError, AppResult, bad, conflict, forbidden};
 use crate::hub::{Control, VaultEvent};
 use crate::repo;
+use crate::routes::invitations;
 use crate::routes::me::notify_user;
 use crate::routes::member_log::{self, Expect};
 use crate::routes::users::public_user;
@@ -39,7 +40,7 @@ fn epoch_of(b: &[u8]) -> AppResult<u32> {
     notekpr_core::crypto::sym_epoch(b).map_err(|_| bad("malformed ciphertext"))
 }
 
-fn check_object(o: &str) -> AppResult<()> {
+pub(crate) fn check_object(o: &str) -> AppResult<()> {
     sync::validate_object_id(o)?;
     if o == INDEX_OBJECT_ID {
         return Err(bad("the vault index cannot be shared"));
@@ -568,7 +569,9 @@ pub async fn add(
         ));
     }
     let now = db::now();
-    if !repo::shares::insert(&mut *tx, &v, &o, &req.user_id, &req.role, &who.user_id, now).await? {
+    let new =
+        repo::shares::insert(&mut *tx, &v, &o, &req.user_id, &req.role, &who.user_id, now).await?;
+    if !new {
         // Shared already: only someone left without the current key (their
         // key changed, and the owner has verified it since) gets it now.
         if repo::keys::has_document_key(&mut *tx, &v, &o, cur, &req.user_id).await? {
@@ -604,6 +607,19 @@ pub async fn add(
         now,
     )
     .await?;
+    if new && !target.is_agent() {
+        // Someone new: by an invitation they accepted (one's own agents
+        // without).
+        invitations::complete(
+            &mut tx,
+            req.invitation_id.as_deref(),
+            &v,
+            Some(&o),
+            &req.user_id,
+            &req.role,
+        )
+        .await?;
+    }
     tx.commit().await?;
     drop(_w);
     db::audit(
@@ -618,6 +634,9 @@ pub async fn add(
     .await;
     publish(&state, &v, &o, ObjectEventKind::SharesChanged);
     notify_user(&state, &req.user_id, UserEventKind::SharesChanged);
+    if new && !target.is_agent() {
+        invitations::completed(&state, &v, &req.user_id).await;
+    }
     let info = ObjectShareInfo {
         user: public_user(&state.db, &req.user_id).await?,
         role: req.role,

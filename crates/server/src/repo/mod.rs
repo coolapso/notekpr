@@ -28,6 +28,7 @@ pub mod agents;
 pub mod attachments;
 pub mod audit;
 pub mod devices;
+pub mod invitations;
 pub mod keys;
 pub mod member_log;
 pub mod sessions;

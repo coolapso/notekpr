@@ -630,6 +630,16 @@ pub async fn delete_member(
     .rows_affected())
 }
 
+/// The vault's owners.
+pub async fn owner_ids(db: impl SqliteExecutor<'_>, vault_id: &str) -> AppResult<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT user_id FROM vault_members WHERE vault_id = ? AND role = 'owner' ORDER BY user_id",
+    )
+    .bind(vault_id)
+    .fetch_all(db)
+    .await?)
+}
+
 /// How many owners a vault has besides `user_id`.
 pub async fn other_owners(
     db: impl SqliteExecutor<'_>,

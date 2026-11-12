@@ -1117,6 +1117,8 @@ fn InstanceSettingsPanel(
         RwSignal::new(s.quick_notes_storage_mb),
         RwSignal::new(s.drawings_per_vault),
     );
+    let invitations_pending = RwSignal::new(s.invitations_pending);
+    let invitations_per_day = RwSignal::new(s.invitations_per_day);
     let (
         users,
         agents,
@@ -1147,6 +1149,8 @@ fn InstanceSettingsPanel(
         per_vault.set(s.storage_per_vault_mb);
         quick_notes_storage.set(s.quick_notes_storage_mb);
         drawings_per_vault.set(s.drawings_per_vault);
+        invitations_pending.set(s.invitations_pending);
+        invitations_per_day.set(s.invitations_per_day);
         defaults.set(Some(a.settings.clone()));
         status.set(Some(a));
     };
@@ -1207,6 +1211,8 @@ fn InstanceSettingsPanel(
                     <LimitField label="Storage per vault (MiB)" value=per_vault class="storage-per-vault"/>
                     <LimitField label="Personal storage (MiB)" value=quick_notes_storage class="quick-notes-storage"/>
                     <LimitField label="Drawings per vault" value=drawings_per_vault class="drawings-per-vault"/>
+                    <LimitField label="Invitations waiting per person" value=invitations_pending class="invitations-pending"/>
+                    <LimitField label="Invitations per person a day" value=invitations_per_day class="invitations-per-day"/>
                 </div>
                 <div class="row">
                     <button class="btn primary save-limits" on:click=move |_| save(InstanceSettingsUpdate {
@@ -1220,10 +1226,12 @@ fn InstanceSettingsPanel(
                         storage_per_vault_mb: Some(per_vault.get_untracked()),
                         quick_notes_storage_mb: Some(quick_notes_storage.get_untracked()),
                         drawings_per_vault: Some(drawings_per_vault.get_untracked()),
+                        invitations_pending: Some(invitations_pending.get_untracked()),
+                        invitations_per_day: Some(invitations_per_day.get_untracked()),
                         ..Default::default()
                     })>"Save limits"</button>
                 </div>
-                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the instance storage limit every vault is full until there is room again (deleting for good keeps working): on an instance of its own, the room a family or a team shares however they like. A vault at its storage limit takes no new content until something in it is deleted for good, or you give it more room (Vaults, below), and so many drawings, whoever draws them: give one vault more there too. Someone's Personal storage (quick notes, saved shapes) has its own storage limit, like how many quick notes they may keep: give one person more under Accounts → Limits."</p>
+                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the instance storage limit every vault is full until there is room again (deleting for good keeps working): on an instance of its own, the room a family or a team shares however they like. A vault at its storage limit takes no new content until something in it is deleted for good, or you give it more room (Vaults, below), and so many drawings, whoever draws them: give one vault more there too. Invitations: how many one person may have waiting for an answer, and send in a day (cancelled ones count for the day). Someone's Personal storage (quick notes, saved shapes) has its own storage limit, like how many quick notes they may keep: give one person more under Accounts → Limits."</p>
                 <div class="row oldest-app">
                     <label class="limit-field">
                         <span class="limit-label">"Oldest app version"</span>
@@ -1254,17 +1262,18 @@ fn InstanceSettingsPanel(
                     <SettingField label="Browser sign-ins last (days)" server=server get=|s| s.session_ttl_days set=|s, n| s.session_ttl_days = n class="session-ttl-days"/>
                     <SettingField label="CLI sign-ins last (days)" server=server get=|s| s.device_session_ttl_days set=|s, n| s.device_session_ttl_days = n class="device-session-ttl-days"/>
                     <SettingField label="Agents' tokens last (seconds)" server=server get=|s| s.agent_token_ttl_secs set=|s, n| s.agent_token_ttl_secs = n class="agent-token-ttl-secs"/>
+                    <SettingField label="Invitations wait (days)" server=server get=|s| s.invitation_days set=|s, n| s.invitation_days = n class="invitation-days"/>
                     <label class="limit-field user-directory">
-                        <span class="limit-label">"Finding people"</span>
+                        <span class="limit-label">"Suggested when sharing"</span>
                         <select class="input small" on:change=move |ev| {
                             let d = match event_target_value(&ev).as_str() {
-                                "exact_email" => UserDirectory::ExactEmail,
-                                _ => UserDirectory::Search,
+                                "search" => UserDirectory::Search,
+                                _ => UserDirectory::Private,
                             };
                             server.update(|s| s.user_directory = d);
                         }>
-                            <option value="search" selected=move || server.with(|s| s.user_directory == UserDirectory::Search)>"By name or e-mail"</option>
-                            <option value="exact_email" selected=move || server.with(|s| s.user_directory == UserDirectory::ExactEmail)>"By exact e-mail only"</option>
+                            <option value="private" selected=move || server.with(|s| s.user_directory != UserDirectory::Search)>"People they share with"</option>
+                            <option value="search" selected=move || server.with(|s| s.user_directory == UserDirectory::Search)>"Everyone, by name"</option>
                         </select>
                     </label>
                 </div>
@@ -1282,6 +1291,7 @@ fn InstanceSettingsPanel(
                             rate_limit_rps: Some(s.rate_limit_rps),
                             auth_rate_limit_per_min: Some(s.auth_rate_limit_per_min),
                             user_directory: Some(s.user_directory),
+                            invitation_days: Some(s.invitation_days),
                             session_ttl_days: Some(s.session_ttl_days),
                             device_session_ttl_days: Some(s.device_session_ttl_days),
                             agent_token_ttl_secs: Some(s.agent_token_ttl_secs),
@@ -1289,7 +1299,7 @@ fn InstanceSettingsPanel(
                         })
                     }>"Save server settings"</button>
                 </div>
-                <p class="muted small">"These take effect at once, without a restart. Sizes: the largest attachment, the largest encrypted change (the apps split bigger edits to fit) and the largest snapshot — a note's whole state, which also carries a change too big for one update (automatic: 16 × the update size, at least 32 MiB). Versions: how many each note's history keeps, and how often one person adds one. Something deleted for good can be undone for so many days (0: gone at once; a shorter time applies to what was deleted already, too), and its files stay in the file store that many days longer, so that a database backup restored finds them: keep them at least as long as your backups. Rate limits count per address: raise them when many people share one (an office). A new length of sign-ins applies from the next sign-in. Finding people to share with: by the start of their name or their exact e-mail address, or only by their exact e-mail address; people who already share a vault or note always find each other."</p>
+                <p class="muted small">"These take effect at once, without a restart. Sizes: the largest attachment, the largest encrypted change (the apps split bigger edits to fit) and the largest snapshot — a note's whole state, which also carries a change too big for one update (automatic: 16 × the update size, at least 32 MiB). Versions: how many each note's history keeps, and how often one person adds one. Something deleted for good can be undone for so many days (0: gone at once; a shorter time applies to what was deleted already, too), and its files stay in the file store that many days longer, so that a database backup restored finds them: keep them at least as long as your backups. Rate limits count per address: raise them when many people share one (an office). A new length of sign-ins applies from the next sign-in. Sharing is by invitation: an invitation waits so many days to be answered (at most 90). When sharing, the apps suggest people one already shares a vault or a note with; on a server for a family or a company, everyone, by name. Anyone else is invited by their e-mail address, and the server answers the same whether it has an account or not."</p>
             </div>
         })}
     }

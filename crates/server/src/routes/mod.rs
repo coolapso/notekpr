@@ -3,6 +3,7 @@ pub mod agents;
 pub mod attachments;
 pub mod auth;
 pub mod devices;
+pub mod invitations;
 pub mod me;
 pub mod member_log;
 pub mod oauth;
@@ -137,6 +138,11 @@ pub fn router(state: AppState) -> Router {
             patch(vaults::update_member).delete(vaults::remove_member),
         )
         .route("/vaults/{v}/audit", get(vaults::audit))
+        .route("/vaults/{v}/invitations", post(invitations::create))
+        .route("/vaults/{v}/invitations/{id}", delete(invitations::cancel))
+        .route("/invitations", get(invitations::list))
+        .route("/invitations/{id}/accept", post(invitations::accept))
+        .route("/invitations/{id}/decline", post(invitations::decline))
         .route("/vaults/{v}/changes", get(sync::changes))
         .route(
             "/vaults/{v}/updates",

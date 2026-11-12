@@ -1132,11 +1132,11 @@ async fn apps_older_than_the_server_accepts_are_told_to_update() {
     };
     // What this build needs, and no more.
     assert_eq!(
-        status(get("/vaults").header(APP_HEADER, "cli/0.7.9")).await,
+        status(get("/vaults").header(APP_HEADER, "cli/0.16.9")).await,
         426
     );
     assert_eq!(
-        status(get("/vaults").header(APP_HEADER, "cli/0.8.0")).await,
+        status(get("/vaults").header(APP_HEADER, "cli/0.17.0")).await,
         200
     );
 
@@ -1146,19 +1146,19 @@ async fn apps_older_than_the_server_accepts_are_told_to_update() {
         .await
         .unwrap();
     assert_eq!(r.status().as_u16(), 400);
-    let s = settings(&srv, serde_json::json!({ "oldest_app_version": "0.9.0" })).await;
-    assert_eq!(s.settings.oldest_app_version, "0.9.0");
+    let s = settings(&srv, serde_json::json!({ "oldest_app_version": "0.18.0" })).await;
+    assert_eq!(s.settings.oldest_app_version, "0.18.0");
 
     let r = get("/vaults")
-        .header(APP_HEADER, "cli/0.8.9")
+        .header(APP_HEADER, "cli/0.17.9")
         .send()
         .await
         .unwrap();
     assert_eq!(r.status().as_u16(), 426);
     let body: ApiError = r.json().await.unwrap();
     assert_eq!(body.error, ERROR_UPDATE_REQUIRED);
-    assert_eq!(body.oldest_version.as_deref(), Some("0.9.0"));
-    for fine in ["cli/0.9.0", "web/0.9.1-2-gabc1234", "cli/dev"] {
+    assert_eq!(body.oldest_version.as_deref(), Some("0.18.0"));
+    for fine in ["cli/0.18.0", "web/0.18.1-2-gabc1234", "cli/dev"] {
         assert_eq!(
             status(get("/vaults").header(APP_HEADER, fine)).await,
             200,
@@ -1200,7 +1200,7 @@ async fn apps_older_than_the_server_accepts_are_told_to_update() {
     let s = settings(&srv, serde_json::json!({ "oldest_app_version": "" })).await;
     assert_eq!(s.settings.oldest_app_version, "");
     assert_eq!(
-        status(get("/vaults").header(APP_HEADER, "cli/0.8.9")).await,
+        status(get("/vaults").header(APP_HEADER, "cli/0.17.9")).await,
         200
     );
 }
@@ -1777,8 +1777,9 @@ async fn sizes_rates_and_sign_ins_change_without_a_restart() {
         .unwrap();
     assert_eq!(big.status(), 201);
 
-    // Others are found by their exact e-mail address only (dev accounts
-    // have none).
+    // By default the apps suggest only people one shares with; anyone
+    // else is invited by address. The searchable directory finds everyone
+    // by name, and lets them be looked up.
     let found = |q: &'static str| {
         let api = alice.api.clone();
         async move {
@@ -1786,14 +1787,23 @@ async fn sizes_rates_and_sign_ins_change_without_a_restart() {
                 .await
         }
     };
-    assert_eq!(found("bo").await.len(), 1);
-    settings(&srv, serde_json::json!({"user_directory": "exact_email"})).await;
-    assert!(found("bo").await.is_empty());
     let profile = format!("/users/{}", bob.id);
+    assert!(found("bo").await.is_empty());
+    assert!(found("bob@example.com").await.is_empty());
     assert_eq!(
         alice.api.status::<()>(Method::GET, &profile, None).await,
         404
     );
+    settings(&srv, serde_json::json!({"user_directory": "search"})).await;
+    assert_eq!(found("bo").await.len(), 1);
+    assert_eq!(
+        alice.api.status::<()>(Method::GET, &profile, None).await,
+        200
+    );
+    // Stored as it was before (by exact address only): private now.
+    let s = settings(&srv, serde_json::json!({"user_directory": "exact_email"})).await;
+    assert_eq!(s.settings.user_directory, UserDirectory::Private);
+    assert!(found("bo").await.is_empty());
 
     // What would stop the server or its apps is refused, and nothing of
     // that change is kept.

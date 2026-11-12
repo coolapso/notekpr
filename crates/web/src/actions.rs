@@ -400,6 +400,7 @@ pub async fn share(vault: &str, user: &PublicUser, role: Role) -> Result<(), Str
             role,
             key_envelope: envelope,
             log_entry: step(|c| state::log_entry(c, vault, LogBody::Add { member })),
+            invitation_id: None,
         },
     )
     .await
@@ -860,6 +861,7 @@ pub async fn share_note(
         log_entry: share_entry(vault, note, user, &role),
         role: role.clone(),
         envelope,
+        invitation_id: None,
     };
     match api::post::<_, ObjectShareInfo>(&format!("/vaults/{vault}/objects/{note}/shares"), &req)
         .await
@@ -897,19 +899,7 @@ pub async fn share_note(
     });
     state::reload_log(vault).await;
     if with_comments {
-        // Where sharing started comes with the vault's keys.
-        state::reload_vault_keys(vault.to_string()).await;
-        step(|c| {
-            let sent = c
-                .replicas
-                .get_mut(vault)
-                .and_then(|r| r.carry_comments(note).ok())
-                .is_some_and(|p| !p.is_empty());
-            if sent {
-                crate::cache::note_local(c, vault, &comments_object(note));
-                state::schedule_flush(c);
-            }
-        });
+        carry_comments(vault, note).await;
     }
     let title = step(|c| {
         state::send_presence(c);
@@ -919,6 +909,144 @@ pub async fn share_note(
     state::ui().shares_rev.update(|v| *v += 1);
     success(format!("Shared “{title}” with {}.", user.display_name));
     Ok(())
+}
+
+/// The comments written on a shared note so far go to everyone it is
+/// shared with (docs/comments.md §5).
+pub(crate) async fn carry_comments(vault: &str, note: &str) {
+    // Where sharing started comes with the vault's keys.
+    state::reload_vault_keys(vault.to_string()).await;
+    step(|c| {
+        let sent = c
+            .replicas
+            .get_mut(vault)
+            .and_then(|r| r.carry_comments(note).ok())
+            .is_some_and(|p| !p.is_empty());
+        if sent {
+            crate::cache::note_local(c, vault, &comments_object(note));
+            state::schedule_flush(c);
+        }
+    });
+}
+
+// ------------------------------------------------------------------ invitations
+
+/// Whom to invite (docs/protocol.md §5.6).
+#[derive(Clone, Debug)]
+pub enum InviteTo {
+    /// Someone suggested: a person this one shares with already (or, with
+    /// a searchable directory, anyone found by name).
+    User(PublicUser),
+    /// Anyone, by their full address.
+    Email(String),
+}
+
+impl InviteTo {
+    pub fn label(&self) -> String {
+        match self {
+            InviteTo::User(u) => u.display_name.clone(),
+            InviteTo::Email(a) => a.trim().to_lowercase(),
+        }
+    }
+}
+
+/// Invite someone to the vault or, with `note`, to that note alone (which
+/// starts being shared: it gets a fresh key; `with_comments`: its comments
+/// so far go with it once they're in). They accept or decline; once they
+/// accepted, an owner's app adds them.
+pub async fn invite(
+    vault: &str,
+    note: Option<&str>,
+    to: &InviteTo,
+    role: Role,
+    with_comments: bool,
+) -> Result<(), String> {
+    if let Some(n) = note {
+        ensure_note_key(vault, n).await?;
+    }
+    let req = step(|c| {
+        let invitee = match to {
+            InviteTo::User(u) => notekpr_core::invitation::Invitee::User(&u.id),
+            InviteTo::Email(a) => notekpr_core::invitation::Invitee::Email(a),
+        };
+        notekpr_sync::members::invitation(
+            c.account.as_ref()?,
+            &c.user_id,
+            vault,
+            note,
+            invitee,
+            role,
+            with_comments,
+            util::now_ms(),
+        )
+    })
+    .ok_or("That isn't an e-mail address.")?;
+    api::post::<_, SentInvitation>(&format!("/vaults/{vault}/invitations"), &req)
+        .await
+        .map_err(|e| e.message)?;
+    state::refresh_invitations().await;
+    success(format!(
+        "Invited {}. They get access once they accept.",
+        to.label()
+    ));
+    Ok(())
+}
+
+/// Cancel an invitation to a vault one owns (or to one of its notes).
+pub async fn cancel_invitation(vault: &str, id: &str) {
+    if let Err(e) = api::delete(&format!("/vaults/{vault}/invitations/{id}")).await {
+        error(e.message);
+    }
+    state::refresh_invitations().await;
+}
+
+/// Accept an invitation, signed with our key — the key its owners' apps
+/// give us the vault's (or the note's) key under. Its inviter's key is
+/// trusted from now on, as when sharing with someone the first time.
+pub async fn accept_invitation(inv: &ReceivedInvitation) {
+    let signature = step(|c| {
+        let key = inv.verified_inviter()?;
+        let pinned = c.prefs.pins.get(&inv.from.id).cloned();
+        let sig = notekpr_sync::members::acceptance(
+            c.account.as_ref()?,
+            &c.user_id,
+            inv,
+            pinned.as_deref(),
+        )?;
+        if engine::check_pin(&mut c.prefs.pins, &inv.from.id, &key.fingerprint()) == PinStatus::New
+        {
+            state::save_prefs(c);
+        }
+        Some(sig)
+    });
+    let Some(signature) = signature else {
+        error(format!(
+            "This invitation isn't signed with the key {} had before: it can't be accepted. Ask them, and tell your administrator.",
+            inv.from.display_name
+        ));
+        return;
+    };
+    match api::post::<_, ()>(
+        &format!("/invitations/{}/accept", inv.id),
+        &AcceptInvitationRequest { signature },
+    )
+    .await
+    {
+        Ok(()) => info(format!(
+            "Accepted. You're in as soon as {}'s app adds you — at once if they're online.",
+            inv.from.display_name
+        )),
+        Err(e) => error(e.message),
+    }
+    state::refresh_invitations().await;
+}
+
+/// Decline an invitation: whoever sent it isn't told.
+pub async fn decline_invitation(id: &str) {
+    if let Err(e) = api::post_empty::<()>(&format!("/invitations/{id}/decline")).await {
+        error(e.message);
+    }
+    state::refresh_invitations().await;
 }
 
 /// Give a note its own document key (once), re-encrypting its current

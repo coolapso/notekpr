@@ -208,7 +208,8 @@ The server refuses to start without a login method (OIDC or dev mode).
 `NOTEKPR_USER_DIRECTORY`, `NOTEKPR_SESSION_TTL_DAYS`,
 `NOTEKPR_DEVICE_SESSION_TTL_DAYS` and `NOTEKPR_AGENT_TOKEN_TTL_SECS` are no
 longer read (nor their flags): each is the instance setting of the same name
-in lower case (`max_attachment_mb`, …), with the same default. If you set one,
+in lower case (`max_attachment_mb`, …), with the same default (but
+`user_directory`'s, `private` since sharing is by invitation). If you set one,
 set the setting instead (§5) and remove the variable; the server warns at
 start while one is still set. Nothing copies them over: settings are never
 taken from the environment or a file.
@@ -530,6 +531,10 @@ and sets them through it.
   note can link any number of files, so their number alone doesn't bound
   what they take. (In the API it keeps its first name:
   `quick_notes_storage_mb`, `quick_notes_storage_allowance`.)
+* **Invitations**: how many invitations one person may have waiting for an
+  answer at once (`invitations_pending`, 50) and send in a day
+  (`invitations_per_day`, 50; cancelled ones count): sharing is by
+  invitation, and these keep anyone from flooding others with them.
 * **Oldest app version**: apps older than this (`0.6.0`) are told to update
   instead of syncing; they keep their unsent edits, and browsers get the
   current app with a reload. Each server version accepts apps from some
@@ -567,10 +572,16 @@ Under *Server*, the rest (API names and defaults in parentheses):
   CLI's (`device_session_ttl_days`, 180) and an agent's access token
   (`agent_token_ttl_secs`, 3600, at least 60). A new length applies from the
   next sign-in.
-* **Finding people** to share with (`user_directory`): by the start of their
-  name or their exact e-mail address (`search`, the default), or only by
-  their exact e-mail address (`exact_email`). People who share a vault or a
-  note always find each other.
+* **Sharing**: every share is an invitation the person accepts; it waits
+  so many days to be answered (`invitation_days`, 14, at most 90). Whom the
+  apps suggest by name (`user_directory`): only people one already shares a
+  vault or a note with (`private`, the default) — right for a server where
+  people don't know each other —, or everyone, by the start of their name
+  or their exact e-mail address (`search`), for a family's or a company's
+  server. Anyone else is invited by their e-mail address; the server
+  answers the same whether it has an account or not, and keeps an address
+  that has none only until the invitation ends. (`exact_email`, from older
+  releases, is `private` now.)
 
 Values that would stop the server or the apps from working (a size or rate
 of 0, fewer than 2 versions) are refused, and nothing of that change is kept.

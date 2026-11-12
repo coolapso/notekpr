@@ -678,3 +678,197 @@ fn drawings_say_so_and_wait_for_room() {
     assert!(o.waits_for_room("d"));
     assert_eq!(o.room_freed(&mut r), 1);
 }
+
+mod invitations {
+    use super::*;
+    use crate::members::{self, Completion, MemberLog, NotCompleted};
+    use notekpr_core::invitation::{Invitee, NotAdded};
+    use notekpr_core::keys::AccountSecret;
+
+    fn public(id: &str, a: &AccountSecret) -> PublicUser {
+        PublicUser {
+            id: id.into(),
+            display_name: id.into(),
+            email: None,
+            kind: PrincipalKind::Human,
+            account_key: Some(PublicAccountKey::new(
+                id,
+                1,
+                &a.public(),
+                &a.sign_account_key(id, 1),
+            )),
+        }
+    }
+
+    /// Alice's new vault, its log verified; an invitation to Bob by
+    /// address, accepted by him as his app does.
+    fn setup(
+        object: Option<&str>,
+    ) -> (
+        AccountSecret,
+        AccountSecret,
+        VaultKeyring,
+        MemberLog,
+        SentInvitation,
+    ) {
+        let (alice, bob) = (AccountSecret::generate(), AccountSecret::generate());
+        let (req, ring) = notekpr_core::engine::new_vault(
+            &alice,
+            "alice",
+            &notekpr_core::engine::VaultMeta::named("Family"),
+            1,
+        )
+        .unwrap();
+        let entries = vec![req.log_entry.unwrap(), req.signed_from_start.unwrap()];
+        let log = MemberLog::verify(&req.id, &alice.public(), entries, None).unwrap();
+        let sent = members::invitation(
+            &alice,
+            "alice",
+            &req.id,
+            object,
+            Invitee::Email(" Bob@Example.com"),
+            Role::Editor,
+            object.is_some(),
+            notekpr_core::now_ms(),
+        )
+        .unwrap();
+        assert_eq!(sent.email.as_deref(), Some("bob@example.com"));
+        // What Bob sees, and accepts.
+        let received = ReceivedInvitation {
+            id: sent.id.clone(),
+            vault_id: req.id.clone(),
+            object_id: sent.object_id.clone(),
+            from: public("alice", &alice),
+            user_id: None,
+            email: sent.email.clone(),
+            role: sent.role.clone(),
+            created_at: sent.created_at,
+            expires_at: sent.created_at + 1000,
+            signature: sent.signature.clone(),
+            accepted: false,
+            with_comments: sent.with_comments,
+        };
+        // A pinned key other than the inviter's: not offered.
+        let other = AccountSecret::generate().public().fingerprint();
+        assert!(members::acceptance(&bob, "bob", &received, Some(&other)).is_none());
+        let signature = members::acceptance(&bob, "bob", &received, None).unwrap();
+        let inv = SentInvitation {
+            id: sent.id,
+            vault_id: req.id.clone(),
+            object_id: sent.object_id,
+            user: None,
+            email: sent.email,
+            role: sent.role,
+            invited_by: "alice".into(),
+            created_at: sent.created_at,
+            expires_at: sent.created_at + 1000,
+            signature: sent.signature,
+            accepted: Some(InvitationAcceptance {
+                user: public("bob", &bob),
+                accepted_at: sent.created_at,
+                signature,
+            }),
+            with_comments: sent.with_comments,
+        };
+        (alice, bob, ring, log, inv)
+    }
+
+    #[test]
+    fn an_owners_app_adds_whoever_accepted_with_the_vault_key_and_a_log_entry() {
+        let (alice, bob, ring, log, inv) = setup(None);
+        let now = notekpr_core::now_ms();
+        let (done, user, key) =
+            members::completion(&log, &alice, "alice", &ring, None, &inv, None, now).unwrap();
+        assert_eq!(user.id, "bob");
+        assert_eq!(key, bob.public());
+        let Completion::Member(req) = done else {
+            panic!("a member")
+        };
+        assert_eq!(req.invitation_id.as_deref(), Some(inv.id.as_str()));
+        assert_eq!(req.role, Role::Editor);
+        // Bob can open the vault key; the entry continues the log, adding
+        // him with that key.
+        let env = req.key_envelope.unwrap();
+        let k = notekpr_core::keys::unwrap_vault_key(&bob, &env.envelope, &inv.vault_id, 1, "bob")
+            .unwrap();
+        assert_eq!(k.0, ring.get(1).unwrap().0);
+        let mut entries = log.entries.clone();
+        entries.push(req.log_entry.unwrap());
+        let after = MemberLog::verify(&inv.vault_id, &alice.public(), entries, None).unwrap();
+        assert!(
+            after
+                .state
+                .unwrap()
+                .vouches_for("bob", Role::Editor, &bob.public())
+        );
+
+        // Pinned differently: the owner compares fingerprints first.
+        let other = AccountSecret::generate().public().fingerprint();
+        assert_eq!(
+            members::completion(&log, &alice, "alice", &ring, None, &inv, Some(&other), now)
+                .unwrap_err(),
+            NotCompleted::Refused(NotAdded::KeyChanged)
+        );
+        // No log: nothing.
+        assert_eq!(
+            members::completion(
+                &MemberLog::default(),
+                &alice,
+                "alice",
+                &ring,
+                None,
+                &inv,
+                None,
+                now
+            )
+            .unwrap_err(),
+            NotCompleted::NoLog
+        );
+    }
+
+    #[test]
+    fn a_note_goes_with_its_own_key_signed_for_them() {
+        let (alice, bob, ring, log, inv) = setup(Some("n1"));
+        let mut note = VaultKeyring::new(&inv.vault_id);
+        note.insert(notekpr_core::keys::FIRST_DOC_EPOCH, VaultKey::generate());
+        let now = notekpr_core::now_ms();
+        assert_eq!(
+            members::completion(&log, &alice, "alice", &ring, None, &inv, None, now).unwrap_err(),
+            NotCompleted::NoNoteKey
+        );
+        let (done, ..) =
+            members::completion(&log, &alice, "alice", &ring, Some(&note), &inv, None, now)
+                .unwrap();
+        let Completion::Share {
+            object_id,
+            req,
+            with_comments,
+        } = done
+        else {
+            panic!("a note")
+        };
+        assert_eq!(object_id, "n1");
+        assert!(with_comments, "as the owner signed it");
+        let (epoch, key) = note.current().unwrap();
+        assert!(notekpr_core::memberlog::verify_note_grant(
+            &alice.public(),
+            &inv.vault_id,
+            "n1",
+            "bob",
+            epoch,
+            key,
+            req.envelope.signature.as_deref().unwrap()
+        ));
+        let mut entries = log.entries.clone();
+        entries.push(req.log_entry.unwrap());
+        let after = MemberLog::verify(&inv.vault_id, &alice.public(), entries, None).unwrap();
+        assert!(
+            after
+                .state
+                .unwrap()
+                .shares
+                .contains_key(&("n1".into(), "bob".into()))
+        );
+        let _ = bob;
+    }
+}

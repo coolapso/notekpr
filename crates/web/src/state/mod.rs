@@ -331,6 +331,8 @@ pub struct Ui {
     /// (`crate::ask`).
     pub asking: RwSignal<Option<crate::ask::Question>>,
     pub pending_devices: RwSignal<Vec<DeviceInfo>>,
+    /// Invitations to this person, and to the vaults they own (§5.6).
+    pub invitations: RwSignal<InvitationsResponse>,
     pub sidebar: RwSignal<bool>,
     pub mode: RwSignal<ViewMode>,
     pub prefs_rev: RwSignal<u64>,
@@ -392,6 +394,7 @@ pub fn init_ui() -> Ui {
         modal: RwSignal::new(None),
         asking: RwSignal::new(None),
         pending_devices: RwSignal::new(vec![]),
+        invitations: RwSignal::new(InvitationsResponse::default()),
         sidebar: RwSignal::new(false),
         mode: RwSignal::new(mode),
         prefs_rev: RwSignal::new(0),
@@ -672,6 +675,7 @@ impl Core {
 }
 
 mod comments;
+mod invitations;
 mod members;
 mod mentions;
 mod nav;
@@ -684,6 +688,7 @@ mod sync;
 mod vaults;
 
 pub use comments::*;
+pub use invitations::*;
 pub use members::{
     fresh_log, log_entry, log_entry_after, member_log, pin_member_key, reload_log, sign_vault,
     vouched, vouched_share,

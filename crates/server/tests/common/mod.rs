@@ -176,6 +176,37 @@ pub async fn dev_login(base: &str, name: &str) -> (Api, SessionResponse) {
     (api, s)
 }
 
+/// People made by [`new_user`], by id: what accepts invitations for them
+/// (so `User::share` can take just an id, as before invitations).
+static PEOPLE: std::sync::Mutex<BTreeMap<String, (Api, AccountSecret, String)>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+fn person(id: &str) -> Option<(Api, AccountSecret, String)> {
+    PEOPLE.lock().unwrap().get(id).cloned()
+}
+
+/// The terms an invitation is signed with.
+pub fn invitation_terms<'a>(
+    id: &'a str,
+    vault_id: &'a str,
+    object_id: Option<&'a str>,
+    invited_by: &'a str,
+    invitee: notekpr_core::invitation::Invitee<'a>,
+    role: &'a Role,
+    created_at: i64,
+) -> notekpr_core::invitation::Terms<'a> {
+    notekpr_core::invitation::Terms {
+        id,
+        vault_id,
+        object_id,
+        invited_by,
+        invitee,
+        role,
+        created_at,
+        with_comments: false,
+    }
+}
+
 pub async fn new_user(base: &str, name: &str) -> User {
     let (api, s) = dev_login(base, name).await;
     let account = AccountSecret::generate();
@@ -210,6 +241,10 @@ pub async fn new_user(base: &str, name: &str) -> User {
         }),
     };
     let _: () = api.put("/me/account-key", &req).await;
+    PEOPLE.lock().unwrap().insert(
+        uid.clone(),
+        (api.clone(), account.clone(), name.to_string()),
+    );
     User {
         api,
         id: uid,
@@ -223,6 +258,23 @@ pub async fn new_user(base: &str, name: &str) -> User {
 }
 
 impl User {
+    /// Their public profile, as the server would give it (without asking
+    /// it: who may look whom up is tested on its own).
+    pub fn public(&self) -> PublicUser {
+        PublicUser {
+            id: self.id.clone(),
+            display_name: self.name.clone(),
+            email: Some(format!("{}@{DEV_EMAIL_DOMAIN}", self.name)),
+            kind: PrincipalKind::Human,
+            account_key: Some(PublicAccountKey::new(
+                &self.id,
+                1,
+                &self.account.public(),
+                &self.account.sign_account_key(&self.id, 1),
+            )),
+        }
+    }
+
     pub async fn create_vault(&mut self, name: &str) -> String {
         let id = random_id();
         let key = VaultKey::generate();
@@ -405,14 +457,93 @@ impl User {
             .await
     }
 
-    /// Share a vault: verify the recipient's key and wrap the current vault key to it.
+    /// Invite someone (by their address) to a vault, or to note
+    /// `object_id`, signed as the apps do.
+    pub async fn invite(
+        &self,
+        vault_id: &str,
+        object_id: Option<&str>,
+        email: &str,
+        role: Role,
+    ) -> Result<SentInvitation, (u16, String)> {
+        let id = random_id();
+        let created_at = notekpr_core::now_ms();
+        // Signed as the server keeps it (the apps do the same).
+        let email = notekpr_core::invitation::normalize_email(email).unwrap_or(email.into());
+        let signature = notekpr_core::invitation::sign(
+            &self.account,
+            &invitation_terms(
+                &id,
+                vault_id,
+                object_id,
+                &self.id,
+                notekpr_core::invitation::Invitee::Email(&email),
+                &role,
+                created_at,
+            ),
+        );
+        self.api
+            .call(
+                reqwest::Method::POST,
+                &format!("/vaults/{vault_id}/invitations"),
+                Some(&CreateInvitationRequest {
+                    id,
+                    object_id: object_id.map(Into::into),
+                    user_id: None,
+                    email: Some(email),
+                    role,
+                    created_at,
+                    signature,
+                    with_comments: false,
+                }),
+            )
+            .await
+    }
+
+    /// Accept invitation `id` (sent to us), signed as the apps do.
+    pub async fn accept(&self, id: &str) -> Result<(), (u16, String)> {
+        accept_as(&self.api, &self.account, &self.id, id).await
+    }
+
+    /// Someone invited by address accepts, and the invitation comes back
+    /// accepted: its id and who they are (with their key), as an owner's
+    /// app sees them.
+    pub async fn invited_and_accepted(
+        &self,
+        vault_id: &str,
+        object_id: Option<&str>,
+        with: &str,
+        role: Role,
+    ) -> Result<(String, PublicUser), (u16, String)> {
+        let (api, account, name) = person(with).expect("someone made by new_user");
+        let email = format!("{name}@{DEV_EMAIL_DOMAIN}");
+        let inv = self.invite(vault_id, object_id, &email, role).await?;
+        accept_as(&api, &account, with, &inv.id).await?;
+        let list: InvitationsResponse = self.api.get("/invitations").await;
+        let sent = list
+            .sent
+            .into_iter()
+            .find(|i| i.id == inv.id)
+            .expect("the invitation, accepted");
+        Ok((inv.id, sent.accepted.expect("accepted").user))
+    }
+
+    /// Share a vault: invite them and, once they accepted, wrap the current
+    /// vault key to their key (one's own agents join without).
     pub async fn share(
         &self,
         vault_id: &str,
         with: &str,
         role: Role,
     ) -> Result<MemberInfo, (u16, String)> {
-        let u: PublicUser = self.api.get(&format!("/users/{with}")).await;
+        let (invitation_id, u) = if person(with).is_some() {
+            let (id, u) = self
+                .invited_and_accepted(vault_id, None, with, role.clone())
+                .await?;
+            (Some(id), u)
+        } else {
+            (None, self.api.get(&format!("/users/{with}")).await)
+        };
         let public = u.account_key.as_ref().unwrap().verify().unwrap();
         let (epoch, key) = self.ring(vault_id).current().unwrap();
         let env = keys::wrap_vault_key(key, vault_id, epoch, with, &public.enc_public).unwrap();
@@ -431,6 +562,7 @@ impl User {
                         signed_by: None,
                     }),
                     log_entry: None,
+                    invitation_id,
                 }),
             )
             .await
@@ -760,7 +892,10 @@ pub async fn share_note(owner: &User, v: &str, o: &str, with: &User) -> VaultKey
         .api
         .put(&format!("/vaults/{v}/objects/{o}/key"), &req)
         .await;
-    let public: PublicUser = owner.api.get(&format!("/users/{}", with.id)).await;
+    let (invitation_id, public) = owner
+        .invited_and_accepted(v, Some(o), &with.id, Role::Editor)
+        .await
+        .unwrap();
     let _: ObjectShareInfo = owner
         .api
         .post(
@@ -770,10 +905,50 @@ pub async fn share_note(owner: &User, v: &str, o: &str, with: &User) -> VaultKey
                 role: Role::Editor,
                 envelope: engine::object_share_envelope(&ring, o, &public).unwrap(),
                 log_entry: None,
+                invitation_id: Some(invitation_id),
             },
         )
         .await;
     ring
+}
+
+/// Accept invitation `id` as `user_id` (with their account and session).
+pub async fn accept_as(
+    api: &Api,
+    account: &AccountSecret,
+    user_id: &str,
+    id: &str,
+) -> Result<(), (u16, String)> {
+    let list: InvitationsResponse = api.get("/invitations").await;
+    let inv = list
+        .received
+        .into_iter()
+        .find(|i| i.id == id)
+        .ok_or((404, "no such invitation".to_string()))?;
+    let signature =
+        notekpr_core::invitation::sign_acceptance(account, &inv.terms().unwrap(), user_id);
+    api.call(
+        reqwest::Method::POST,
+        &format!("/invitations/{id}/accept"),
+        Some(&AcceptInvitationRequest { signature }),
+    )
+    .await
+}
+
+/// Note `o` shared with `with` by invitation, as the apps do it, but with
+/// the request to finish it left to the caller: the invitation's id and
+/// their public profile.
+pub async fn note_invitation_accepted(
+    owner: &User,
+    v: &str,
+    o: &str,
+    with: &User,
+    role: Role,
+) -> (String, PublicUser) {
+    owner
+        .invited_and_accepted(v, Some(o), &with.id, role)
+        .await
+        .unwrap()
 }
 
 pub async fn upload(u: &User, v: &str, id: &str, plain: &[u8]) -> u16 {

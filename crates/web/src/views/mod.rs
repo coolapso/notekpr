@@ -21,11 +21,12 @@ pub mod width;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
-use crate::state::{self, Modal, Route, ToastKind, ViewMode, ui};
+use crate::actions;
+use crate::state::{self, Modal, Route, ToastKind, ViewMode, step, ui};
 use crate::util;
 use crate::ws::ConnState;
 use icons::Icon;
-use notekpr_core::protocol::ReadOnly;
+use notekpr_core::protocol::{ReadOnly, Role};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -137,6 +138,78 @@ fn watch_banners(banners: NodeRef<leptos::html::Div>) {
     });
 }
 
+/// Invitations to this person (docs/protocol.md §5.6): to accept or
+/// decline; once accepted, waiting for an owner's app to add them. They
+/// can't name the vault or the note (its name is encrypted, and there's no
+/// key yet): only who invites, and as what.
+#[component]
+fn InvitationBanners() -> impl IntoView {
+    let ui = ui();
+    move || {
+        ui.invitations
+            .with(|l| l.received.clone())
+            .into_iter()
+            .map(|inv| {
+                let from = inv.from.display_name.clone();
+                let what = if inv.object_id.is_some() { "a note" } else { "a vault" };
+                let role = match inv.role {
+                    Role::Admin => " — as an admin",
+                    Role::Editor => " — to edit",
+                    Role::Viewer => " — to read",
+                    _ => "",
+                };
+                let id = inv.id.clone();
+                let decline = move |_| {
+                    let id = id.clone();
+                    leptos::task::spawn_local(async move { actions::decline_invitation(&id).await });
+                };
+                if inv.accepted {
+                    return view! {
+                        <div class="banner invitation-banner accepted"><Icon name="users"/>
+                            <span>{format!("You accepted {from}'s invitation. You're in as soon as their app adds you — at once while they're online.")}</span>
+                            <button class="btn small ghost decline-invitation" on:click=decline>"Cancel"</button>
+                        </div>
+                    }
+                    .into_any();
+                }
+                // Signed with the inviter's own key (and the one pinned for
+                // them, if any): otherwise it can only be declined.
+                let genuine = step(|c| {
+                    let pinned = c.prefs.pins.get(&inv.from.id).cloned();
+                    inv.verified_inviter()
+                        .is_some_and(|k| pinned.is_none_or(|p| p == k.fingerprint()))
+                });
+                let mail = inv
+                    .from
+                    .email
+                    .as_ref()
+                    .map(|e| format!(" ({e})"))
+                    .unwrap_or_default();
+                let fp = actions::fingerprint(&inv.from).unwrap_or_default();
+                let accept = {
+                    let inv = inv.clone();
+                    move |_| {
+                        let inv = inv.clone();
+                        leptos::task::spawn_local(async move { actions::accept_invitation(&inv).await });
+                    }
+                };
+                view! {
+                    <div class="banner invitation-banner" role="alert">
+                        <Icon name="users"/>
+                        <span title=format!("Their key's fingerprint: {fp}")>
+                            <b>{from.clone()}</b>{mail}{format!(" wants to share {what} with you{role}.")}
+                            {(!genuine).then(|| view! { " " <b>"It isn't signed with their key, so it can't be accepted."</b> })}
+                        </span>
+                        {genuine.then(|| view! { <button class="btn small primary accept-invitation" on:click=accept>"Accept"</button> })}
+                        <button class="btn small ghost decline-invitation" on:click=decline>"Decline"</button>
+                    </div>
+                }
+                .into_any()
+            })
+            .collect_view()
+    }
+}
+
 #[component]
 fn Banners() -> impl IntoView {
     let ui = ui();
@@ -169,6 +242,7 @@ fn Banners() -> impl IntoView {
                 }
             })
         }}
+        <InvitationBanners/>
         {move || ui.outdated.get().then(|| view! {
             <div class="banner warn outdated-banner"><Icon name="alert"/>
                 <span>"This page is out of date: the server needs a newer version of notekpr. Your unsent edits are kept in this browser; reload to get the new version."</span>

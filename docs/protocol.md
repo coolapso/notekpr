@@ -126,7 +126,7 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 | `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `notekpr_login` cookie that binds the login to this browser |
 | `GET /auth/oidc/callback` | provider redirect target; requires the `notekpr_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
 | `POST /auth/exchange {code}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}` |
-| `POST /auth/dev-login {username, display_name?}` | **development mode only** (`--dev-mode`), otherwise 404 |
+| `POST /auth/dev-login {username, display_name?}` | **development mode only** (`--dev-mode`), otherwise 404. The account's e-mail address is `<username>@example.com`: what invites it (§5.6) |
 | `POST /auth/logout` | revoke the current session |
 | `GET /me/sessions`, `DELETE /me/sessions/{id}` | list / revoke own sessions |
 
@@ -213,7 +213,7 @@ refuses roles it doesn't know (`400`).
 | `GET/PATCH/DELETE /vaults/{v}` | read: member; update (`encrypted_meta`, `archived`, `viewers_comment`): owner (never quick notes: `400`); delete: owner |
 | `GET /vaults/{v}/keys` | member: own envelopes for every epoch granted + full key chain; the notes' document keys (`objects`, `object_chain`), which notes are shared individually (`shared`; absent on servers from before notes had their own keys) and for those where sharing started (`share_from`: note → first shared epoch) |
 | `GET /vaults/{v}/members` | member: `MemberInfo {user (with account key), role, has_current_key}` |
-| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?}` | owner; never in quick notes (`400`, §5.3). Without an envelope the member is "pending keys" until an owner's client grants them. Role `owner` is refused (`400`: owners are made from members, below), and `admin` for an agent (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
+| `POST /vaults/{v}/members {user_id, role, key_envelope?, log_entry?, invitation_id?}` | owner; never in quick notes (`400`, §5.3). A person joins only by an invitation they accepted (§5.6): `invitation_id` names it, for this vault, this person and this role (`400` without one, `409` if it isn't accepted or is for someone else), and it ends in the same transaction; one's own agents join without. Without an envelope the member is "pending keys" until an owner's client grants them. Role `owner` is refused (`400`: owners are made from members, below), and `admin` for an agent (`400`); an agent can be added only by its owner (`404` otherwise). Membership supersedes single-note shares: adding someone removes their shares of notes in that vault and those notes' keys |
 | `PATCH /vaults/{v}/members/{u} {role, log_entry?}` | owner; to `owner` with a `make_owner` entry (§5.2), so only in a vault with a log (`409` without an entry): people with account keys only (agents `400`, no keys yet `409`, an owner already `409`). An owner's role changes too, also one's own, while another owner stays (`400` otherwise); never `admin` for an agent (`400`) |
 | `DELETE /vaults/{v}/members/{u}` `RemoveMemberRequest {log_entry?, rotation?}` | an owner removes anyone, other owners too while one stays (`400` otherwise), with `rotation`: the vault's new key for everyone else (`RotateKeysRequest`, checked as `keys/rotate` once the person is gone), stored in the same transaction — without it `400`, and nothing changes if it is refused. The person removed gets `access_revoked`, never the new key's `key_rotated`. Anyone can remove themselves, an owner while another stays (no `rotation`, `400` otherwise; the body is optional); if they had the vault key it is to be renewed (§5.4). When the member whose vault it is (`owner_id`) stops being an owner, it becomes the other owner's who has been a member longest |
 | `GET /vaults/{v}/log?since=` | member: the membership log, `MemberLogResponse {entries}` (§5.2) |
@@ -221,8 +221,8 @@ refuses roles it doesn't know (`400`).
 | `POST /vaults/{v}/keys/grant {envelopes}` | owner fills missing envelopes for the current epoch |
 | `POST /vaults/{v}/keys/rotate {new_epoch, chain_link, encrypted_meta, envelopes, objects, log_entry?, without?}` | owner; `new_epoch = current + 1`; envelopes must cover exactly the members that have account keys, except those listed in `without` — left out on purpose because their account key changed and the owner hasn't verified it (they stay members without the current key and get it later through `keys/grant`); `objects` (`ObjectKeyChange {object_id, update}`) moves **every** note with a document key to its next epoch in the same transaction (each a rotation as in §5.1, wrapped under the new vault key), else `409` |
 | `GET /vaults/{v}/audit` | owner and admins: the newest 500 membership, key and deletion events (no content) |
-| `GET /users/search?q=` | humans matching a display-name prefix or exact e-mail (with the instance setting `user_directory: "exact_email"`: exact e-mail only), plus the caller's own agents; at least 2 characters (shorter: no results), at most 10 results |
-| `GET /users/{id}` | public profile + account key of a user the caller may interact with; without the e-mail for people connected only through an individually shared note |
+| `GET /users/search?q=` | whom the apps suggest when sharing: people the caller already shares a vault or a note with whose display name starts with `q` or whose e-mail is `q` (with the instance setting `user_directory: "search"`: anyone's), plus the caller's own agents; at least 2 characters (shorter: no results), at most 10 results. Anyone else is invited by address (§5.6) |
+| `GET /users/{id}` | public profile + account key of a user the caller may interact with (themselves, people they share a vault or a note with, their agents; with `user_directory: "search"`, anyone); without the e-mail for people connected only through an individually shared note |
 
 Clients **must** call `PublicAccountKey::verify()` before wrapping a key to a
 fetched public key, and should pin fingerprints (trust on first use) and show
@@ -250,7 +250,7 @@ member list, vault key, or the note's history from before it was shared.
 | `PUT /vaults/{v}/objects/{o}/keys/signatures {grants: [{user_id, epoch, signature}]}` | owner: grant signatures for keys given before grants were signed, or signed by someone no longer an owner |
 | `PUT /vaults/{v}/objects/{o}/meta {encrypted_meta}` | writer: the title recipients see, under the current document key (else `412 stale_key`) |
 | `GET /vaults/{v}/objects/{o}/shares` | member: `ObjectShareInfo {user, role, added_at, added_by, has_current_key, key_signed, signed_by?}` (`signed_by`: who signed their current key's grant; older servers leave it out) |
-| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?}` | owner; never in quick notes (`400`, §5.3); `role` is `editor` or `viewer`; the envelope wraps the current document key to the person (else `412 stale_key`). Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role. |
+| `POST /vaults/{v}/objects/{o}/shares {user_id, role, envelope, log_entry?, invitation_id?}` | owner; never in quick notes (`400`, §5.3); `role` is `editor` or `viewer`; the envelope wraps the current document key to the person (else `412 stale_key`). Someone new gets it only by an invitation to this note they accepted (§5.6, as for members; one's own agents without). Vault members are refused (`409`), and so is a note whose sharing has not started (`409`: give it a fresh key first). Someone it is shared with already is refused too (`409`), unless they lack the current key (left out of a rotation, `without`): then they get it, with this role (no invitation). |
 | `PATCH /vaults/{v}/objects/{o}/shares/{u} {role, log_entry?}` | owner |
 | `DELETE …/shares/{u}` `RemoveShareRequest {log_entry?, rotation?}` | owner, with `rotation`: the note's new key for the people it stays shared with (an `ObjectKeyUpdate` rotation, below), stored in the same transaction — without it `400`, and nothing changes if it is refused. The person removed gets `access_revoked`, never the note's `key_rotated`. Recipients may remove the note from their list (no `rotation`, `400` otherwise; the body is optional); its key is then to be renewed (§5.4) |
 | `GET /shares` | notes shared with the caller: `SharedNote {vault_id, object_id, role, owner, shared_by, key_epoch, encrypted_meta, added_at}` |
@@ -500,6 +500,70 @@ reloaded — a limit may have changed —, a new connection). Lowering the
 limit takes nothing away. Moving a drawing to another vault copies it (as
 for notes, §5.3): apps check there's room there before copying anything.
 
+### 5.6 Sharing by invitation
+
+Nobody is put in a vault (or given a note) they didn't want, and a sharer
+learns nothing from an address: every share with a person is an
+invitation, which they accept or decline; only then does an owner's app
+add them, as in §5 and §5.1, with the invitation's id. One's own agents
+join without one (they're the person's).
+
+| Endpoint | Role |
+|---|---|
+| `POST /vaults/{v}/invitations` `CreateInvitationRequest {id, object_id?, user_id? \| email?, role, created_at, signature, with_comments?}` | owner; never in quick notes (`400`). `object_id`: to one of its notes, whose sharing has started (a fresh key, §5.1; `409` otherwise), as `editor` or `viewer`; else to the vault, as `admin`, `editor` or `viewer` (never `owner`: owners are made from members, `400`). Whom: `user_id`, someone the caller may look up (`GET /users/{id}`; anyone else `404`, one's own agents `400`: they join directly), or `email`, anyone's address (lowercased, trimmed). The answer is the same whether an address has an account or not; someone named by account who is in already is refused (`409`). `id` is the app's (`random_id`), `created_at` its time (ms, within a day of the server's), `signature` the caller's (below); `with_comments` (notes only): the note's comments so far go with it. An open invitation to the same vault or note for the same account or address is refused (`409`: cancel it first). At most `invitations_pending` of the caller's wait at once and `invitations_per_day` go out a day (§9; `403 limit_reached`). `201 SentInvitation` |
+| `GET /invitations` | `InvitationsResponse {received, sent}`: invitations to the caller (by account, or by their e-mail address) not answered yet, and those they accepted that wait to be done — `ReceivedInvitation {id, vault_id, object_id?, from, user_id? \| email?, role, created_at, expires_at, signature, accepted, with_comments}`, `from` being who invited them with their account key (without their address for a note) —; and those to the vaults the caller owns and their notes, by any owner — `SentInvitation {id, vault_id, object_id?, user? \| email?, role, invited_by, created_at, expires_at, signature, accepted?, with_comments}`, `accepted` (`{user, accepted_at, signature}`, with their account key) once they accepted. Agents get both empty |
+| `POST /invitations/{id}/accept {signature}` | the person it is for (`404` for anyone else): their signature on accepting (below), checked with their account key (`409` before they have one). It waits `invitation_days` again, for an owner's app. Someone who has access already just ends it |
+| `POST /invitations/{id}/decline` | the person it is for: gone for them — and for the owners it looks unanswered, until it expires; they aren't told. Also takes back an acceptance |
+| `DELETE /vaults/{v}/invitations/{id}` | owner: cancel it |
+
+The vault's or the note's name isn't in an invitation: it is encrypted,
+and the person has no key yet. They see who invites them, and to what kind
+of thing, as what.
+
+**Signatures.** The inviting owner signs `statement("notekpr/v1/sig/invitation",
+[id, vault_id, "vault" | "note", object_id | "", invited_by, "user" | "email",
+user_id | address, role, "with comments" | "", created_at:i64be])` with their
+account key; the person accepting signs `statement("notekpr/v1/sig/invitation-accept",
+[the same fields…, created_at:i64be, user_id])`, `user_id` being theirs
+(`crates/core/src/invitation.rs`). The server checks both with the keys it
+has, to keep out what can't be used. An owner's app adds someone who
+accepted (`invitation::check_accepted`) only on the vault's log as fetched
+and verified just now, and only if:
+
+* the invitation is signed with the key the log pinned for its inviter,
+  who is an owner in it now;
+* it is at most 90 days old (`created_at`), whatever the server says of
+  its expiry;
+* whoever accepted is the account it named (one invited by account), their
+  account key verifies, and so does their acceptance with it;
+* that key is the one the app pinned for them, if it pinned one: otherwise
+  the owner compares fingerprints first (the apps show it), and only then
+  is it added.
+
+Who has an address is the server's word: for an invitation by address,
+nothing but the server ties the account that accepts to the address, so
+the apps say who accepted which one (security.md, residual risks 8).
+
+It then pins their key (if new), wraps the vault's key (or the note's,
+with a grant signature, §5.1) to it and signs them into the membership log
+(`add` or `share`), sending the invitation's id along; for a note invited
+`with_comments`, it then carries the comments so far (§6.1). Apps of the
+person invited check an invitation's signature with its inviter's key (and
+the one they pinned for them, if any) before offering to accept it, and
+pin it on accepting.
+
+**Live.** `user_event invitations_changed` (§7) goes to the person an
+invitation is for (when it comes, is cancelled or done; for an address,
+to whoever has it now) and to the vault's owners (when it is made,
+accepted, cancelled or done) — never to the owners when someone declines.
+Owners' apps add whoever accepted at once if they're open, otherwise when
+they next start; the person sees it waiting meanwhile.
+
+**Ending.** An invitation ends when it is done, cancelled or expired, or
+its inviter stops being an owner of the vault; its address is then
+forgotten. The server keeps an ended one, without it, for a day (the daily
+limit counts it), then deletes it.
+
 ## 6. The encrypted log
 
 Each vault has one monotonically increasing sequence counter. Every accepted
@@ -604,7 +668,7 @@ Server → client: `ready {user_id, session_id, conn_id}`,
 `awareness {vault_id, object_id, from_user, from_conn, payload}` (empty payload = that connection left),
 `vault_event {vault_id, event}` (`members_changed`, `key_rotated`, `meta_changed`, `deleted`, `access_revoked`, `role_changed`),
 `object_event {vault_id, object_id, event}` (`shared`, `key_rotated`, `meta_changed`, `shares_changed`, `access_revoked`, `deleted`),
-`user_event {event}` (`device_pending`, `devices_changed`, `vaults_changed`, `shares_changed`, `session_revoked`),
+`user_event {event}` (`device_pending`, `devices_changed`, `vaults_changed`, `shares_changed`, `invitations_changed` — §5.6 —, `session_revoked`),
 `error {code, message, vault_id?}`, `pong {nonce}`.
 
 Only `update` and `awareness` skip the connection they came from (your own
@@ -756,7 +820,10 @@ and nothing of it is kept:
 | `keep_deleted_files_days` | days the file store keeps a file the database let go of (default 14) |
 | `rate_limit_rps` | API requests per second per client address, bursts of 4 × (default 50, at least 1); a change starts every address afresh |
 | `auth_rate_limit_per_min` | sign-in and token requests per minute per client address (default 30, at least 1) |
-| `user_directory` | `"search"` (the default): `GET /users/search` finds people by display-name prefix or exact e-mail; `"exact_email"`: by exact e-mail only |
+| `user_directory` | whom `GET /users/search` suggests when sharing: `"private"` (the default) people the caller already shares a vault or a note with; `"search"`, for families and companies: anyone, by display-name prefix or exact e-mail (and they can be looked up, `GET /users/{id}`). The stored `"exact_email"` of older releases reads as `"private"` |
+| `invitations_pending` | invitations a person may have waiting for an answer at once (default 50, §5.6) |
+| `invitations_per_day` | invitations a person may send in a day, cancelled ones too (default 50) |
+| `invitation_days` | days an invitation waits to be answered — and, once accepted, for an owner's app to add them (default 14, 1 to 90) |
 | `session_ttl_days` | how long a browser session lasts (default 30, at least 1), from the next sign-in |
 | `device_session_ttl_days` | how long a session made by device code (the CLI) lasts (default 180, at least 1) |
 | `agent_token_ttl_secs` | how long an agent's access token lasts (default 3600, at least 60) |
@@ -825,7 +892,7 @@ it the least it could mean, rather than fail on the message that carries it:
 * **Events** (`vault_event`, `object_event`, `user_event`, §7): an unknown
   kind makes an app reload what it could be about — the vault (its
   information, keys and membership log), the note's keys, or the person's
-  lists (vaults, shared notes, devices).
+  lists (vaults, shared notes, devices, invitations).
 * **WebSocket messages** of a `type` an app doesn't know are skipped.
 * **Vault kinds** (`kind` in `GET /vaults`, §5): a vault of a kind an app
   doesn't know isn't shown (the server refuses to make one, `400`). Apps

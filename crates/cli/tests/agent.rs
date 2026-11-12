@@ -103,7 +103,7 @@ async fn agent_gateway_is_scoped_audited_and_syncs() {
         .await
         .unwrap();
     assert_eq!(fp.as_deref(), Some(setup.fingerprint.as_str()));
-    let shared = manage::share(&alice, &mem, &setup.agent_id, Role::Editor, false)
+    let shared = share(&alice, &mem, &setup.agent_id, Role::Editor, false)
         .await
         .unwrap();
     assert_eq!(

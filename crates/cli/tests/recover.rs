@@ -3,7 +3,7 @@
 mod common;
 
 use common::*;
-use notekpr_cli::{manage, note_shares, ops, recover};
+use notekpr_cli::{manage, ops, recover};
 
 #[tokio::test]
 async fn an_encrypted_export_decrypts_into_plain_files() {
@@ -317,7 +317,7 @@ async fn a_recovery_checks_what_the_apps_check() {
     }
     let v = h.resolve("Family").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    note_shares::share_note(&alice, &v, "Trip", "bob", Role::Viewer, false)
+    share_note(&alice, &v, "Trip", "bob", Role::Viewer, false)
         .await
         .unwrap();
     let family = |got: Vec<RecoveredVault>| got.into_iter().find(|v| v.vault_id == vid).unwrap();

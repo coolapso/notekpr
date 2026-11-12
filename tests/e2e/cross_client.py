@@ -7,7 +7,7 @@
 import argparse, os, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from suite import Env, uniq, check, share, new_note, severe_logs  # noqa: E402
+from suite import Env, uniq, check, share, cli_accepts, new_note, severe_logs  # noqa: E402
 from wd import Browser, KEYS, editor_text, signup  # noqa: E402
 
 
@@ -34,7 +34,7 @@ def main():
         a.click(".modal button[type=submit]")
         a.find_text(".page-head h1", "Shared", 15)
         new_note(a, "Plan", "from the browser")
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=cli_accepts(cli))
         mirror = f"{home}/notes"
         r = cli("sync", "--dir", mirror, "--once", "--plaintext-ok")
         check(r.returncode == 0, "CLI one-shot sync with plaintext mirror")

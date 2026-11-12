@@ -24,7 +24,7 @@ async fn viewers_comment_and_everyone_sees_the_threads() {
     .await
     .unwrap();
     let v = ah.resolve("Family").await.unwrap();
-    manage::share(&alice, &v, "carol", Role::Viewer, false)
+    share(&alice, &v, "carol", Role::Viewer, false)
         .await
         .unwrap();
 
@@ -164,7 +164,7 @@ async fn a_note_is_shared_with_its_comments_unless_told_otherwise() {
     };
 
     // Shared with its comments (the default): Rita gets them, once.
-    note_shares::share_note(&alice, &v, "Trip", "rita", Role::Viewer, false)
+    share_note(&alice, &v, "Trip", "rita", Role::Viewer, false)
         .await
         .unwrap();
     assert_eq!(note_shares::carry_comments(&v, "Trip").await.unwrap(), 1);
@@ -176,7 +176,7 @@ async fn a_note_is_shared_with_its_comments_unless_told_otherwise() {
         "already there"
     );
     // Without: Sam sees only what is written from now on.
-    note_shares::share_note(&alice, &v, "Diary", "sam", Role::Viewer, false)
+    share_note(&alice, &v, "Diary", "sam", Role::Viewer, false)
         .await
         .unwrap();
     assert_eq!(comments_for(&sam, &diary).await, 0);
@@ -200,10 +200,8 @@ async fn members_are_mentioned_and_read_everywhere() {
         .await
         .unwrap();
     let v = ah.resolve("Family").await.unwrap();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
-    manage::share(&alice, &v, "carol", Role::Viewer, false)
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
+    share(&alice, &v, "carol", Role::Viewer, false)
         .await
         .unwrap();
 
@@ -286,10 +284,8 @@ async fn people_a_note_is_shared_with_comment_from_the_cli() {
         .await
         .unwrap();
     let v = ah.resolve("Home").await.unwrap();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
-    manage::share(&alice, &v, "carol", Role::Editor, false)
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
+    share(&alice, &v, "carol", Role::Editor, false)
         .await
         .unwrap();
     let bh = hub(&bob).await;
@@ -304,7 +300,7 @@ async fn people_a_note_is_shared_with_comment_from_the_cli() {
         .unwrap();
     assert!(sent.mentioned.mentions.is_empty());
 
-    note_shares::share_note(&alice, &v, "Trip", "rita", Role::Viewer, false)
+    share_note(&alice, &v, "Trip", "rita", Role::Viewer, false)
         .await
         .unwrap();
     note_shares::carry_comments(&v, "Trip").await.unwrap();

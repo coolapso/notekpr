@@ -1037,23 +1037,37 @@ async fn directory_search_respects_its_mode() {
         users::search(db, "alice", "al", "al%").await.unwrap(),
         ["al-bot", "alfred"]
     );
-    // Exact e-mail mode doesn't match names.
-    assert_eq!(
-        users::search_exact_email(db, "alice", "al", "al%")
-            .await
-            .unwrap(),
-        ["al-bot"]
-    );
-    assert_eq!(
-        users::search_exact_email(db, "alice", "alfred@example.org", "x%")
-            .await
-            .unwrap(),
-        ["alfred"]
-    );
     assert_eq!(
         users::find(db, "ALFRED@example.org").await.unwrap(),
         ["alfred"]
     );
+
+    // The private directory: only people one shares a vault or a note with
+    // (one's agents too), by name or exact address.
+    let known = |q: &'static str, like: &'static str| async move {
+        users::search_known(db, "alice", q, like).await.unwrap()
+    };
+    assert_eq!(known("al", "al%").await, ["al-bot"]);
+    assert!(known("alfred@example.org", "x%").await.is_empty());
+    human(db, "alma").await;
+    human(db, "alvin").await;
+    vault(db, "v", "alma", &[("alice", Role::Viewer)]).await;
+    assert_eq!(known("al", "al%").await, ["al-bot", "alma"]);
+    assert_eq!(known("alma@example.org", "x%").await, ["alma"]);
+    // A note of alice's vault shared with alfred; one of alvin's shared
+    // with alice: either way they know each other.
+    vault(db, "w", "alice", &[]).await;
+    share(db, "w", "n", "alfred", Role::Viewer).await;
+    vault(db, "x", "alvin", &[]).await;
+    share(db, "x", "m", "alice", Role::Editor).await;
+    assert_eq!(
+        known("al", "al%").await,
+        ["al-bot", "alfred", "alma", "alvin"]
+    );
+    // Someone with whom only a third person shares: no.
+    human(db, "alba").await;
+    vault(db, "y", "alma", &[("alba", Role::Editor)]).await;
+    assert!(!known("al", "al%").await.contains(&"alba".to_string()));
 }
 
 #[tokio::test]

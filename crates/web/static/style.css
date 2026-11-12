@@ -326,6 +326,10 @@ textarea.input { resize: vertical; }
 .banner.device-banner { background: var(--accent); color: var(--accent-fg); border-bottom-color: transparent; animation: banner-in 0.25s ease-out; }
 .device-banner .btn { background: var(--accent-fg); border-color: var(--accent-fg); color: var(--accent); font-weight: 600; }
 .device-banner .btn:hover { background: var(--accent-fg); filter: brightness(0.95); }
+/* Someone wants to share with you: as hard to miss as a device. */
+.banner.invitation-banner:not(.accepted) { background: var(--accent); color: var(--accent-fg); border-bottom-color: transparent; animation: banner-in 0.25s ease-out; }
+.invitation-banner:not(.accepted) .btn { background: var(--accent-fg); border-color: var(--accent-fg); color: var(--accent); font-weight: 600; }
+.invitation-banner:not(.accepted) .btn.ghost { background: transparent; color: var(--accent-fg); }
 @keyframes banner-in { from { transform: translateY(-100%); opacity: 0; } }
 .toasts { position: fixed; z-index: 200; left: 50%; transform: translateX(-50%); bottom: 18px; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; width: min(560px, calc(100vw - 32px)); }
 .toast { pointer-events: auto; padding: 9px 14px; border-radius: 10px; background: var(--fg); color: var(--bg); box-shadow: var(--shadow); font-size: 14px; animation: toast-in 0.18s ease-out; max-width: 100%; }
@@ -1005,6 +1009,9 @@ mtr > mtd:last-child { padding-right: 0; }
 .person { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 8px; }
 .person:hover { background: var(--bg-2); }
 .person.big .avatar { width: 52px; height: 52px; font-size: 18px; }
+.invite-address .avatar { background: var(--bg-3); color: var(--fg-2); }
+.invite-address .avatar .ic { width: 14px; height: 14px; }
+.person.invitation:not(.accepted) .avatar { opacity: 0.6; }
 .person.big .h { font-size: 18px; font-weight: 600; }
 .vault-storage { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 .vault-storage p { margin: 0; }

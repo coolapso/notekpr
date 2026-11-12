@@ -13,6 +13,7 @@ pub mod doc;
 pub mod drawing;
 pub mod drawings;
 pub mod engine;
+pub mod invitation;
 pub mod keys;
 pub mod library;
 pub mod markdown;

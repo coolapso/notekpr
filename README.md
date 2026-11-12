@@ -48,7 +48,8 @@ how to use the app.
   folders with drag and drop, icons, a quick switcher, full-text search,
   backlinks, a graph, quick notes, a trash and every note's history.
 * **[Working together](docs/features.md#working-together)** — share a vault
-  or a single note, edit together with live cursors, comment and @mention.
+  or a single note by invitation, edit together with live cursors, comment
+  and @mention.
 * **[Privacy and security](docs/features.md#privacy-and-security)** — a key
   for every note, signed membership and edits, new devices approved from one
   you already use.

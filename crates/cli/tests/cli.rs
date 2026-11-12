@@ -18,6 +18,28 @@ async fn run(srv: &TestServer, who: &str, args: &[&str]) -> anyhow::Result<()> {
     commands::run_in(Cli::try_parse_from(argv)?, srv.dirs(who)).await
 }
 
+/// `who` accepts every invitation to them, with `notekpr invitations
+/// accept`, and `owner`'s `notekpr invitations list` adds them.
+async fn accept_invitations(srv: &TestServer, who: &str, owner: &str) {
+    let s = reopen(srv, who, who).await;
+    let list = notekpr_cli::invitations::list(&s).await.unwrap();
+    assert!(!list.received.is_empty(), "{who} has no invitation");
+    for i in &list.received {
+        run(
+            srv,
+            who,
+            &[
+                "invitations",
+                "accept",
+                notekpr_cli::invitations::short(&i.id),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+    run(srv, owner, &["invitations", "list"]).await.unwrap();
+}
+
 #[test]
 fn says_which_version_it_is() {
     let e = Cli::try_parse_from(["notekpr", "--version"]).unwrap_err();
@@ -216,9 +238,7 @@ async fn leaving_uploads_first_and_can_remove_the_mirror() {
     let alice_hub = hub(&alice).await;
     for name in ["Family", "Work"] {
         let v = alice_hub.resolve(name).await.unwrap();
-        manage::share(&alice, &v, "bob", Role::Editor, false)
-            .await
-            .unwrap();
+        share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     }
     let m = srv.path("bob-notes");
     let m_str = m.to_str().unwrap();
@@ -536,13 +556,14 @@ async fn pictures_as_icons_on_the_command_line() {
             "share-note",
             "Home",
             "Garden/Tomatoes",
-            "bob",
+            "bob@example.com",
             "--role",
             "viewer",
         ],
     )
     .await
     .unwrap();
+    accept_invitations(&srv, "bob", "alice").await;
     let pic = Picture::new("image/png", TINY_PNG.to_vec(), Picture::ENTRY).unwrap();
     let h = hub(&alice).await;
     set_picture(&h, "Home", "Garden", &pic).await;
@@ -655,10 +676,18 @@ async fn the_only_owner_of_a_shared_vault_is_told_to_add_another() {
     run(
         &srv,
         "alice",
-        &["vault", "share", "Family", "bob", "--role", "editor"],
+        &[
+            "vault",
+            "share",
+            "Family",
+            "bob@example.com",
+            "--role",
+            "editor",
+        ],
     )
     .await
     .unwrap();
+    accept_invitations(&srv, "bob", "alice").await;
     let out = members().await;
     assert!(
         out.stderr.contains("only owner of 'Family'"),

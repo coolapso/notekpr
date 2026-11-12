@@ -20,7 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import wd  # noqa: E402
-from suite import Env, uniq, check, share, new_note  # noqa: E402
+from suite import Env, uniq, check, share, cli_accepts, new_note  # noqa: E402
 from wd import Browser, signup  # noqa: E402
 
 OBSERVE = """
@@ -124,7 +124,7 @@ def main():
         b.js("const ed=document.querySelector('.ed'); ed.focus(); const s=getSelection(); s.selectAllChildren(ed); s.collapseToEnd();"
              "const dt = new DataTransfer(); dt.setData('text/plain', arguments[0]);"
              "ed.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true}));", long_note)
-        share(b, ".sb-bottom button:nth-child(2)", bn)
+        share(b, ".sb-bottom button:nth-child(2)", bn, by=cli_accepts(cli))
         mirror = f"{home}/notes"
         check(cli("sync", "--dir", mirror, "--once", "--plaintext-ok").returncode == 0, "CLI mirror")
         log = open(f"{home}/daemon.log", "w")

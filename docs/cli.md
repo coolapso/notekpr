@@ -157,14 +157,19 @@ notekpr --profile alice login --server http://127.0.0.1:8080 --dev-user alice
 notekpr --profile bob   login --server http://127.0.0.1:8080 --dev-user bob
 
 notekpr -p alice vault create "Family"
-notekpr -p alice vault share Family bob --role editor
+notekpr -p alice vault share Family bob@example.com --role editor
+notekpr -p bob invitations list                # Alice's invitation, with its id
+notekpr -p bob invitations accept <id>
+notekpr -p alice invitations list              # Alice's client adds Bob
 echo "# Groceries" | notekpr -p alice write Family Groceries.md
 notekpr -p bob cat Family Groceries
 ```
 
 `--profile` can also be set with `NOTEKPR_PROFILE`; the default profile is
 `default`. `notekpr profiles` lists them. `--dev-user` is refused unless
-the server reports development mode in `/api/v1/info`.
+the server reports development mode in `/api/v1/info`. In development mode
+everyone's e-mail address is their user name at `example.com` (no mail is
+ever sent): it is what invites them.
 
 Plain `http://` is only accepted for `localhost`, `127.0.0.1` and `::1`; any
 other host needs `https://` (or the explicit, insecure `--insecure-http`).
@@ -264,7 +269,8 @@ by its id.
 | `vault icon <v> <emoji>` / `vault icon <v> --remove` | owner only; the vault's icon (replaces a picture given in the web app) |
 | `vault viewers-comment <v> on\|off` | owner only; whether viewers (and people its notes are shared with read-only) may comment (on by default) |
 | `vault members <v>` | members, roles, key fingerprints and pin status |
-| `vault share <v> <user> --role owner\|admin\|editor\|viewer` | owner only; for an existing member it changes their role; owners are equal, admins (people only) also empty the trash; see [§8](#8-sharing-members-and-keys) |
+| `vault share <v> <user> --role owner\|admin\|editor\|viewer` | owner only; invites someone (by e-mail address, or by the name of someone you share with already) — they get access once they accept; adds one of your agents at once; for an existing member it changes their role; owners are equal, admins (people only) also empty the trash; see [§8](#8-sharing-members-and-keys) |
+| `invitations list` / `invitations accept <id>` / `invitations decline <id>` / `invitations cancel <id>` / `invitations verify <id>` | invitations to you and to the vaults you own (and their notes); listing them also adds whoever accepted one. `decline` doesn't tell whoever sent it; `cancel` takes back one you (or another owner) sent; `verify`: someone accepted with a key other than the one you pinned for them, and you compared it with them. An id may be cut to its start, as `list` shows it; see [§8](#8-sharing-members-and-keys) |
 | `vault unshare <v> <user>` / `vault rotate <v>` / `vault leave <v>` | unshare and rotate: owner only; removal always rotates the key; an owner leaves only while another stays (the last one deletes the vault instead) |
 | `ls <v> [folder] [-r]` | folders, notes and attachments, in the sidebar's order (`-r`: each folder followed by what's in it) |
 | `cat <v> <path>` | note text (or attachment bytes; a drawing as a `.drawing` file: Excalidraw's JSON under notekpr's `type`) |
@@ -750,18 +756,50 @@ the remote edit.
 
 ## 8. Sharing, members and keys
 
+Sharing is by invitation: nobody is put in a vault they didn't want.
+
 ```sh
-notekpr vault share Family "Bob" --role editor
+notekpr vault share Family bob@example.com --role editor   # anyone, by address
+notekpr vault share Family "Bob" --role editor             # someone you share with already
 ```
 
-The client fetches Bob's public account key, verifies its self-signature,
-prints its **fingerprint** and pins it (trust on first use, stored in the
-profile). Compare the fingerprint with Bob over a trusted channel (in person,
-a call): Bob sees his own with `notekpr status`. If the server ever
-presents a different key for a pinned user, sharing refuses to continue with
-a loud warning until you verify the new key and pass `--accept-new-key`; key
-rotations go ahead without that person (and say so), who gets the new key
-once you share with them again with `--accept-new-key`.
+Someone you don't share anything with yet is invited by their full e-mail
+address: the server answers the same whether or not it has an account, so
+it tells you nothing about who uses it. Someone you already share a vault
+or a note with is found by name (with a server whose directory is
+searchable, anyone is). Owners are made from members: invite them as an
+editor, then `vault share … --role owner` once they're in.
+
+The person invited sees it in their apps (`notekpr invitations list`, the
+sync daemon says so too) — who invites them and as what, never the vault's
+name (it is encrypted, and they have no key yet) — and accepts or declines:
+
+```sh
+notekpr invitations list
+notekpr invitations accept 3fa8c1d2       # its id, or its start
+notekpr invitations decline 3fa8c1d2      # whoever sent it isn't told
+```
+
+Once they accepted, an owner's client adds them without asking (you
+decided when inviting): the sync daemon does at once, any other client
+the next time it runs `notekpr invitations list`. It fetches their public
+account key, verifies its self-signature and their signature on accepting,
+checks the invitation is signed by an owner of the vault, then wraps the
+vault key for them and signs them into the vault's membership log. It
+pins their key's **fingerprint** (trust on first use, stored in the
+profile): compare it with them over a trusted channel (in person, a call):
+they see their own with `notekpr status`, and `vault members` shows it. If
+the server ever presents a different key for a pinned user, nobody is
+added with it: `invitations list` says so with the new fingerprint, and
+`invitations verify <id>` adds them once you compared it with them. Key
+rotations go ahead without such a person (and say so), who gets the new
+key once you share with them again with `--accept-new-key`.
+
+`invitations cancel <id>` takes an invitation back; unanswered ones expire
+after the server's invitation period (14 days unless its administrator
+says otherwise), and a server may limit how many one has waiting and sends
+a day. Your own agents need no invitation: `vault share` adds them at once
+(they're yours).
 
 * Only owners can share, unshare and rotate. Running `vault share` again
   for someone who is already a member changes their role to the given
@@ -779,9 +817,10 @@ once you share with them again with `--accept-new-key`.
   while: `trash undo`) and sees the vault's activity log — people only, never agents; `viewer` reads (and comments,
   unless the owner turns it off). All of it in one table:
   [roles.md](roles.md).
-* People who have not set up encryption yet are added without a key; your
-  client wraps the vault key for them automatically once they have (during
-  `sync`, `vault members`, or any sync of that vault).
+* Members who joined before they set up encryption (from before
+  invitations, or an agent) have no key yet; your client wraps the vault
+  key for them automatically once they have (during `sync`, `vault
+  members`, or any sync of that vault).
 * `vault unshare` removes the member **and rotates the vault key**, in one
   request: they keep what they already downloaded, but cannot decrypt
   anything written later.
@@ -797,22 +836,24 @@ once you share with them again with `--accept-new-key`.
 Share one note with someone without giving them the vault:
 
 ```sh
-notekpr share-note Family "Plans/Trip.md" "Bob" --role viewer
+notekpr share-note Family "Plans/Trip.md" bob@example.com --role viewer
 notekpr note-shares Family "Plans/Trip.md"      # who has it
 notekpr unshare-note Family "Plans/Trip.md" "Bob"   # also renews the note's key
 ```
 
-The first share gives the note its own key; Bob receives only that key and
-can't see the vault's other notes, file names, attachments or members. The
-note goes with its comments: `share-note` sends the comments written so far
-again under the note's key, for everyone the note is shared with
-(`--without-comments`: they see only comments written from then on). Key
-fingerprints are checked and pinned exactly as for vault sharing. Vault members
-keep working on the note as usual (their clients pick up the note's key
-automatically). Rotating the vault key also renews the keys of shared notes.
-Only the vault's owners can share a note, stop sharing it or renew its key;
-running `share-note` again for someone who already has the note changes
-their role.
+It is an invitation too, as for a vault: Bob accepts it, then an owner's
+client adds him. Inviting gives the note a fresh key of its own (once);
+Bob receives only that key and can't see the vault's other notes, file
+names, attachments or members. The note goes with its comments: once Bob
+is in, the owner's client sends the comments written so far again under the
+note's key, for everyone the note is shared with (`--without-comments`:
+they see only comments written from then on; the choice is signed with the
+invitation). Key fingerprints are checked and pinned exactly as for vault
+sharing. Vault members keep working on the note as usual (their clients
+pick up the note's key automatically). Rotating the vault key also renews
+the keys of shared notes. Only the vault's owners can share a note, stop
+sharing it or renew its key; running `share-note` again for someone who
+already has the note changes their role.
 
 A new key is never wrapped for someone whose account key changed since it was
 pinned: the rotation goes ahead without them and says who. Verify the

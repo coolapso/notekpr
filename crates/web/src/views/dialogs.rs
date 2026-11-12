@@ -365,7 +365,13 @@ fn Share(vault: String) -> impl IntoView {
             }
         });
     };
-    reload();
+    // Again whenever invitations change: someone who accepted is added
+    // while this is open.
+    let r = reload.clone();
+    Effect::new(move |_| {
+        ui.invitations.track();
+        r();
+    });
     let timer = StoredValue::new(None::<i32>);
     let do_search = move |text: String| search_people(text, q, found, timer);
     let (vname, me) = step(|c| (c.vault_name(&vault), c.user_id.clone()));
@@ -376,7 +382,7 @@ fn Share(vault: String) -> impl IntoView {
         <Dialog title=format!("Share “{vname}”") wide=true>
             {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
             <div class="share-add">
-                <input class="input grow" placeholder="Add people by name or e-mail…" prop:value=move || q.get() on:input=move |ev| do_search(event_target_value(&ev))/>
+                <input class="input grow" placeholder=INVITE_PLACEHOLDER prop:value=move || q.get() on:input=move |ev| do_search(event_target_value(&ev))/>
                 <select class="input share-role" on:change=move |ev| role.set(member_role(&event_target_value(&ev)))>
                     <option value="admin" title=ADMIN_HINT>"Admin"</option>
                     <option value="editor" selected=true>"Can edit"</option>
@@ -399,7 +405,7 @@ fn Share(vault: String) -> impl IntoView {
                                 <div class="muted small">{u.email.clone().unwrap_or_default()}</div>
                                 {fp.map(|f| view! { <div class="fp" title="Key fingerprint — compare it with the person to be sure the key is really theirs">{f}</div> })}
                                 {(pin == Some(PinStatus::Changed)).then(|| view! { <div class="alert error small">"This person's key changed since you last shared with them. Verify the fingerprint before sharing."</div> })}
-                                {u.account_key.is_none().then(|| view! { <div class="muted small">"Hasn't set up encryption yet — they'll get access after their first sign-in."</div> })}
+                                {(agent && u.account_key.is_none()).then(|| view! { <div class="muted small">"Hasn't set up encryption yet — it gets access once it has."</div> })}
                             </div>
                             {(pin == Some(PinStatus::Changed)).then(|| { let u3 = u.clone(); view! {
                                 <button class="btn small" on:click=move |_| { actions::trust_key(&u3); state::success("New key trusted."); }>"I verified it"</button>
@@ -409,22 +415,43 @@ fn Share(vault: String) -> impl IntoView {
                                     <span class="muted small">"Agents can't be admins"</span>
                                 </Show>
                             })}
+                            // People are invited; one's own agents join at once.
                             <button class="btn small primary" disabled=move || busy.get() || (agent && role.get() == Role::Admin) on:click=move |_| {
                                 busy.set(true);
+                                err.set(None);
                                 let (v, u, r) = (v.clone(), u2.clone(), role.get_untracked());
                                 let reload = reload.clone();
                                 leptos::task::spawn_local(async move {
-                                    match actions::share(&v, &u, r).await {
+                                    let done = if agent {
+                                        actions::share(&v, &u, r).await
+                                    } else {
+                                        actions::invite(&v, None, &actions::InviteTo::User(u), r, false).await
+                                    };
+                                    match done {
                                         Ok(()) => { q.set(String::new()); found.set(vec![]); reload(); }
                                         Err(e) => err.set(Some(e)),
                                     }
                                     busy.set(false);
                                 });
-                            }>"Share"</button>
+                            }>{if agent { "Add" } else { "Invite" }}</button>
                         </div>
                     }
                 }).collect_view()}
+                <InviteAddress q=q found=found busy=busy err=err on_invite=Callback::new({
+                    let v = vault.clone();
+                    move |a: String| {
+                        let (v, r) = (v.clone(), role.get_untracked());
+                        leptos::task::spawn_local(async move {
+                            match actions::invite(&v, None, &actions::InviteTo::Email(a), r, false).await {
+                                Ok(()) => { q.set(String::new()); found.set(vec![]); }
+                                Err(e) => err.set(Some(e)),
+                            }
+                            busy.set(false);
+                        });
+                    }
+                })/>
             </div>
+            <Invited vault=vault.clone() note=None/>
             <h3>"People with access"</h3>
             <div class="people">
                 {move || members.get().into_iter().map(|m| {
@@ -525,7 +552,7 @@ fn Share(vault: String) -> impl IntoView {
                 }).collect_view()}
             </div>
             <p class="muted small">"Owners manage people and the vault's settings, and can delete it; a vault can have several, all equal. Admins can also edit, empty the trash and see the activity log."</p>
-            <p class="muted small"><Icon name="shield"/>" Sharing sends the vault key encrypted to each person's own key. The server can't read it, and every change to who has access is signed by an owner. Removing someone rotates the key."</p>
+            <p class="muted small"><Icon name="shield"/>" Sharing sends the vault key encrypted to each person's own key, once they accept your invitation. The server can't read it, and every change to who has access is signed by an owner. Removing someone rotates the key."</p>
             {let _ = ui;}
         </Dialog>
     }
@@ -592,6 +619,124 @@ fn search_people(
     })));
 }
 
+const INVITE_PLACEHOLDER: &str = "A name of someone you share with, or an e-mail address…";
+
+/// An invitation by the address typed, when it is one (nobody is found by
+/// it unless they are someone one shares with: the answer is the same
+/// whether it has an account or not).
+#[component]
+fn InviteAddress(
+    q: RwSignal<String>,
+    found: RwSignal<Vec<PublicUser>>,
+    busy: RwSignal<bool>,
+    err: RwSignal<Option<String>>,
+    on_invite: Callback<String>,
+) -> impl IntoView {
+    let address = move || {
+        let a = notekpr_core::invitation::normalize_email(&q.get())?;
+        let known = found.with(|f| {
+            f.iter().any(|u| {
+                u.email
+                    .as_deref()
+                    .is_some_and(|e| e.eq_ignore_ascii_case(&a))
+            })
+        });
+        (!known).then_some(a)
+    };
+    move || {
+        address().map(|a| {
+            let a2 = a.clone();
+            view! {
+                <div class="person invite-address">
+                    <span class="avatar"><Icon name="users"/></span>
+                    <div class="grow">
+                        <div>{a.clone()}</div>
+                        <div class="muted small">"They'll get an invitation to accept — with an account here, or once they have one."</div>
+                    </div>
+                    <button class="btn small primary" disabled=move || busy.get() on:click=move |_| {
+                        busy.set(true);
+                        err.set(None);
+                        on_invite.run(a2.clone());
+                    }>"Invite"</button>
+                </div>
+            }
+        })
+    }
+}
+
+/// Invitations to this vault (or, with `note`, to that note) not done
+/// yet: waiting for an answer (declined ones look the same), or accepted,
+/// while an owner's app adds them.
+#[component]
+fn Invited(vault: String, note: Option<String>) -> impl IntoView {
+    let ui = ui();
+    let (v, n) = (StoredValue::new(vault), StoredValue::new(note));
+    let list = Signal::derive(move || {
+        ui.invitations.with(|l| {
+            l.sent
+                .iter()
+                .filter(|i| i.vault_id == v.get_value() && i.object_id == n.get_value())
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+    });
+    view! {
+        <Show when=move || !list.with(Vec::is_empty)>
+            <h3>"Invited"</h3>
+            <div class="people invited">
+                {move || list.get().into_iter().map(|inv| {
+                    let label = inv.user.as_ref().map(|u| u.display_name.clone()).or(inv.email.clone()).unwrap_or_default();
+                    let changed = step(|c| state::key_changed(c, &inv));
+                    let status = match (&inv.accepted, changed) {
+                        (Some(_), true) => "accepted",
+                        (Some(_), false) => "accepted · adding them…",
+                        (None, _) => "waiting for an answer",
+                    };
+                    let id = inv.id.clone();
+                    let verify = changed.then(|| {
+                        let user = inv.accepted.as_ref().map(|a| a.user.clone());
+                        let fp = user.as_ref().and_then(actions::fingerprint).unwrap_or_default();
+                        view! {
+                            <div class="alert error small key-changed">{format!("Their encryption key changed since you last shared with them — they may have reset their account, or someone is intercepting. Compare this fingerprint with them: {fp}")}</div>
+                            <button class="btn small verify-key" on:click=move |_| {
+                                if let Some(u) = &user {
+                                    actions::trust_key(u);
+                                }
+                                leptos::task::spawn_local(state::complete_invitations());
+                            }>"I verified it"</button>
+                        }
+                    });
+                    view! {
+                        <div class="person invitation" class:accepted=inv.accepted.is_some()>
+                            {avatar(&label, &inv.id)}
+                            <div class="grow">
+                                <div>{label.clone()}</div>
+                                <div class="muted small">{format!("{} · {status}", role_words(&inv.role))}</div>
+                                {verify}
+                            </div>
+                            <button class="icon-btn cancel-invitation" title="Cancel the invitation" aria-label=format!("Cancel the invitation of {label}") on:click=move |_| {
+                                let (v, id) = (v.get_value(), id.clone());
+                                leptos::task::spawn_local(async move { actions::cancel_invitation(&v, &id).await });
+                            }><Icon name="x"/></button>
+                        </div>
+                    }
+                }).collect_view()}
+            </div>
+        </Show>
+    }
+}
+
+/// A role as invitations say it.
+pub(crate) fn role_words(role: &Role) -> &'static str {
+    match role {
+        Role::Owner => "Owner",
+        Role::Admin => "Admin",
+        Role::Editor => "Can edit",
+        Role::Viewer => "Can view",
+        Role::Other(_) => "A newer role",
+    }
+}
+
 /// Share a single note with people outside its vault.
 #[component]
 fn ShareNote(vault: String, note: String) -> impl IntoView {
@@ -639,7 +784,7 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
             {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
             <p class="muted small">{format!("Only this note is shared — not the rest of “{vname}”, its other notes or attached files.")}</p>
             <div class="share-add">
-                <input class="input grow" placeholder="Add people by name or e-mail…" prop:value=move || q.get()
+                <input class="input grow" placeholder=INVITE_PLACEHOLDER prop:value=move || q.get()
                     on:input=move |ev| search_people(event_target_value(&ev), q, found, timer)/>
                 <select class="input" on:change=move |ev| role.set(if event_target_value(&ev) == "viewer" { Role::Viewer } else { Role::Editor })>
                     <option value="editor">"Can edit"</option>
@@ -662,38 +807,60 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                         let u2 = u.clone();
                         let fp = actions::fingerprint(&u);
                         let pin = actions::pin_status(&u);
-                        let no_key = u.account_key.is_none();
+                        let agent = u.kind == PrincipalKind::Agent;
+                        let no_key = agent && u.account_key.is_none();
                         view! {
                             <div class="person">
                                 {avatar(&u.display_name, &u.id)}
                                 <div class="grow">
-                                    <div>{u.display_name.clone()}{(u.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}</div>
+                                    <div>{u.display_name.clone()}{agent.then(|| view! { <span class="tag-agent">"agent"</span> })}</div>
                                     <div class="muted small">{u.email.clone().unwrap_or_default()}</div>
                                     {fp.map(|f| view! { <div class="fp" title="Key fingerprint — compare it with the person to be sure the key is really theirs">{f}</div> })}
                                     {(pin == Some(PinStatus::Changed)).then(|| view! { <div class="alert error small">"This person's key changed since you last shared with them. Verify the fingerprint before sharing."</div> })}
-                                    {no_key.then(|| view! { <div class="muted small">"Hasn't set up encryption yet — ask them to sign in once first."</div> })}
+                                    {no_key.then(|| view! { <div class="muted small">"Hasn't set up encryption yet — it can have the note once it has."</div> })}
                                 </div>
                                 {(pin == Some(PinStatus::Changed)).then(|| { let u3 = u.clone(); view! {
                                     <button class="btn small" on:click=move |_| { actions::trust_key(&u3); state::success("New key trusted."); }>"I verified it"</button>
                                 }})}
+                                // People are invited; one's own agents get it at once.
                                 <button class="btn small primary" disabled=move || busy.get() || no_key on:click=move |_| {
                                     busy.set(true);
                                     err.set(None);
                                     let (v, n, u, r) = (v.clone(), n.clone(), u2.clone(), role.get_untracked());
                                     let cm = with_comments.get_untracked();
                                     leptos::task::spawn_local(async move {
-                                        match actions::share_note(&v, &n, &u, r, cm).await {
+                                        let done = if agent {
+                                            actions::share_note(&v, &n, &u, r, cm).await
+                                        } else {
+                                            actions::invite(&v, Some(&n), &actions::InviteTo::User(u), r, cm).await
+                                        };
+                                        match done {
                                             Ok(()) => { q.set(String::new()); found.set(vec![]); }
                                             Err(e) => err.set(Some(e)),
                                         }
                                         busy.set(false);
                                     });
-                                }>"Share"</button>
+                                }>{if agent { "Share" } else { "Invite" }}</button>
                             </div>
                         }
                     }).collect_view()
                 }}
+                <InviteAddress q=q found=found busy=busy err=err on_invite=Callback::new({
+                    let (v, n) = (vault.clone(), note.clone());
+                    move |a: String| {
+                        let (v, n, r) = (v.clone(), n.clone(), role.get_untracked());
+                        let cm = with_comments.get_untracked();
+                        leptos::task::spawn_local(async move {
+                            match actions::invite(&v, Some(&n), &actions::InviteTo::Email(a), r, cm).await {
+                                Ok(()) => { q.set(String::new()); found.set(vec![]); }
+                                Err(e) => err.set(Some(e)),
+                            }
+                            busy.set(false);
+                        });
+                    }
+                })/>
             </div>
+            <Invited vault=vault.clone() note=Some(note.clone())/>
             <h3>"People with access to this note"</h3>
             <div class="people">
                 {move || shares.get().is_empty().then(|| view! { <p class="muted small">"Not shared with anyone outside the vault yet."</p> })}
@@ -769,7 +936,7 @@ fn ShareNote(vault: String, note: String) -> impl IntoView {
                 }}</span>
                 <button class="btn ghost small" on:click=move |_| ui.modal.set(Some(Modal::Share(vw.clone())))><Icon name="users"/>" Share the whole vault…"</button>
             </div>
-            <p class="muted small"><Icon name="shield"/>" The note gets its own key, sent encrypted to each person's own key — the server can't read it. Removing someone renews the note's key."</p>
+            <p class="muted small"><Icon name="shield"/>" The note gets its own key, sent encrypted to each person's own key once they accept your invitation — the server can't read it. Removing someone renews the note's key."</p>
         </Dialog>
     }
 }

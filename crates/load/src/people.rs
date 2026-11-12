@@ -351,8 +351,12 @@ impl Person {
             .ok_or_else(|| anyhow!("the new vault didn't open"))?;
         for &m in members.iter().filter(|&&m| m != self.id) {
             let t0 = Instant::now();
+            // Invited by address; their app accepts it (`join`), ours adds them.
             let login = self.world.names[m as usize].1.clone();
-            let res = manage::share(&self.session, &shared, &login, Role::Editor, false).await;
+            let address = format!("{login}@{}", notekpr_core::protocol::DEV_EMAIL_DOMAIN);
+            let res =
+                manage::share_or_invite(&self.session, &shared, &address, Role::Editor, false)
+                    .await;
             let ok = ok(&res);
             self.world
                 .bus
@@ -419,6 +423,8 @@ impl Person {
             if self.hub.get(vault_id).is_some() {
                 return true;
             }
+            // Its owner invited us: we accept, their app adds us.
+            self.accept_invitations().await;
             if let Ok(list) = self.session.api.vaults().await {
                 let _ = self.hub.open_listed(&list).await;
             }
@@ -427,9 +433,24 @@ impl Person {
         false
     }
 
+    /// Accept every invitation to us (people look at theirs now and then).
+    async fn accept_invitations(&self) {
+        let Ok(list) = notekpr_cli::invitations::list(&self.session).await else {
+            return;
+        };
+        for i in list.received.iter().filter(|i| !i.accepted) {
+            let t0 = Instant::now();
+            let res = notekpr_cli::invitations::accept(&self.session, &i.id).await;
+            self.world
+                .bus
+                .action(self.id, Action::Share, None, 0, t0.elapsed(), ok(&res));
+        }
+    }
+
     /// Do what people do until told to stop.
     pub async fn work(mut self, stop: watch::Receiver<bool>) -> Person {
         let mut next_revision = Instant::now() + Duration::from_secs(self.rng.range(10, 25));
+        let mut next_invitations = Instant::now() + Duration::from_secs(self.rng.range(20, 40));
         // Real people don't all start at once: some are reading first.
         if self.world.realistic {
             let first = self.pause(0, 90_000);
@@ -452,6 +473,10 @@ impl Person {
             }
             if let Err(e) = self.new_page_if_long().await {
                 tracing::debug!(person = self.id, "{e:#}");
+            }
+            if Instant::now() >= next_invitations {
+                self.accept_invitations().await;
+                next_invitations = Instant::now() + Duration::from_secs(self.rng.range(20, 40));
             }
             if Instant::now() >= next_revision {
                 let t0 = Instant::now();
@@ -825,9 +850,19 @@ impl Person {
             return Ok(());
         };
         let login = self.world.names[other as usize].1.clone();
+        let address = format!("{login}@{}", notekpr_core::protocol::DEV_EMAIL_DOMAIN);
         let t0 = Instant::now();
-        let res =
-            note_shares::share_note(&self.session, &v, &title, &login, Role::Viewer, false).await;
+        // An invitation: they accept it when they next look.
+        let res = note_shares::share_or_invite(
+            &self.session,
+            &v,
+            &title,
+            &address,
+            Role::Viewer,
+            false,
+            true,
+        )
+        .await;
         self.world
             .bus
             .action(self.id, Action::ShareNote, None, 0, t0.elapsed(), ok(&res));

@@ -148,14 +148,22 @@ download it. More in [Writing notes](writing.md#pictures-video-sound-and-files).
 
 ## Working together
 
-* **Share a vault**: *Share vault* at the bottom of the sidebar. Find the
-  person by name and choose what they may do: *Can view* (read only),
-  *Can edit*, *Admin* or *Owner*. [Who can do what](roles.md) has the
-  details.
+* **Share a vault**: *Share vault* at the bottom of the sidebar. Type the
+  person's e-mail address — or, for someone you already share with, their
+  name — choose what they may do (*Can view*: read only, *Can edit* or
+  *Admin*) and press *Invite*. They get an invitation to accept; once they
+  do, they're in — at once if you have notekpr open, otherwise the next time
+  you do. Until then they're listed under *Invited*, where the × takes the
+  invitation back. To make someone an *Owner*, change their role once
+  they're in. [Who can do what](roles.md) has the details.
 
-  ![Sharing a vault: who has access, and what each may do](assets/guide/gs-share.webp)
+  ![Sharing a vault: who has access, who is invited, and what each may do](assets/guide/gs-share.webp)
+* **When someone invites you**, a bar at the top of the page says who, and
+  whether it's a vault or a note (its name shows once you're in): *Accept*
+  or *Decline*. Declining doesn't tell them.
 * **Share one note** with someone outside the vault: the share button at
-  the top of the note. They see only that note, not the rest of the vault.
+  the top of the note, then invite them the same way. They see only that
+  note, not the rest of the vault.
 * **Write at the same time**: you see each other's cursors with their
   names, and who else is on the note.
 * **Comments**: select some text and press `Alt+M` (or the comment button

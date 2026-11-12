@@ -38,7 +38,7 @@ async fn day_words_become_dates_when_written() {
 
     // Notes shared with you too.
     let v = h.resolve("Home").await.unwrap();
-    note_shares::share_note(&alice, &v, "Plan", "bob", Role::Editor, false)
+    share_note(&alice, &v, "Plan", "bob", Role::Editor, false)
         .await
         .unwrap();
     note_shares::write_shared(&bob, "Plan", "Bob: @today", true)

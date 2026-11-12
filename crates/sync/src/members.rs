@@ -934,3 +934,187 @@ mod tests {
         );
     }
 }
+
+// ---------------------------------------------------------------- invitations
+
+/// What an owner's app sends to add whoever accepted an invitation
+/// (docs/protocol.md §5.6): `POST /vaults/{v}/members`, or for a note
+/// `POST /vaults/{v}/objects/{o}/shares`.
+#[derive(Clone, Debug)]
+pub enum Completion {
+    Member(notekpr_core::protocol::AddMemberRequest),
+    Share {
+        object_id: String,
+        req: notekpr_core::protocol::AddObjectShareRequest,
+        /// Once they're in, the note's comments so far go to everyone it
+        /// is shared with (`VaultReplica::carry_comments`): the inviter
+        /// said so.
+        with_comments: bool,
+    },
+}
+
+/// Why an accepted invitation isn't completed by this app now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotCompleted {
+    /// The invitation (or who accepted it) doesn't pass
+    /// [`notekpr_core::invitation::check_accepted`].
+    Refused(notekpr_core::invitation::NotAdded),
+    /// The vault has no verified log yet (its owners' apps start it).
+    NoLog,
+    /// The note's keys aren't here (not shared yet, or not loaded).
+    NoNoteKey,
+    /// Wrapping the key failed.
+    Key(String),
+}
+
+impl std::fmt::Display for NotCompleted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotCompleted::Refused(why) => write!(f, "{why}"),
+            NotCompleted::NoLog => f.write_str("the vault's membership log isn't verified yet"),
+            NotCompleted::NoNoteKey => f.write_str("the note's key isn't loaded"),
+            NotCompleted::Key(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// The request that adds whoever accepted `inv`, signed by `signer` (an
+/// owner) on `log` as verified just now, with the vault's keys (`vault`)
+/// or, for a note, the note's (`note`). `pinned`: the fingerprint this app
+/// pinned for whoever accepted, if any. Also gives who accepted and the key
+/// wrapped to, for the app to pin.
+#[allow(clippy::too_many_arguments)]
+pub fn completion(
+    log: &MemberLog,
+    account: &AccountSecret,
+    signer: &str,
+    vault: &VaultKeyring,
+    note: Option<&VaultKeyring>,
+    inv: &notekpr_core::protocol::SentInvitation,
+    pinned: Option<&str>,
+    now: i64,
+) -> Result<
+    (
+        Completion,
+        notekpr_core::protocol::PublicUser,
+        AccountPublic,
+    ),
+    NotCompleted,
+> {
+    use notekpr_core::protocol::{AddMemberRequest, AddObjectShareRequest};
+    let state = log.state.as_ref().ok_or(NotCompleted::NoLog)?;
+    let (user, key) = notekpr_core::invitation::check_accepted(state, inv, now, pinned)
+        .map_err(NotCompleted::Refused)?;
+    let user = user.clone();
+    let entry = |body| {
+        log.next(account, signer, &inv.vault_id, body, now)
+            .ok_or(NotCompleted::NoLog)
+    };
+    let done = match &inv.object_id {
+        None => {
+            let env = notekpr_core::engine::share_envelope(vault, &user)
+                .map_err(|e| NotCompleted::Key(e.to_string()))?;
+            Completion::Member(AddMemberRequest {
+                user_id: user.id.clone(),
+                role: inv.role.clone(),
+                key_envelope: Some(env),
+                log_entry: Some(entry(LogBody::Add {
+                    member: LogMember::new(&user.id, inv.role.clone(), &key),
+                })?),
+                invitation_id: Some(inv.id.clone()),
+            })
+        }
+        Some(o) => {
+            let ring = note.ok_or(NotCompleted::NoNoteKey)?;
+            let mut env = [notekpr_core::engine::object_share_envelope(ring, o, &user)
+                .map_err(|e| NotCompleted::Key(e.to_string()))?];
+            sign_grants(account, &inv.vault_id, o, ring, &mut env);
+            let [env] = env;
+            Completion::Share {
+                object_id: o.clone(),
+                req: AddObjectShareRequest {
+                    user_id: user.id.clone(),
+                    role: inv.role.clone(),
+                    envelope: env,
+                    log_entry: Some(entry(share(o, &user.id, inv.role.clone(), &key))?),
+                    invitation_id: Some(inv.id.clone()),
+                },
+                with_comments: inv.with_comments,
+            }
+        }
+    };
+    Ok((done, user, key))
+}
+
+/// A new invitation to vault `vault_id` (or its note `object_id`, with its
+/// comments so far if `with_comments`) for `to`, signed by `inviter` (`me`)
+/// at `now` — the request, its id chosen here. An address is kept as
+/// [`notekpr_core::invitation::normalize_email`] makes it; `None` if `to`
+/// names nobody valid.
+#[allow(clippy::too_many_arguments)]
+pub fn invitation(
+    inviter: &AccountSecret,
+    me: &str,
+    vault_id: &str,
+    object_id: Option<&str>,
+    to: notekpr_core::invitation::Invitee,
+    role: Role,
+    with_comments: bool,
+    now: i64,
+) -> Option<notekpr_core::protocol::CreateInvitationRequest> {
+    let with_comments = with_comments && object_id.is_some();
+    use notekpr_core::invitation::{self, Invitee, Terms};
+    let id = notekpr_core::random_id();
+    let (user_id, email) = match to {
+        Invitee::User(u) => (Some(u.to_string()), None),
+        Invitee::Email(a) => (None, Some(invitation::normalize_email(a)?)),
+    };
+    let invitee = match (&user_id, &email) {
+        (Some(u), _) => Invitee::User(u),
+        (_, Some(e)) => Invitee::Email(e),
+        _ => return None,
+    };
+    let signature = invitation::sign(
+        inviter,
+        &Terms {
+            id: &id,
+            vault_id,
+            object_id,
+            invited_by: me,
+            invitee,
+            role: &role,
+            created_at: now,
+            with_comments,
+        },
+    );
+    Some(notekpr_core::protocol::CreateInvitationRequest {
+        id,
+        object_id: object_id.map(Into::into),
+        user_id,
+        email,
+        role,
+        created_at: now,
+        signature,
+        with_comments,
+    })
+}
+
+/// The signature accepting `inv` as `me`, if it is really from whom it
+/// says (its inviter's self-signed key, and the one `pinned` for them, if
+/// any): `None` otherwise, and the app doesn't offer to accept it.
+pub fn acceptance(
+    account: &AccountSecret,
+    me: &str,
+    inv: &notekpr_core::protocol::ReceivedInvitation,
+    pinned: Option<&str>,
+) -> Option<Vec<u8>> {
+    let key = inv.verified_inviter()?;
+    if pinned.is_some_and(|p| p != key.fingerprint()) {
+        return None;
+    }
+    Some(notekpr_core::invitation::sign_acceptance(
+        account,
+        &inv.terms()?,
+        me,
+    ))
+}

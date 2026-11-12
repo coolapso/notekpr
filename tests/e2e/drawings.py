@@ -10,7 +10,7 @@ apps' drawing files (Obsidian's, Excalidraw's) shown as they are.
 import argparse, base64, json, math, os, subprocess, sys, tempfile, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from suite import Env, uniq, check, share, severe_logs, png_file, CAPTURE_DOWNLOADS  # noqa: E402
+from suite import Env, uniq, check, share, cli_accepts, severe_logs, png_file, CAPTURE_DOWNLOADS  # noqa: E402
 from wd import Browser, KEYS, req, base_url  # noqa: E402
 
 CANVAS = ".drawing-canvas"
@@ -113,7 +113,7 @@ def main():
         a.type(".modal input", "Art")
         a.click(".modal button[type=submit]")
         a.find_text(".page-head h1", "Art", 15)
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=cli_accepts(cli))
         a.click(".sb-actions button[aria-label='New drawing']")
         a.find(CANVAS, 10)
         time.sleep(1)
@@ -359,7 +359,7 @@ def main():
         try:
             cn = uniq("cleo")
             signup(b, cn)
-            share(a, ".sb-bottom button:nth-child(2)", cn)
+            share(a, ".sb-bottom button:nth-child(2)", cn, by=b)
             b.click(".vault-btn")
             b.click_el(b.find_text(".vault-menu button", "Art", 20))
             b.click_el(b.find_text(".tree-item", "Untitled drawing", 20))

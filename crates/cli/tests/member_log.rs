@@ -104,9 +104,7 @@ async fn a_vault_key_the_owner_never_made_is_refused() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Family").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     let info = bob.api.vault(&vid).await.unwrap();
     bob.open_vault(&info).await.unwrap();
 
@@ -156,9 +154,7 @@ async fn an_open_vault_never_takes_a_key_the_owner_never_made() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Family").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     let bh = hub(&bob).await;
     let bv = bh.resolve("Family").await.unwrap();
     assert_eq!(bv.lock().await.replica.keyring.current_epoch(), Some(1));
@@ -217,9 +213,7 @@ async fn a_new_device_knows_the_vault_had_a_log() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Family").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     // Bob's app opens it: where its log stands is now in his preferences.
     let info = bob.api.vault(&vid).await.unwrap();
     bob.open_vault(&info).await.unwrap();
@@ -304,7 +298,7 @@ async fn a_note_recipient_the_owner_never_added_gets_no_key() {
         .await
         .unwrap();
     ah.sync_vault(&vid).await.unwrap();
-    note_shares::share_note(&alice, &v, "Plan", "bob", Role::Viewer, false)
+    share_note(&alice, &v, "Plan", "bob", Role::Viewer, false)
         .await
         .unwrap();
     let oid = v.lock().await.find_note("Plan").unwrap().1.id;
@@ -354,10 +348,8 @@ async fn a_rolled_back_membership_log_is_noticed() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Family").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
-    manage::share(&alice, &v, "carol", Role::Viewer, false)
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
+    share(&alice, &v, "carol", Role::Viewer, false)
         .await
         .unwrap();
     let info = bob.api.vault(&vid).await.unwrap();
@@ -390,7 +382,7 @@ async fn an_older_vault_gets_a_signed_checkpoint() {
     req.signed_from_start = None;
     let info: VaultInfo = alice.api.post("/vaults", &req).await.unwrap();
     let vid = info.id.clone();
-    let bob_user = alice.api.user(&bob.user_id).await.unwrap();
+    let (invited, bob_user) = invited_and_accepted(&alice, &vid, None, &bob, Role::Editor).await;
     let _: MemberInfo = alice
         .api
         .post(
@@ -400,6 +392,7 @@ async fn an_older_vault_gets_a_signed_checkpoint() {
                 role: Role::Editor,
                 key_envelope: Some(engine::share_envelope(&ring, &bob_user).unwrap()),
                 log_entry: None,
+                invitation_id: Some(invited),
             },
         )
         .await
@@ -429,7 +422,8 @@ async fn an_older_vault_gets_a_signed_checkpoint() {
         .put::<_, ()>(&format!("/vaults/{vid}/objects/n1/key"), &key)
         .await
         .unwrap();
-    let carol_user = alice.api.user(&carol.user_id).await.unwrap();
+    let (invited, carol_user) =
+        invited_and_accepted(&alice, &vid, Some("n1"), &carol, Role::Editor).await;
     let _: ObjectShareInfo = alice
         .api
         .post(
@@ -439,6 +433,7 @@ async fn an_older_vault_gets_a_signed_checkpoint() {
                 role: Role::Editor,
                 envelope: engine::object_share_envelope(&doc, "n1", &carol_user).unwrap(),
                 log_entry: None,
+                invitation_id: Some(invited),
             },
         )
         .await
@@ -540,12 +535,8 @@ async fn content_a_server_slips_in_is_refused() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Family").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
-    manage::share(&alice, &v, "vic", Role::Viewer, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
+    share(&alice, &v, "vic", Role::Viewer, false).await.unwrap();
     ops::put_document(&ah, "Family", "Plan.md", "real\n", None)
         .await
         .unwrap();
@@ -618,15 +609,13 @@ async fn a_note_key_counts_only_from_an_owner_the_log_shows() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Family").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Owner, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Owner, false).await.unwrap();
     ops::put_document(&ah, "Family", "Trip.md", "coast\n", None)
         .await
         .unwrap();
     ah.sync_vault(&vid).await.unwrap();
     for who in ["rita", "sam"] {
-        note_shares::share_note(&alice, &v, "Trip", who, Role::Editor, false)
+        share_note(&alice, &v, "Trip", who, Role::Editor, false)
             .await
             .unwrap();
     }
@@ -719,14 +708,12 @@ async fn a_note_key_from_an_owner_since_demoted_is_signed_again() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Family").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Owner, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Owner, false).await.unwrap();
     ops::put_document(&ah, "Family", "Trip.md", "coast\n", None)
         .await
         .unwrap();
     ah.sync_vault(&vid).await.unwrap();
-    note_shares::share_note(&alice, &v, "Trip", "rita", Role::Editor, false)
+    share_note(&alice, &v, "Trip", "rita", Role::Editor, false)
         .await
         .unwrap();
     let (_, text) = note_shares::read_shared(&rita, "Trip").await.unwrap();
@@ -753,9 +740,7 @@ async fn a_note_key_from_an_owner_since_demoted_is_signed_again() {
     alice.refresh_note_keys(&v, &oid).await.unwrap();
 
     // Bob is an editor now: Alice's app signs Rita's key again.
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     assert_eq!(signer().await, Some(alice.user_id.clone()));
     note_shares::write_shared(&rita, &oid, "hills\n", true)
         .await
@@ -777,7 +762,7 @@ async fn a_note_key_the_owner_never_gave_is_refused() {
         .await
         .unwrap();
     ah.sync_vault(&vid).await.unwrap();
-    note_shares::share_note(&alice, &v, "Trip", "rita", Role::Editor, false)
+    share_note(&alice, &v, "Trip", "rita", Role::Editor, false)
         .await
         .unwrap();
     let (_, text) = note_shares::read_shared(&rita, "Trip").await.unwrap();

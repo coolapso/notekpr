@@ -218,11 +218,13 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Share a single note (not its vault) with someone.
+    /// Share a single note (not its vault) with someone: one of your agents
+    /// at once, anyone else by invitation — they get it once they accept.
     ShareNote {
         vault: String,
         path: String,
-        /// User id, exact e-mail or display name.
+        /// An e-mail address, or the exact name, e-mail or id of someone you
+        /// share with already (or one of your agents).
         user: String,
         #[arg(long, value_enum, default_value_t = ShareRole::Editor)]
         role: ShareRole,
@@ -249,6 +251,11 @@ pub enum Command {
     /// Notes other people shared with you individually.
     #[command(subcommand)]
     Shared(SharedCmd),
+    /// Invitations: to share with you (accept or decline them), and those
+    /// sent for the vaults you own (cancel them). Listing them also adds
+    /// whoever accepted one, as the sync daemon does.
+    #[command(subcommand)]
+    Invitations(InvitationsCmd),
     /// Keep the local replicas in sync; with --dir also mirror decrypted Markdown files.
     Sync(SyncArgs),
     /// Agent identities (setup on the agent's machine, or management by the owner).
@@ -526,6 +533,25 @@ pub enum RecoveryCmd {
     },
 }
 
+/// ID: an invitation's id, or enough of its start to tell it apart
+/// (`invitations list` shows them).
+#[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
+pub enum InvitationsCmd {
+    /// Invitations to you, and to the vaults you own (and their notes);
+    /// adds whoever accepted one.
+    List,
+    /// Accept an invitation to you: you're in once an owner's app adds you.
+    Accept { id: String },
+    /// Decline an invitation to you (or take back accepting it). Whoever
+    /// sent it isn't told.
+    Decline { id: String },
+    /// Cancel an invitation to a vault you own (or to one of its notes).
+    Cancel { id: String },
+    /// Someone accepted with a key other than the one you pinned for them:
+    /// once you compared its fingerprint with them, trust it and add them.
+    Verify { id: String },
+}
+
 #[derive(Subcommand, Clone, Debug, Serialize, Deserialize)]
 pub enum SharedCmd {
     /// List notes shared with you.
@@ -629,11 +655,13 @@ pub enum VaultCmd {
     },
     /// List members with their key fingerprints.
     Members { vault: String },
-    /// Share with a person or one of your agents (verifies and pins their key),
-    /// or change a member's role (owners too, while one stays).
+    /// Share with someone — one of your agents joins at once (its key
+    /// verified and pinned), anyone else is invited and gets access once
+    /// they accept — or change a member's role (owners too, while one stays).
     Share {
         vault: String,
-        /// User id, exact e-mail or display name.
+        /// An e-mail address, or the exact name, e-mail or id of someone you
+        /// share with already (or one of your agents).
         user: String,
         #[arg(long, value_enum, default_value_t = MemberRole::Editor)]
         role: MemberRole,

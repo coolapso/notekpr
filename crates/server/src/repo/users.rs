@@ -382,23 +382,27 @@ pub async fn search(
     .await?)
 }
 
-/// Like [`search`], but people only by exact e-mail.
-pub async fn search_exact_email(
+/// Like [`search`], but only people the caller already shares a vault or
+/// a note with (as [`share_a_vault`], [`share_a_note`]).
+pub async fn search_known(
     db: impl SqliteExecutor<'_>,
     caller: &str,
     term: &str,
     like: &str,
 ) -> AppResult<Vec<String>> {
     Ok(sqlx::query_scalar(
-        "SELECT id FROM users WHERE id != ? AND disabled = 0 AND (
-            (kind = 'human' AND lower(email) = ?)
-            OR (kind = 'agent' AND owner_id = ? AND lower(display_name) LIKE ? ESCAPE '\\'))
-         LIMIT 10",
+        "SELECT u.id FROM users u WHERE u.id != ?1 AND u.disabled = 0 AND (
+            (u.kind = 'human' AND (lower(u.display_name) LIKE ?2 ESCAPE '\\' OR lower(u.email) = ?3)
+             AND (EXISTS (SELECT 1 FROM vault_members a JOIN vault_members b ON a.vault_id = b.vault_id
+                          WHERE a.user_id = ?1 AND b.user_id = u.id)
+                  OR EXISTS (SELECT 1 FROM object_shares s JOIN vault_members m ON m.vault_id = s.vault_id
+                          WHERE (s.user_id = u.id AND m.user_id = ?1) OR (s.user_id = ?1 AND m.user_id = u.id))))
+            OR (u.kind = 'agent' AND u.owner_id = ?1 AND lower(u.display_name) LIKE ?2 ESCAPE '\\'))
+         ORDER BY u.kind, u.display_name LIMIT 10",
     )
     .bind(caller)
-    .bind(term)
-    .bind(caller)
     .bind(like)
+    .bind(term)
     .fetch_all(db)
     .await?)
 }

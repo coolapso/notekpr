@@ -24,7 +24,7 @@ async fn single_note_sharing_end_to_end() {
     let v = ah.resolve("Private").await.unwrap();
     let vid = v.lock().await.id().to_string();
 
-    let out = note_shares::share_note(&alice, &v, "Trip", "bob", Role::Editor, false)
+    let out = share_note(&alice, &v, "Trip", "bob", Role::Editor, false)
         .await
         .unwrap();
     assert_eq!(out.user.display_name.to_lowercase(), "bob");
@@ -103,22 +103,107 @@ async fn single_note_sharing_end_to_end() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sharing_needs_an_exact_name_not_a_prefix() {
+    use notekpr_cli::manage::Shared;
     let srv = start().await;
+    // Where everyone is found by name (a family's server, say).
+    srv.set(notekpr_core::protocol::InstanceSettingsUpdate {
+        user_directory: Some(notekpr_core::protocol::UserDirectory::Search),
+        ..Default::default()
+    })
+    .await;
     let alice = login(&srv, "alice").await;
     let _bobby = login(&srv, "bobby").await;
     manage::create_vault(&alice, "Plans").await.unwrap();
     let v = hub(&alice).await.resolve("Plans").await.unwrap();
     // Only "bobby" exists: "bob" must not quietly pick them.
-    let err = manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .err()
-        .expect("a prefix match is refused");
+    let Err(err) = manage::share_or_invite(&alice, &v, "bob", Role::Editor, false).await else {
+        panic!("a prefix match is refused")
+    };
     assert!(format!("{err:#}").contains("did you mean"), "{err:#}");
-    let _bob = login(&srv, "bob").await;
-    let shared = manage::share(&alice, &v, "bob", Role::Editor, false)
+    let bob = login(&srv, "bob").await;
+    let Shared::Invited(who) = manage::share_or_invite(&alice, &v, "bob", Role::Editor, false)
+        .await
+        .unwrap()
+    else {
+        panic!("invited")
+    };
+    assert!(who.eq_ignore_ascii_case("bob"));
+    // Invited by account: Bob, not Bobby, has it.
+    let got = notekpr_cli::invitations::list(&bob).await.unwrap();
+    assert_eq!(got.received.len(), 1);
+    assert_eq!(
+        got.received[0].user_id.as_deref(),
+        Some(bob.user_id.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn strangers_are_invited_by_address_and_join_once_they_accept() {
+    use notekpr_cli::{invitations, manage::Shared};
+    let srv = start().await;
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&alice, "Plans").await.unwrap();
+    let ah = hub(&alice).await;
+    let v = ah.resolve("Plans").await.unwrap();
+    let vid = v.lock().await.id().to_string();
+    // Nobody Alice shares with is called Bob: by name, nothing; by
+    // address, an invitation (whether or not it has an account).
+    let Err(err) = manage::share_or_invite(&alice, &v, "bob", Role::Editor, false).await else {
+        panic!("not found by name")
+    };
+    assert!(format!("{err:#}").contains("e-mail address"), "{err:#}");
+    for who in ["Bob@Example.com", "nobody@example.com"] {
+        assert!(matches!(
+            manage::share_or_invite(&alice, &v, who, Role::Editor, false)
+                .await
+                .unwrap(),
+            Shared::Invited(_)
+        ));
+    }
+    // Owners are made from members.
+    assert!(
+        manage::share_or_invite(&alice, &v, "carol@example.com", Role::Owner, false)
+            .await
+            .is_err()
+    );
+    let sent = invitations::list(&alice).await.unwrap().sent;
+    assert_eq!(sent.len(), 2);
+    assert!(
+        sent.iter()
+            .all(|i| i.accepted.is_none() && i.user.is_none())
+    );
+
+    // Bob accepts; Alice's app adds him with the vault key, signed in its
+    // log; the invitation ends.
+    let got = invitations::list(&bob).await.unwrap().received;
+    assert_eq!(got.len(), 1);
+    invitations::accept(&bob, invitations::short(&got[0].id))
         .await
         .unwrap();
-    assert!(shared.user.display_name.eq_ignore_ascii_case("bob"));
+    let list = invitations::list(&alice).await.unwrap();
+    let done = invitations::complete(&alice, std::slice::from_ref(&v), &list)
+        .await
+        .unwrap();
+    // Who accepted the address is said (it is the server's word).
+    assert_eq!(
+        done.added,
+        [format!("Bob ({}) for bob@example.com", bob.user_id)]
+    );
+    let members = manage::members(&alice, &v).await.unwrap();
+    assert!(
+        members
+            .iter()
+            .any(|m| m.member.user.id == bob.user_id && m.member.has_current_key && m.vouched)
+    );
+    assert!(invitations::list(&bob).await.unwrap().received.is_empty());
+    let info = bob.api.vault(&vid).await.unwrap();
+    bob.open_vault(&info).await.unwrap();
+    // The other one is cancelled; declining tells Alice nothing.
+    let other = invitations::list(&alice).await.unwrap().sent;
+    assert_eq!(other.len(), 1);
+    invitations::cancel(&alice, &other[0].id).await.unwrap();
+    assert!(invitations::list(&alice).await.unwrap().sent.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -136,7 +221,7 @@ async fn a_note_key_is_never_renewed_for_a_changed_account_key() {
     let v = ah.resolve("Private").await.unwrap();
     let vid = v.lock().await.id().to_string();
     for who in ["bob", "carol"] {
-        note_shares::share_note(&alice, &v, "Trip", who, Role::Editor, false)
+        share_note(&alice, &v, "Trip", who, Role::Editor, false)
             .await
             .unwrap();
     }
@@ -160,7 +245,7 @@ async fn a_note_key_is_never_renewed_for_a_changed_account_key() {
     };
     assert!(!carol_has_key().await, "left out of the new key");
     // Once verified, sharing again gives it back.
-    note_shares::share_note(&alice, &v, "Trip", "carol", Role::Editor, true)
+    share_note(&alice, &v, "Trip", "carol", Role::Editor, true)
         .await
         .unwrap();
     assert!(carol_has_key().await);
@@ -177,9 +262,7 @@ async fn a_vault_key_rotation_leaves_out_a_member_whose_key_changed() {
     let v = hub(&alice).await.resolve("Home").await.unwrap();
     let vid = v.lock().await.id().to_string();
     for who in ["bob", "carol"] {
-        manage::share(&alice, &v, who, Role::Editor, false)
-            .await
-            .unwrap();
+        share(&alice, &v, who, Role::Editor, false).await.unwrap();
     }
     ProfileStore::new(&srv.dirs("alice"), "alice")
         .unwrap()
@@ -197,7 +280,7 @@ async fn a_vault_key_rotation_leaves_out_a_member_whose_key_changed() {
     let members = alice.api.members(&vid).await.unwrap();
     assert!(has_key(&members, &alice.user_id) && !has_key(&members, &carol.user_id));
     // Once verified, sharing again gives it back.
-    manage::share(&alice, &v, "carol", Role::Editor, true)
+    share(&alice, &v, "carol", Role::Editor, true)
         .await
         .unwrap();
     let members = alice.api.members(&vid).await.unwrap();
@@ -215,7 +298,7 @@ async fn icons_and_new_names_reach_the_people_a_note_is_shared_with() {
         .await
         .unwrap();
     let v = ah.resolve("Home").await.unwrap();
-    note_shares::share_note(&alice, &v, "Garden/Tomatoes", "bob", Role::Viewer, false)
+    share_note(&alice, &v, "Garden/Tomatoes", "bob", Role::Viewer, false)
         .await
         .unwrap();
 

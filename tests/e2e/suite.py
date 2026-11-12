@@ -124,15 +124,51 @@ const s = r.querySelector('.member-role'); s.value = arguments[1]; s.dispatchEve
 """
 
 
-def share(owner, vault_btn_css, user, role="editor"):
+def address(user):
+    """A development login's e-mail address (what invites them)."""
+    return f"{user}@example.com"
+
+
+def accept_invitation(b):
+    """In browser `b`: accept the invitation its banner shows."""
+    b.find(".invitation-banner .accept-invitation", 20)
+    b.click(".invitation-banner .accept-invitation")
+
+
+def cli_accepts(cli):
+    """What accepts invitations for someone on the command line: `cli` runs
+    the CLI as them."""
+    def accept():
+        r = cli("--json", "invitations", "list")
+        for i in json.loads(r.stdout or "{}").get("received", []):
+            if not i.get("accepted"):
+                cli("invitations", "accept", i["id"])
+    return accept
+
+
+def share(owner, vault_btn_css, user, role="editor", by=None):
+    """Invite `user` by their address from the vault's sharing dialog. `by`
+    accepts it — their browser, or a function (`cli_accepts`) — and the
+    owner's app adds them; without it, the invitation waits."""
     owner.click(vault_btn_css)
-    owner.type(".share-add input", user)
-    owner.find(".found .person", 10)
+    invite(owner, user, role, by)
+    owner.chord(KEYS["escape"])
+
+
+def invite(owner, user, role="editor", by=None):
+    """`share`, in a sharing dialog open already (the vault's or a note's)."""
+    owner.js("const i = document.querySelector('.share-add input'); i.value = ''; i.dispatchEvent(new Event('input', {bubbles: true}))")
+    owner.type(".share-add input", address(user))
+    owner.find(".invite-address", 10)
     if role != "editor":
         owner.js("const s=document.querySelector('.share-add select'); s.value=arguments[0]; s.dispatchEvent(new Event('change'))", role)
-    owner.click(".found .person .btn.primary")
-    owner.find_text(".people .person", user.capitalize(), 10)
-    owner.chord(KEYS["escape"])
+    owner.click(".invite-address .btn.primary")
+    owner.wait("return Array.from(document.querySelectorAll('.invited .person .grow > div:first-child')).some(d => d.textContent === %s)"
+               % json.dumps(address(user)), 10, f"{user} is invited")
+    if by is not None:
+        by() if callable(by) else accept_invitation(by)
+        owner.find_text(".people .person", user.capitalize(), 30)
+        owner.wait("return !document.querySelector('.invited .person')", 10, "the invitation ends once they're in")
 
 
 # ---------------------------------------------------------------- tests
@@ -204,7 +240,7 @@ def test_collab(env):
         check(a.js("return document.querySelector('.note-title').value") == "Groceries", "new note is titled from the title field")
         check(editor_text(a) == "- milk\n- eggs\n\nThanks!", "list continuation and list exit work")
         url = a.js("return location.pathname")
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
         b.click(".vault-btn")
         b.find_text(".vault-menu button", "Family", 15)
         check(True, "a newly shared vault appears for the recipient without reloading")
@@ -392,7 +428,7 @@ def test_features(env):
         time.sleep(0.6)
         check(a.js("return document.querySelectorAll('.result').length") == 1, "full-text search filters by tag")
         a.chord(KEYS["escape"])
-        share(a, ".sb-bottom button:nth-child(2)", vn, role="viewer")
+        share(a, ".sb-bottom button:nth-child(2)", vn, role="viewer", by=v)
         time.sleep(2)
         v.click(".vault-btn")
         v.find(".vault-menu .badge[title*='read only']", 15)
@@ -1283,11 +1319,17 @@ def test_note_sharing(env):
         a.click_el(a.find_text(".tree-row .menu button", "Share", 5))
         a.find_text(".modal h2", "Trip", 10)
         check(True, "the header, the note's More menu and its menu in the tree all open sharing")
-        a.type(".share-add input", bn)
-        a.find(".found .person", 10)
-        a.click(".found .person .btn.primary")
-        a.find_text(".people .person", bn.capitalize(), 15)
-        check(True, "owner shares a single note")
+        a.type(".share-add input", address(bn))
+        a.find(".invite-address", 10)
+        a.click(".invite-address .btn.primary")
+        a.find_text(".invited .person", address(bn), 10)
+        b.find(".invitation-banner", 20)
+        banner = b.js("return document.querySelector('.invitation-banner').textContent")
+        check(an.capitalize() in banner and "a note" in banner and "Trip" not in banner,
+              "the recipient is invited: who by, and that it's a note — not its name")
+        accept_invitation(b)
+        a.find_text(".people .person", bn.capitalize(), 30)
+        check(True, "owner shares a single note: once Pete accepted, Olga's app adds him")
         a.shot("note-share-dialog")
         a.chord(KEYS["escape"])
         check(a.js("return document.querySelectorAll('.tree-row .shared-mark').length") == 1, "the tree marks the shared note")
@@ -1942,7 +1984,7 @@ def test_local_copy(env):
         time.sleep(0.8)
         url = a.js("return location.pathname")
         vault = url.split("/")[2]
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
         b.go(env.url.rstrip("/") + url)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('tent and stove')", 20, "dan sees the note")
         time.sleep(3)
@@ -2331,7 +2373,7 @@ def test_vault_icons(env):
         an, bn = uniq("ivy"), uniq("ike")
         signup(a, an)
         signup(b, bn)
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
         b.click(".vault-btn")
         b.click_el(b.find_text(".vault-menu button", "All vaults", 10))
         b.wait("return !!" + shared_card, 15, "the shared vault's card")
@@ -2392,7 +2434,7 @@ def test_entry_icons(env):
         an, bn = uniq("ora"), uniq("oto")
         signup(a, an)
         signup(b, bn)
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
         new_note(a, "Trip", "Packing list")
         url = a.js("return location.pathname")
         # Before the title, a button to add one; the title stays where it is.
@@ -2547,7 +2589,7 @@ def test_tree_order(env):
         an, bn = uniq("nadia"), uniq("nils")
         signup(a, an)
         signup(b, bn)
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
         for t in ["Bravo", "Alpha", "Charlie"]:
             new_note(a, t, t.lower())
         url = a.js("return location.pathname")
@@ -2776,6 +2818,78 @@ def test_new_vault_signed_from_its_start(env):
         b.close()
 
 
+def test_invitations(env):
+    """Sharing is by invitation: by address, whether or not it has an
+    account; declining tells the owner nothing; once accepted, the owner's
+    app adds them — at once, or when it next opens."""
+    a, b = Browser(), Browser()
+    try:
+        an, bn = uniq("kim"), uniq("lou")
+        signup(a, an)
+        signup(b, bn)
+        a.click(".vault-btn")
+        a.click_el(a.find_text(".vault-menu button", "New vault"))
+        a.type(".modal input", "Club")
+        a.click(".modal button[type=submit]")
+        a.find_text(".page-head h1", "Club", 15)
+        a.click(".sb-bottom button:nth-child(2)")
+        # Lou isn't someone Kim shares with: not suggested by name.
+        a.type(".share-add input", bn[:3])
+        time.sleep(1)
+        check(a.js("return document.querySelectorAll('.found .person:not(.invite-address)').length") == 0,
+              "people one doesn't share with aren't suggested")
+        invite(a, bn + "x")
+        invite(a, bn)
+        rows = a.js("return Array.from(document.querySelectorAll('.invited .person')).map(r => r.textContent)")
+        check(len(rows) == 2 and all("waiting for an answer" in r for r in rows),
+              "an address with an account and one without look the same")
+        a.shot("invited")
+        # Lou declines: the banner goes; Kim's dialog doesn't change.
+        b.find(".invitation-banner .decline-invitation", 20)
+        b.shot("invitation-banner")
+        b.click(".invitation-banner .decline-invitation")
+        b.wait("return !document.querySelector('.invitation-banner')", 10, "the declined invitation goes")
+        time.sleep(1.5)
+        check(a.js("return Array.from(document.querySelectorAll('.invited .person')).filter(r => r.textContent.includes('waiting')).length") == 2,
+              "declining tells the owner nothing")
+        # Kim cancels it and invites again; Lou accepts while Kim is away.
+        a.js("Array.from(document.querySelectorAll('.invited .person')).find(r => r.textContent.includes(arguments[0])).querySelector('.cancel-invitation').click()",
+             address(bn))
+        a.wait("return Array.from(document.querySelectorAll('.invited .person')).length === 1", 10, "the cancelled one goes")
+        invite(a, bn)
+        url = a.js("return location.href")
+        a.go("about:blank")
+        accept_invitation(b)
+        b.find_text(".invitation-banner.accepted", "as soon as their app adds you", 15)
+        check(True, "accepted while the owner is away: it waits for their app")
+        a.go(url)
+        b.wait("return !document.querySelector('.invitation-banner')", 30, "kim's app adds lou when it opens")
+        b.click(".vault-btn")
+        b.find_text(".vault-menu button", "Club", 15)
+        b.chord(KEYS["escape"])
+        check(True, "once added, the vault is there for them")
+        # Now they share a vault: Lou is suggested by name.
+        a.find(".ed .ln, .page-head", 20)
+        a.click(".sb-bottom button:nth-child(2)")
+        a.find_text(".people .person", bn.capitalize(), 15)
+        a.chord(KEYS["escape"])
+        a.click(".vault-btn")
+        a.click_el(a.find_text(".vault-menu button", "New vault"))
+        a.type(".modal input", "Book club")
+        a.click(".modal button[type=submit]")
+        a.find_text(".page-head h1", "Book club", 15)
+        a.click(".sb-bottom button:nth-child(2)")
+        a.type(".share-add input", bn[:3])
+        a.find_text(".found .person", bn.capitalize(), 10)
+        check("Invite" in a.js("return document.querySelector('.found .person .btn.primary').textContent"),
+              "someone one shares with is suggested, and invited too")
+        a.chord(KEYS["escape"])
+        check(not severe_logs(a, b), "no browser errors")
+    finally:
+        a.close()
+        b.close()
+
+
 def test_note_recipient_never_added(env):
     """The server shares a note with someone on its own and asks the owner's
     app to renew the note's key: the new key goes only to whom the vault's
@@ -2826,10 +2940,7 @@ def test_note_key_without_owner_proof(env):
         path = a.js("return location.pathname")
         vid, nid = path.split("/")[2], path.split("/")[3]
         a.click(".note-head button[title='Share this note']")
-        a.type(".share-add input", bn)
-        a.find(".found .person", 10)
-        a.click(".found .person .btn.primary")
-        a.find_text(".people .person", bn.capitalize(), 15)
+        invite(a, bn, by=b)
         a.chord(KEYS["escape"])
         b.click_el(b.find_text(".sb-link", "Trip", 20))
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('Pack sunscreen')",
@@ -2895,7 +3006,7 @@ def test_comments(env):
         signup(b, bn)
         new_note(a, "Groceries", "Buy milk and bread today")
         url = a.js("return location.pathname")
-        share(a, ".sb-bottom button:nth-child(2)", bn, role="viewer")
+        share(a, ".sb-bottom button:nth-child(2)", bn, role="viewer", by=b)
 
         # The owner comments on some of the text: highlighted, thread open.
         comment_on(a, "milk", "Oat milk?")
@@ -2993,7 +3104,7 @@ def test_mentions(env):
         signup(b, bn)
         new_note(a, "Fence", "Paint the fence green")
         url = a.js("return location.pathname")
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
 
         # Typing @ offers the vault's members; picking one mentions them.
         check(a.js(SELECT_TEXT, "fence"), "“fence” is in the note")
@@ -3140,7 +3251,7 @@ def test_recovered_copy(env):
         new_note(a, "Soup", "leeks and potatoes")
         path = a.js("return location.pathname")
         vid, oid = path.split("/")[2], path.split("/")[3]
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
         cdp(b, "Page.addScriptToEvaluateOnNewDocument", {"source": TRACK_SOCKETS})
         b.go(env.url.rstrip("/") + path)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('potatoes')", 20, "rex sees the note")
@@ -3654,12 +3765,12 @@ def test_admin(env):
                     raise AssertionError("the server settings weren't saved")
                 time.sleep(0.2)
 
-        server_settings(1, "exact_email")
+        server_settings(1, "search")
         check(api_get(a, "/info")["max_attachment_bytes"] == 1 << 20,
-              "administrators change the server's sizes and how people are found, and apps learn them at once")
+              "administrators change the server's sizes and whom sharing suggests, and apps learn them at once")
         a.js("document.querySelector('.server-settings').scrollIntoView({block: 'center'})")
         a.shot("admin-server")
-        server_settings(25, "search")
+        server_settings(25, "private")
 
         # An admin client for a billing system: its own token and scopes.
         token_call = """window.__api = undefined;
@@ -3834,7 +3945,7 @@ def test_vault_admins(env):
         new_note(a, "Old plan", "outdated")
         path = a.js("return location.pathname")
         vid = path.split("/")[2]
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
         b.go(env.url.rstrip("/") + path)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('outdated')", 20, "sam sees the note")
         # Sam, an editor, trashes it: he can restore it, not delete it for good.
@@ -3901,7 +4012,7 @@ def test_owners(env):
         new_note(a, "Groceries", "milk")
         path = a.js("return location.pathname")
         vid = path.split("/")[2]
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
 
         # Shared, with one owner: its home page suggests another owner, until
         # she says she knows what not having one means — on every device.
@@ -4006,7 +4117,7 @@ def test_undo_purge(env):
         signup(b, bn)
         new_note(a, "Keeper", "worth keeping")
         path = a.js("return location.pathname")
-        share(a, ".sb-bottom button:nth-child(2)", bn)
+        share(a, ".sb-bottom button:nth-child(2)", bn, by=b)
         b.go(env.url.rstrip("/") + path)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('worth keeping')", 20, "vic sees the note")
         a.click(".note-head .tb-drop .icon-btn")
@@ -4059,7 +4170,7 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_new_vault_signed_from_its_start, test_note_recipient_never_added, test_note_key_without_owner_proof, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_invitations, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_new_vault_signed_from_its_start, test_note_recipient_never_added, test_note_key_without_owner_proof, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
 
 
 def main():

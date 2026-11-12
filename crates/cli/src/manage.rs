@@ -388,6 +388,61 @@ pub struct ShareOutcome {
     pub updated_role: bool,
 }
 
+/// What sharing a vault with someone did.
+pub enum Shared {
+    /// One's own agent added, or a member's role changed.
+    Done(ShareOutcome),
+    /// Someone else: invited (by what they're called, or their address);
+    /// they get access once they accept.
+    Invited(String),
+}
+
+/// Share a vault (owner): one's own agents join at once, members get the
+/// role; anyone else is invited (docs/protocol.md §5.6) — by account if one
+/// shares with them already, else by their address.
+pub async fn share_or_invite(
+    session: &Session,
+    vault: &SharedVault,
+    user_ref: &str,
+    role: Role,
+    accept_new_key: bool,
+) -> Result<Shared> {
+    use crate::invitations::{self, To};
+    let id = {
+        let v = vault.lock().await;
+        require_owner(&v)?;
+        v.id().to_string()
+    };
+    let to = match find_user(session, user_ref).await {
+        Ok(user) => {
+            let members: Vec<MemberInfo> =
+                session.api.get(&format!("/vaults/{id}/members")).await?;
+            if user.kind == PrincipalKind::Agent || members.iter().any(|m| m.user.id == user.id) {
+                let out = share(session, vault, user_ref, role, accept_new_key).await?;
+                return Ok(Shared::Done(out));
+            }
+            if user.id == session.user_id {
+                bail!("you are an owner of this vault already");
+            }
+            To::User(user)
+        }
+        Err(_) if invitations::is_address(user_ref) => To::Email(user_ref.to_string()),
+        Err(e) => {
+            return Err(e.context(
+                "to share with someone you don't share anything with yet, give their e-mail address",
+            ));
+        }
+    };
+    if role == Role::Owner {
+        bail!(
+            "people are invited as admin, editor or viewer: invite them as an editor, and once they joined, \
+             make them an owner with `vault share` --role owner"
+        );
+    }
+    invitations::invite(session, vault, None, &to, role, false).await?;
+    Ok(Shared::Invited(to.label()))
+}
+
 /// Share a vault (owner): verify the recipient's key, check it against the
 /// pinned fingerprint, and wrap the current vault key for them.
 pub async fn share(
@@ -467,6 +522,7 @@ pub async fn share(
                     },
                 )
                 .await,
+            invitation_id: None,
         };
         match session
             .api

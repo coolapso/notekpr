@@ -135,6 +135,9 @@ pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<(
             Ok(ws) => {
                 // Back: a restart is over.
                 backoff.quick_until = None;
+                // Invitations that came, or were accepted, meanwhile.
+                let h = hub.clone();
+                tokio::spawn(async move { crate::invitations::on_change(&h).await });
                 let started = Instant::now();
                 let r = session_loop(&hub, ws, &mut shutdown).await;
                 // A connection that fails right away again and again keeps
@@ -825,6 +828,10 @@ async fn handle(
             UserEventKind::DevicesChanged => {}
             UserEventKind::SharesChanged => {
                 ui::status("a note was shared with you (or unshared): `notekpr shared list`")
+            }
+            UserEventKind::InvitationsChanged => {
+                let h = hub.clone();
+                tokio::spawn(async move { crate::invitations::on_change(&h).await });
             }
         },
         ServerMessage::Error {

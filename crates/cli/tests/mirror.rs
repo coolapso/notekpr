@@ -30,9 +30,7 @@ async fn mirror_syncs_both_ways_and_merges_external_edits() {
     let alice_hub = hub(&alice).await;
     let v = alice_hub.resolve("Shared").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     ops::put_document(&alice_hub, &vid, "Notes/Plan.md", "alpha\nbeta\n", None)
         .await
         .unwrap();
@@ -217,9 +215,7 @@ async fn concurrent_offline_creation_gives_two_files_not_a_lost_note() {
     let alice_hub = hub(&alice).await;
     let v = alice_hub.resolve("Ideas").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
 
     // Bob is offline (uploads deferred) while both create the same path.
     let bob_hub = hub(&bob).await;
@@ -287,9 +283,7 @@ async fn shared_mirror(
     let alice_hub = hub(&alice).await;
     let v = alice_hub.resolve(name).await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     let bob_hub = hub(&bob).await;
     let mirror = Mirror::new(bob_hub.clone(), &srv.path("bob-mirror"))
         .await
@@ -847,7 +841,7 @@ async fn a_note_renamed_in_the_folder_is_renamed_for_whom_it_is_shared_with() {
         .unwrap();
     let v = ah.resolve("Home").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    note_shares::share_note(&alice, &v, "Soup", "carol", Role::Viewer, false)
+    share_note(&alice, &v, "Soup", "carol", Role::Viewer, false)
         .await
         .unwrap();
     let mut mirror = Mirror::new(ah.clone(), &srv.path("alice-mirror"))

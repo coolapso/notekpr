@@ -21,6 +21,7 @@ use crate::db;
 use crate::error::{AppError, AppResult, bad, conflict, forbidden};
 use crate::hub::{Control, VaultEvent};
 use crate::repo;
+use crate::routes::invitations;
 use crate::routes::me::notify_user;
 use crate::routes::member_log::{self, Expect};
 use crate::routes::users::{account_key, public_user};
@@ -420,6 +421,19 @@ pub async fn add_member(
             now,
         )
         .await?;
+        // People join by an invitation they accepted; one's own agents
+        // without (checked above: only their owner adds them).
+        if !target.is_agent() {
+            invitations::complete(
+                &mut tx,
+                req.invitation_id.as_deref(),
+                &v,
+                None,
+                &req.user_id,
+                &req.role,
+            )
+            .await?;
+        }
         tx.commit().await?;
     }
     db::audit(
@@ -436,6 +450,9 @@ pub async fn add_member(
         .hub
         .publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
     notify_user(&state, &req.user_id, UserEventKind::VaultsChanged);
+    if !target.is_agent() {
+        invitations::completed(&state, &v, &req.user_id).await;
+    }
     let info = MemberInfo {
         user: public_user(&state.db, &req.user_id).await?,
         role: req.role,
@@ -464,6 +481,8 @@ pub async fn update_member(
             "owners are made in the membership log: update the app",
         ));
     }
+    // Invitations of someone who stops being an owner end.
+    let mut invited = vec![];
     {
         // Under the write lock like every membership change, so a push or
         // snapshot checked under it can't land after a demotion.
@@ -500,6 +519,7 @@ pub async fn update_member(
         repo::vaults::set_member_role(&mut *tx, &v, &u, &req.role).await?;
         if was == Role::Owner {
             repo::vaults::hand_over(&mut *tx, &v, &u).await?;
+            invited = invitations::end_by(&mut tx, &v, &u).await?;
         }
         member_log::check_and_append(
             &mut tx,
@@ -528,6 +548,7 @@ pub async fn update_member(
     state
         .hub
         .publish(&v, VaultEvent::Event(VaultEventKind::RoleChanged));
+    invitations::ended(&state, &v, &invited).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -566,6 +587,7 @@ pub async fn remove_member(
         (None, true) => {}
     }
     let now = db::now();
+    let mut invited = vec![];
     {
         let _w = state.write_lock.lock().await;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
@@ -578,6 +600,7 @@ pub async fn remove_member(
                 return Err(bad(LAST_OWNER));
             }
             repo::vaults::hand_over(&mut *tx, &v, &u).await?;
+            invited = invitations::end_by(&mut tx, &v, &u).await?;
         }
         if repo::vaults::delete_member(&mut *tx, &v, &u).await? == 0 {
             return Err(AppError::NotFound);
@@ -626,6 +649,7 @@ pub async fn remove_member(
         .hub
         .publish(&v, VaultEvent::Event(VaultEventKind::MembersChanged));
     notify_user(&state, &u, UserEventKind::VaultsChanged);
+    invitations::ended(&state, &v, &invited).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

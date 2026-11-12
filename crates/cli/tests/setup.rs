@@ -103,9 +103,7 @@ async fn setup_moves_the_notes_in_a_folder_into_a_vault() {
     let alice = reopen(&srv, "alice", "alice").await;
     let bob = login(&srv, "bob").await;
     let v = hub(&alice).await.resolve("My notes").await.unwrap();
-    manage::share(&alice, &v, "bob", Role::Viewer, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Viewer, false).await.unwrap();
     let bh = hub(&bob).await;
     assert_eq!(
         note(&bh, "My notes", "Daily/2026-11-01.md")

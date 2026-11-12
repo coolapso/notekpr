@@ -59,7 +59,7 @@ async fn a_new_note_is_never_under_the_vault_key_and_sharing_starts_a_fresh_key(
 
     // Sharing moves it to a fresh epoch; Bob reads the current text but
     // receives nothing written before.
-    note_shares::share_note(&alice, &v, "Trip", "bob", Role::Viewer, false)
+    share_note(&alice, &v, "Trip", "bob", Role::Viewer, false)
         .await
         .unwrap();
     let k = alice.api.vault_keys(&vid).await.unwrap();
@@ -91,7 +91,7 @@ async fn a_new_note_is_never_under_the_vault_key_and_sharing_starts_a_fresh_key(
 
     // A member who joins later gets the note's keys through the vault key.
     let carol = login(&srv, "carol").await;
-    manage::share(&alice, &v, "carol", Role::Viewer, false)
+    share(&alice, &v, "carol", Role::Viewer, false)
         .await
         .unwrap();
     let ch = hub(&carol).await;
@@ -111,16 +111,14 @@ async fn removing_a_member_renews_every_notes_key() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Team").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     for (path, text) in [("A.md", "a\n"), ("B.md", "b\n"), ("Shared.md", "s\n")] {
         ops::put_document(&ah, "Team", path, text, None)
             .await
             .unwrap();
     }
     ah.sync_vault(&vid).await.unwrap();
-    note_shares::share_note(&alice, &v, "Shared", "carol", Role::Editor, false)
+    share_note(&alice, &v, "Shared", "carol", Role::Editor, false)
         .await
         .unwrap();
     let before = alice.api.vault_keys(&vid).await.unwrap();
@@ -156,7 +154,7 @@ async fn removing_a_member_renews_every_notes_key() {
     // A member who joins now reads the notes' whole history: older note keys
     // are wrapped under older vault keys, which the vault key chain unlocks.
     let dave = login(&srv, "dave").await;
-    manage::share(&alice, &v, "dave", Role::Viewer, false)
+    share(&alice, &v, "dave", Role::Viewer, false)
         .await
         .unwrap();
     let dh = hub(&dave).await;
@@ -210,9 +208,7 @@ async fn an_older_note_moves_to_its_own_key_at_its_next_snapshot() {
     ah.sync_vault(&vid).await.unwrap();
     let last = changes(&alice, &vid, &oid).await.updates.pop().unwrap();
     assert!(is_doc_epoch(sym_epoch(&last.payload).unwrap()));
-    manage::share(&alice, &v, "bob", Role::Viewer, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Viewer, false).await.unwrap();
     let bh = hub(&bob).await;
     assert_eq!(
         note(&bh, &vid, "Log").await.as_deref(),
@@ -230,14 +226,12 @@ async fn keys_someone_who_left_knows_are_renewed_by_the_owners_sync() {
     let ah = hub(&alice).await;
     let v = ah.resolve("Team").await.unwrap();
     let vid = v.lock().await.id().to_string();
-    manage::share(&alice, &v, "bob", Role::Editor, false)
-        .await
-        .unwrap();
+    share(&alice, &v, "bob", Role::Editor, false).await.unwrap();
     ops::put_document(&ah, "Team", "Shared.md", "s\n", None)
         .await
         .unwrap();
     ah.sync_vault(&vid).await.unwrap();
-    note_shares::share_note(&alice, &v, "Shared", "carol", Role::Editor, false)
+    share_note(&alice, &v, "Shared", "carol", Role::Editor, false)
         .await
         .unwrap();
     let oid = v.lock().await.find_note("Shared").unwrap().1.id;

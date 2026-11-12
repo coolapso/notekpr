@@ -45,6 +45,10 @@ pub fn comments_note(object_id: &str) -> Option<&str> {
 /// Issuer used for identities created by the development login.
 pub const DEV_ISSUER: &str = "urn:notekpr:dev";
 
+/// Development logins' e-mail addresses are `<name>@` this: what invites
+/// them (no mail is sent; the domain is reserved for examples).
+pub const DEV_EMAIL_DOMAIN: &str = "example.com";
+
 /// A role in a vault or on a single note. In JSON its name: `"editor"`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 #[serde(into = "String", from = "String")]
@@ -767,6 +771,11 @@ pub struct AddObjectShareRequest {
     /// `Share`, signed by the owner (required once the vault has a log).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_entry: Option<LogEntry>,
+    /// The accepted invitation this completes (§5.6): sharing with someone
+    /// new needs one (not giving the current key again to someone it is
+    /// shared with already).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invitation_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -801,6 +810,121 @@ pub struct SharedNote {
     /// comments.
     #[serde(default)]
     pub can_comment: bool,
+}
+
+// ---------------------------------------------------------------- invitations
+
+/// `POST /vaults/{v}/invitations`: invite someone to the vault, or with
+/// `object_id` to one of its notes (§5.6). Exactly one of `user_id` (someone
+/// the caller already shares with, or found in the directory) and `email`
+/// (anyone, by their full address) names them. The inviting owner signs the
+/// invitation (`invitation::sign`), so no server can make one.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CreateInvitationRequest {
+    /// Chosen by the app (`random_id`), as it signs it.
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub role: Role,
+    /// When the app made it (ms), as signed.
+    pub created_at: i64,
+    #[serde(with = "b64")]
+    pub signature: Vec<u8>,
+    /// A note's comments so far go with it (as signed): the owner's app
+    /// that adds the person carries them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub with_comments: bool,
+}
+
+/// Someone accepted an invitation: who, and their signature on accepting
+/// it (`invitation::sign_acceptance`) with the account key the owner's app
+/// gives them the vault's (or the note's) key under.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct InvitationAcceptance {
+    pub user: PublicUser,
+    pub accepted_at: i64,
+    #[serde(with = "b64")]
+    pub signature: Vec<u8>,
+}
+
+/// An invitation to a vault the caller owns (or to one of its notes), as
+/// its owners see it. One declined looks like one not answered yet; who an
+/// address belongs to shows only once they accepted.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SentInvitation {
+    pub id: String,
+    pub vault_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    /// Invited by account: who (as the inviter knew them already).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<PublicUser>,
+    /// Invited by address: the address, as typed (lowercased).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub role: Role,
+    pub invited_by: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    #[serde(with = "b64")]
+    pub signature: Vec<u8>,
+    /// Set once they accepted: an owner's app adds them now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted: Option<InvitationAcceptance>,
+    /// As signed: the note's comments so far go with it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub with_comments: bool,
+}
+
+/// An invitation to the caller. It can't name the vault or the note: their
+/// names are encrypted, and the caller has no key yet.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ReceivedInvitation {
+    pub id: String,
+    pub vault_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_id: Option<String>,
+    /// Who invited them, with their account key (the invitation is signed
+    /// with it).
+    pub from: PublicUser,
+    /// As invited: one of these, as signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    pub role: Role,
+    pub created_at: i64,
+    pub expires_at: i64,
+    #[serde(with = "b64")]
+    pub signature: Vec<u8>,
+    /// Accepted: waiting for an owner's app to add them.
+    #[serde(default)]
+    pub accepted: bool,
+    /// As signed (the note's comments so far go with it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub with_comments: bool,
+}
+
+/// `GET /invitations`.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct InvitationsResponse {
+    /// To the caller, not answered yet or accepted.
+    #[serde(default)]
+    pub received: Vec<ReceivedInvitation>,
+    /// To the vaults the caller owns and their notes, by any of their owners.
+    #[serde(default)]
+    pub sent: Vec<SentInvitation>,
+}
+
+/// `POST /invitations/{id}/accept`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AcceptInvitationRequest {
+    #[serde(with = "b64")]
+    pub signature: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -838,6 +962,10 @@ pub struct AddMemberRequest {
     /// `Add`, signed by the owner (required once the vault has a log).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_entry: Option<LogEntry>,
+    /// The accepted invitation this completes (§5.6): people join only by
+    /// one; one's own agents join without.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invitation_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1444,20 +1572,38 @@ fn default_quick_notes_per_user() -> Limit {
     Limit::Max(DEFAULT_QUICK_NOTES_PER_USER)
 }
 
-/// How people find others to share with (`GET /users/search`).
+/// Whom the apps suggest when sharing (`GET /users/search`). Anyone else
+/// is invited by their full e-mail address, which tells the sharer nothing
+/// about whether it has an account (§5.6).
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UserDirectory {
-    /// By the start of their display name, or their exact e-mail address.
+    /// Only people the caller already shares a vault or a note with.
     #[default]
+    #[serde(alias = "exact_email", alias = "exact-email")]
+    Private,
+    /// Anyone, by the start of their display name or their exact e-mail
+    /// address: for families and companies.
     Search,
-    /// Only by their exact e-mail address.
-    #[serde(alias = "exact-email")]
-    ExactEmail,
     /// A way from a newer release (stored settings after going back to an
-    /// older one): as narrow as [`UserDirectory::ExactEmail`]. Never set.
+    /// older one): as narrow as [`UserDirectory::Private`]. Never set.
     #[serde(other)]
     Other,
+}
+
+/// Invitations not answered yet a person may have out at once, unless an
+/// administrator says otherwise.
+pub const DEFAULT_INVITATIONS_PENDING: u64 = 50;
+/// Invitations a person may send a day, unless an administrator says
+/// otherwise.
+pub const DEFAULT_INVITATIONS_PER_DAY: u64 = 50;
+
+fn default_invitations_pending() -> Limit {
+    Limit::Max(DEFAULT_INVITATIONS_PENDING)
+}
+
+fn default_invitations_per_day() -> Limit {
+    Limit::Max(DEFAULT_INVITATIONS_PER_DAY)
 }
 
 const DAY_MS: i64 = 24 * 3600 * 1000;
@@ -1551,8 +1697,17 @@ pub struct InstanceSettings {
     pub rate_limit_rps: u32,
     /// Sign-in and token requests per minute per client address.
     pub auth_rate_limit_per_min: u32,
-    /// How people find others to share with.
+    /// Whom the apps suggest when sharing.
     pub user_directory: UserDirectory,
+    /// Invitations a person may have out at once, not answered yet (§5.6).
+    #[serde(default = "default_invitations_pending")]
+    pub invitations_pending: Limit,
+    /// Invitations a person may send in a day.
+    #[serde(default = "default_invitations_per_day")]
+    pub invitations_per_day: Limit,
+    /// Days an invitation waits to be answered (and, once accepted, for an
+    /// owner's app to add them); 1 to [`crate::invitation::MAX_DAYS`].
+    pub invitation_days: u32,
     /// Days a browser session lasts (from when it starts).
     pub session_ttl_days: u32,
     /// Days a session of the CLI (and other apps signing in by code) lasts.
@@ -1585,7 +1740,10 @@ impl Default for InstanceSettings {
             keep_deleted_files_days: 14,
             rate_limit_rps: 50,
             auth_rate_limit_per_min: 30,
-            user_directory: UserDirectory::Search,
+            user_directory: UserDirectory::Private,
+            invitations_pending: default_invitations_pending(),
+            invitations_per_day: default_invitations_per_day(),
+            invitation_days: 14,
             session_ttl_days: 30,
             device_session_ttl_days: 180,
             agent_token_ttl_secs: 3600,
@@ -1642,6 +1800,12 @@ pub struct InstanceSettingsUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_directory: Option<UserDirectory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invitations_pending: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invitations_per_day: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invitation_days: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_ttl_days: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_session_ttl_days: Option<u32>,
@@ -1683,6 +1847,9 @@ impl InstanceSettings {
             rate_limit_rps,
             auth_rate_limit_per_min,
             user_directory,
+            invitations_pending,
+            invitations_per_day,
+            invitation_days,
             session_ttl_days,
             device_session_ttl_days,
             agent_token_ttl_secs,
@@ -1699,6 +1866,9 @@ impl InstanceSettings {
         self.auth_rate_limit_per_min =
             auth_rate_limit_per_min.unwrap_or(self.auth_rate_limit_per_min);
         self.user_directory = user_directory.unwrap_or(self.user_directory);
+        self.invitations_pending = invitations_pending.unwrap_or(self.invitations_pending);
+        self.invitations_per_day = invitations_per_day.unwrap_or(self.invitations_per_day);
+        self.invitation_days = invitation_days.unwrap_or(self.invitation_days);
         self.session_ttl_days = session_ttl_days.unwrap_or(self.session_ttl_days);
         self.device_session_ttl_days =
             device_session_ttl_days.unwrap_or(self.device_session_ttl_days);
@@ -1731,12 +1901,19 @@ impl InstanceSettings {
             ("session_ttl_days", self.session_ttl_days, 1),
             ("device_session_ttl_days", self.device_session_ttl_days, 1),
             ("agent_token_ttl_secs", self.agent_token_ttl_secs, 60),
+            ("invitation_days", self.invitation_days, 1),
         ];
         if let Some((name, _, min)) = at_least.iter().find(|(_, v, min)| v < min) {
             return Err(format!("{name} is at least {min}"));
         }
+        if self.invitation_days > crate::invitation::MAX_DAYS {
+            return Err(format!(
+                "invitation_days is at most {}",
+                crate::invitation::MAX_DAYS
+            ));
+        }
         if self.user_directory == UserDirectory::Other {
-            return Err("user_directory is \"search\" or \"exact_email\"".into());
+            return Err("user_directory is \"private\" or \"search\"".into());
         }
         Ok(())
     }
@@ -1763,6 +1940,11 @@ impl InstanceSettings {
     }
 
     /// How long something deleted for good is kept.
+    /// How long an invitation waits (ms).
+    pub fn invitation_ms(&self) -> i64 {
+        i64::from(self.invitation_days) * DAY_MS
+    }
+
     pub fn purge_undo_ms(&self) -> i64 {
         i64::from(self.purge_undo_days) * DAY_MS
     }
@@ -1971,6 +2153,10 @@ pub enum UserEventKind {
     SessionRevoked,
     /// A note was shared with (or unshared from) this user.
     SharesChanged,
+    /// Invitations to this user, or to vaults they own, changed: one came,
+    /// was accepted, cancelled or done (§5.6). Apps reload
+    /// `GET /invitations`; owners' apps add whoever accepted.
+    InvitationsChanged,
     /// An event from a newer release: apps reload their lists (vaults,
     /// shared notes, devices).
     #[serde(other)]
@@ -2436,27 +2622,45 @@ mod tests {
         assert_eq!(s.max_update_bytes(), 2048 * 1024);
         assert_eq!(s.max_snapshot_bytes(), 32 * MIB);
         assert_eq!(s.purge_undo_ms(), 30 * DAY_MS);
-        assert_eq!(s.user_directory, UserDirectory::Search);
+        assert_eq!(s.user_directory, UserDirectory::Private);
+        assert_eq!(s.invitation_days, 14);
+        assert_eq!(
+            s.invitations_pending,
+            Limit::Max(DEFAULT_INVITATIONS_PENDING)
+        );
         assert_eq!(s.check(), Ok(()));
 
         let mut s = s;
         s.apply(
             &serde_json::from_str(
-                r#"{"max_update_kb": 4096, "user_directory": "exact_email", "purge_undo_days": 0}"#,
+                r#"{"max_update_kb": 4096, "user_directory": "search", "purge_undo_days": 0}"#,
             )
             .unwrap(),
         );
         assert_eq!(s.max_snapshot_bytes(), 64 * MIB);
-        assert_eq!(s.user_directory, UserDirectory::ExactEmail);
+        assert_eq!(s.user_directory, UserDirectory::Search);
         assert_eq!(s.purge_undo_ms(), 0);
         assert_eq!(s.max_attachment_mb, 25);
         // Never below the update limit.
         s.apply(&serde_json::from_str(r#"{"max_snapshot_kb": 100}"#).unwrap());
         assert_eq!(s.max_snapshot_bytes(), s.max_update_bytes());
-        // The flag's spelling.
-        let u: InstanceSettingsUpdate =
-            serde_json::from_str(r#"{"user_directory": "exact-email"}"#).unwrap();
-        assert_eq!(u.user_directory, Some(UserDirectory::ExactEmail));
+        // The way that went (finding people only by their exact address)
+        // is the private directory now, in either spelling.
+        for old in [
+            r#"{"user_directory": "exact_email"}"#,
+            r#"{"user_directory": "exact-email"}"#,
+        ] {
+            let u: InstanceSettingsUpdate = serde_json::from_str(old).unwrap();
+            assert_eq!(u.user_directory, Some(UserDirectory::Private));
+        }
+        // Invitations wait 1 to 90 days.
+        for (days, ok) in [(0, false), (1, true), (90, true), (91, false)] {
+            let s = InstanceSettings {
+                invitation_days: days,
+                ..Default::default()
+            };
+            assert_eq!(s.check().is_ok(), ok, "{days}");
+        }
         // A newer release's way still reads (the server starts), but isn't
         // set.
         let s: InstanceSettings =

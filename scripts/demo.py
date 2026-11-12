@@ -433,15 +433,16 @@ HOME = [
         - [ ] Move a note, or a folder with everything in it, to another vault: *Move to vault…* in its menu in the file tree (a note's also in its ⋯ menu at the top); the originals go to the trash
         - [ ] *Vault settings* (⚙ next to a vault, or in the corner of its card in *All vaults*): its icon or a picture, *Export as Markdown (.zip)*, *Import notes*, the *Activity log*
         - [ ] Settings → Account → *Data*: export the vaults you tick and your quick notes as one .zip, then sign in as someone new (any name works here, or on another server) and *Import an export…*: the vaults come back with their folders, files and icons, and the quick notes join that account's. *Delete my account…* there says what goes before anything does
-        - [ ] *Share vault* at the bottom of the sidebar: members, roles (*Owner*, *Admin*, *Can edit*, *Can view*) and key fingerprints
+        - [ ] Eve invites you to her *Seed library*: the bar at the top of the page says who, and that it's a vault — not which (its name is encrypted, and you have no key yet). *Accept*, and it's yours to edit as soon as Eve's app adds you (sign in as **eve** in another tab to see it happen); *Decline*, and she isn't told
+        - [ ] *Share vault* at the bottom of the sidebar: members, roles (*Owner*, *Admin*, *Can edit*, *Can view*) and key fingerprints. In *Family*, *Invited* lists Grandma: her address has no account here, which nothing shows. Invite someone by typing their address (here everyone's is their name at example.com: `dave@example.com`); someone you share with already is suggested by name
         - [ ] *Family* has two owners, you and Bob, equal: either manages its people and settings, and either may leave it to the other (*Vault settings*). *Work* has only you: its home page suggests a second owner (*Dismiss* asks you to acknowledge what having none means), you can't leave it, and Settings → Account → *Delete my account…* asks you first to make someone else an owner of it (Dave), or to delete it — while *Family* would simply stay Bob's
         - [ ] You're an admin of Bob's *Book club*: its *Trash* has a draft Carol threw away — as an editor she can restore it but not delete it for good; you can (*Empty trash*), and you see the vault's *Activity log* in *Vault settings*. Sign in as **carol** to see her side
-        - [ ] Share a single note with **dave** (the share button at the top of a note)
+        - [ ] Share a single note with **dave** (the share button at the top of a note): invite `dave@example.com`, then sign in as **dave** in another tab and accept — your app adds him, and he sees only that note
         - [ ] Settings → Editor: the theme, line numbers beside the text (relative ones too), Vim keybindings (try `V` and `j` to select lines, `>` to indent them, `J` to join, `gj` in a long paragraph, `Ctrl+D` / `Ctrl+U`, then `gg`, `G` and `Ctrl+O` back — once more and you're back in the note you came from), and how wide notes are (a slider from narrow to wide). A note's ⋯ menu gives it a width of its own, only for you: try *Wide* on *Server checks* in *Work*, whose log lines don't wrap
         - [ ] Settings → Devices: the CLI and this browser; *Keep this browser usable offline*
         - [ ] A new device: sign in as **alice** in a private window and choose *Approve from another device*. Here a bar at the top of the page says it is waiting, however far you scroll, and this tab's title counts it — until the demo approves it a moment later (started with `--no-approve`, it waits for your *Review*)
         - [ ] Sign the command line in with a code: `task demo:cli -- --profile mine login --server http://localhost:8099` prints a link; opening it here shows when, and from which address, the code was asked for
-        - [ ] Settings → Administration: you run this server in the demo. *Instance* sets limits (accounts, vaults, agents, and per person; *Limits* next to someone gives them their own) and read-only mode: switch it on with **bob** signed in in another tab, edit there, and his edits wait in his browser until you switch it off. *Oldest app version* tells apps older than it to update (they keep their unsent edits) — development builds like this demo's never are. *Server* has what used to need a restart, in force at once: *Seconds between versions* is 0 here (the demo writes faster than anyone types); set *Attachment size* to 1 and attach a larger file (refused), or *Finding people* to *By exact e-mail only* and look for bob in *Share vault* (demo people have no e-mail: nobody). *Admin clients* has the *billing* script that gave every vault 100 MiB and everyone's quick notes 20 MiB — yours 50 (*Limits* next to you; *Quick notes* shows how much of it they take)
+        - [ ] Settings → Administration: you run this server in the demo. *Instance* sets limits (accounts, vaults, agents, and per person; *Limits* next to someone gives them their own) and read-only mode: switch it on with **bob** signed in in another tab, edit there, and his edits wait in his browser until you switch it off. *Oldest app version* tells apps older than it to update (they keep their unsent edits) — development builds like this demo's never are. *Server* has what used to need a restart, in force at once: *Seconds between versions* is 0 here (the demo writes faster than anyone types); set *Attachment size* to 1 and attach a larger file (refused), or *Suggested when sharing* to *Everyone, by name*, and *Share vault* suggests anyone by the start of their name (by default, only people you already share with; anyone else is invited by address). *Admin clients* has the *billing* script that gave every vault 100 MiB and everyone's quick notes 20 MiB — yours 50 (*Limits* next to you; *Quick notes* shows how much of it they take)
         - [ ] Your *Scans* vault is full: the billing script gave it only 1 MiB, and three scanned letters take more. The banner says so; edit a note there and the edit waits in your browser. *Vault settings* shows how much of its room it uses and its id (*Copy*). As the administrator, paste the id into *Find* under Settings → Administration → *Vaults* (every vault by size, with its owner — never its name) and give it more with *Limit*; or delete a letter for good from its trash. Either way the waiting edit goes out
         - [ ] Settings → AI agents: the *Home assistant* agent, which writes in *Assistant*
         - [ ] Your notes as plain Markdown files, synced both ways: `task demo:cli -- --profile alice sync --dir /tmp/alice-notes`
@@ -1520,6 +1521,30 @@ class Cli:
     def write(self, profile, vault, path, text):
         self.run(profile, "-q", "write", vault, path, stdin=text.encode())
 
+    def invite(self, owner, vault, who, role, note=None):
+        """`owner` invites `who` by their address (development logins' are
+        `<name>@example.com`) to a vault, or to one of its notes; nobody
+        answers yet."""
+        address = f"{who}@example.com"
+        if note:
+            self.run(owner, "-q", "share-note", vault, note, address, "--role", role)
+        else:
+            self.run(owner, "-q", "vault", "share", vault, address, "--role", role)
+
+    def share(self, owner, vault, who, role, note=None):
+        """Share as the apps do: `owner` invites `who`, `who` accepts and
+        `owner`'s app adds them. Owners are made from members: invited as
+        editors first."""
+        self.invite(owner, vault, who, "editor" if role == "owner" else role, note)
+        out, _ = self.run(who, "--json", "invitations", "list")
+        for i in json.loads(out or "{}").get("received", []):
+            # (Only this owner's: another may be meant to wait.)
+            if not i.get("accepted") and i["from"]["display_name"].lower() == owner:
+                self.run(who, "-q", "invitations", "accept", i["id"])
+        self.run(owner, "-q", "invitations", "list")
+        if role == "owner":
+            self.run(owner, "-q", "vault", "share", vault, who, "--role", "owner")
+
     def comment(self, profile, vault, note, on, text):
         """Comment on the text `on` of a note; returns the comment's id."""
         out, _ = self.run(profile, "comments", "add", vault, note, "--on", on, text)
@@ -1710,7 +1735,7 @@ def seed(cli, url, data, server_bin):
     for folder, icon in [("Projects", "📂"), ("Meetings", "🗓️"), ("Decisions", "⚖️"),
                          ("People", "👥"), ("Snippets", "🧩")]:
         cli.icon(a, "Work", folder, icon)
-    cli.run(a, "-q", "vault", "share", "Work", d, "--role", "editor")
+    cli.share(a, "Work", d, "editor")
     step("dave: writes the review meeting and ticks off tasks")
     cli.write(d, "Work", "Meetings/2026-10-21 Review.md", note("""
         # Review — 21 October
@@ -1741,8 +1766,11 @@ def seed(cli, url, data, server_bin):
         if icon:
             cli.icon(a, "Family", path, icon)
     cli.icon(a, "Family", "House", "🏡")
-    cli.run(a, "-q", "vault", "share", "Family", b, "--role", "owner")
-    cli.run(a, "-q", "vault", "share", "Family", c, "--role", "viewer")
+    cli.share(a, "Family", b, "owner")
+    cli.share(a, "Family", c, "viewer")
+    # Grandma has no account here yet: her invitation waits (an address
+    # tells Alice nothing about whether it has one).
+    cli.invite(a, "Family", "grandma", "viewer")
     step("alice and bob: editing the shopping list and holiday plans together")
     for who, text in SHOPPING_VERSIONS:
         cli.write(who, "Family", "Shopping list.md", text)
@@ -1781,8 +1809,8 @@ def seed(cli, url, data, server_bin):
         if icon:
             cli.icon(b, "Book club", path, icon)
     cli.icon(b, "Book club", "Books", "📚")
-    cli.run(b, "-q", "vault", "share", "Book club", a, "--role", "admin")
-    cli.run(b, "-q", "vault", "share", "Book club", c, "--role", "editor")
+    cli.share(b, "Book club", a, "admin")
+    cli.share(b, "Book club", c, "editor")
     cli.run(a, "-q", "write", "--append", "Book club", "Books/Piranesi.md",
             stdin="\n- Alice: the statues! Every chapter made me want to draw them.\n".encode())
     cli.run(c, "-q", "write", "--append", "Book club", "Books/Piranesi.md",
@@ -1801,9 +1829,22 @@ def seed(cli, url, data, server_bin):
         if icon:
             cli.icon(e, "Garden club", path, icon)
     cli.icon(e, "Garden club", "Meetups", "📅")
-    cli.run(e, "-q", "vault", "share", "Garden club", a, "--role", "editor")
+    cli.share(e, "Garden club", a, "editor")
     cli.run(a, "-q", "write", "--append", "Garden club", "Seed swap.md",
             stdin="- [ ] Alice: bring tomato seeds (Sungold) and basil\n".encode())
+    # And a vault of her own for the club's seeds, to which she invites
+    # Alice: the invitation waits for her (a bar at the top of the app).
+    cli.run(e, "-q", "vault", "create", "Seed library")
+    cli.run(e, "-q", "vault", "icon", "Seed library", "🌰")
+    cli.write(e, "Seed library", "Seeds.md", note("""
+        # Seeds
+
+        | Seed | From | Saved |
+        |---|---|---|
+        | Sungold tomato | Alice | 2025 |
+        | Borlotti beans | Eve | 2025 |
+        """))
+    cli.invite(e, "Seed library", a, "editor")
     cli.run(a, "-q", "write", "--append", "Garden club", "Meetups/2026-11-07.md",
             stdin="4. Alice: compost bins, can we share a shredder?\n".encode())
 
@@ -1814,7 +1855,7 @@ def seed(cli, url, data, server_bin):
         cli.write(b, "Running", path, text)
         if icon:
             cli.icon(b, "Running", path, icon)
-    cli.run(b, "-q", "share-note", "Running", "Training plan", a, "--role", "viewer")
+    cli.share(b, "Running", a, "viewer", note="Training plan")
 
     step("carol: vault Design; her logo ideas shared with alice on their own")
     cli.run(c, "-q", "vault", "create", "Design")
@@ -1823,16 +1864,16 @@ def seed(cli, url, data, server_bin):
         cli.write(c, "Design", path, text)
         if icon:
             cli.icon(c, "Design", path, icon)
-    cli.run(c, "-q", "share-note", "Design", "Logo ideas", a, "--role", "viewer")
+    cli.share(c, "Design", a, "viewer", note="Logo ideas")
 
     step("alice: single notes shared with carol (the apple pie, the design brief)")
     # Shared with its comments (the default); Carol answers from the
     # command line, mentioning Alice.
     pie = cli.comment(a, "Home", "Recipes/Apple pie", "a pinch of nutmeg", "Carol, is this right? I can't read the card here.")
-    cli.run(a, "-q", "share-note", "Home", "Recipes/Apple pie", c, "--role", "editor")
+    cli.share(a, "Home", c, "editor", note="Recipes/Apple pie")
     cli.run(c, "-q", "shared", "comments", "reply", "Apple pie", pie,
             "Yes, a pinch — and @Alice, Grandma wrote “a little cinnamon” next to it.")
-    cli.run(a, "-q", "share-note", "Work", "Projects/Design brief", c, "--role", "editor")
+    cli.share(a, "Work", c, "editor", note="Projects/Design brief")
     cli.run(c, "-q", "shared", "write", "--append", "Apple pie",
             stdin="\n> Carol: Grandma always added a spoon of lemon juice. 🍋\n".encode())
     cli.run(c, "-q", "shared", "write", "--append", "Design brief",

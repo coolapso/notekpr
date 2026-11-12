@@ -222,8 +222,16 @@ notes](writing.md) and [Drawings](drawings.md).
 
 ## Working together
 
-* Share a vault as owner, admin, editor or viewer, or a single note with
-  someone outside the vault. A vault can have several owners, all equal, and
+* Share a vault as admin, editor or viewer, or a single note with someone
+  outside the vault — by invitation: they accept or decline (declining
+  tells you nothing), and once they accepted your app adds them, at once if
+  it's open. Invite anyone by their e-mail address — whether it has an
+  account doesn't show — or pick someone you share with already by name; a
+  family's or a company's server can let everyone be found by name.
+  Invitations show up as a bar at the top of the app (and in
+  `notekpr invitations`), never naming what they're to; the sharing dialog
+  lists those still waiting, to cancel. Your agents join at once. A vault
+  can have several owners, all equal, and
   always keeps one: the last owner can't leave, nor delete their account
   while others use the vault, so it never goes with one person — and a vault
   others use suggests a second owner (a hint you can hide). Editors move
@@ -246,8 +254,8 @@ notes](writing.md) and [Drawings](drawings.md).
   in the sidebar's mentions inbox, with a message when it arrives and, if
   they like, a system notification. Read on one device, read on all;
   `notekpr mentions` lists them.
-* You're told when a note is shared with you; owners and admins have an
-  activity log per vault.
+* You're told when someone invites you and when a note is shared with you;
+  owners and admins have an activity log per vault.
 
 ## Privacy and security
 
@@ -260,6 +268,9 @@ notes](writing.md) and [Drawings](drawings.md).
   history. Owners can also renew a vault's key by hand.
 * The vault's owners sign who belongs to it, and every change is signed by
   its author, so even a compromised server can't add people or forge edits.
+  Invitations are signed by the owner who sends them and accepted with a
+  signature of the person's own key, so a server can't invent one, change
+  it, or say yes for someone else; you see who accepted which address.
 * Key fingerprints to check who you share with, and a loud warning when
   someone's key changes.
 * New devices are approved from one you already use (with a verification
@@ -345,8 +356,9 @@ notes](writing.md) and [Drawings](drawings.md).
   oldest app version it accepts: older apps are told to update and keep
   their unsent edits. Also the sizes of attachments, changes and snapshots,
   how many versions each note keeps and how often, how long deleting for
-  good can be undone, rate limits, how long sign-ins last, and whether
-  people are found by name or only by exact e-mail address.
+  good can be undone, rate limits, how long sign-ins last, how long
+  invitations wait and how many people may send, and whom sharing suggests:
+  people one already shares with, or everyone by name.
 * Storage per vault: a size each vault may take, by default and for one
   vault. A full vault takes no new content — its members' edits wait in
   their apps and go out once it has room — while every other vault goes

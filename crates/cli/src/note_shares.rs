@@ -26,6 +26,65 @@ use crate::session::{Session, SharedVault};
 use crate::ui;
 use crate::vault::{self, CommentAct};
 
+/// What sharing a note with someone did.
+pub enum NoteShared {
+    /// One's own agent, or someone it is shared with already (their role,
+    /// or their key given again).
+    Done(ShareOutcome),
+    /// Someone else: invited (by what they're called, or their address);
+    /// they get it once they accept.
+    Invited(String),
+}
+
+/// Share a note with someone: one's own agents (and people it is shared
+/// with already) at once; anyone else by invitation (docs/protocol.md
+/// §5.6), the note moving to a fresh key first.
+#[allow(clippy::too_many_arguments)]
+pub async fn share_or_invite(
+    session: &Session,
+    vault: &SharedVault,
+    path: &str,
+    user_ref: &str,
+    role: Role,
+    accept_new_key: bool,
+    with_comments: bool,
+) -> Result<NoteShared> {
+    use crate::invitations::{self, To};
+    if !matches!(role, Role::Editor | Role::Viewer) {
+        bail!("notes can be shared as editor or viewer");
+    }
+    let (id, note_id) = {
+        let v = vault.lock().await;
+        manage::require_owner(&v)?;
+        let (_, e) = v.find_note(path)?;
+        (v.id().to_string(), e.id)
+    };
+    let to = match manage::find_user(session, user_ref).await {
+        Ok(user) => {
+            let recipients: Vec<ObjectShareInfo> = session
+                .api
+                .get(&format!("/vaults/{id}/objects/{note_id}/shares"))
+                .await
+                .unwrap_or_default();
+            if user.kind == PrincipalKind::Agent || recipients.iter().any(|r| r.user.id == user.id)
+            {
+                let out = share_note(session, vault, path, user_ref, role, accept_new_key).await?;
+                return Ok(NoteShared::Done(out));
+            }
+            To::User(user)
+        }
+        Err(_) if invitations::is_address(user_ref) => To::Email(user_ref.to_string()),
+        Err(e) => {
+            return Err(e.context(
+                "to share with someone you don't share anything with yet, give their e-mail address",
+            ));
+        }
+    };
+    ensure_document_key(session, vault, &id, &note_id).await?;
+    invitations::invite(session, vault, Some(&note_id), &to, role, with_comments).await?;
+    Ok(NoteShared::Invited(to.label()))
+}
+
 /// Give a note its own key (first time) and share it with one person.
 pub async fn share_note(
     session: &Session,
@@ -91,6 +150,7 @@ pub async fn share_note(
                 members::share(&note_id, &user.id, role.clone(), &key),
             )
             .await,
+        invitation_id: None,
     };
     let mut updated_role = false;
     match session

@@ -112,6 +112,11 @@ fn access(c: &Command) -> Access {
         | Command::Devices(_)
         | Command::Recovery(_)
         | Command::Shared(_)
+        | Command::Invitations(
+            InvitationsCmd::Accept { .. }
+            | InvitationsCmd::Decline { .. }
+            | InvitationsCmd::Cancel { .. },
+        )
         | Command::Agent(_)
         | Command::Completions { .. } => Access::Free,
         Command::Logout { forget, .. } => {
@@ -484,15 +489,31 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                 ShareRole::Editor => Role::Editor,
                 ShareRole::Viewer => Role::Viewer,
             };
-            let out = note_shares::share_note(
+            let out = match note_shares::share_or_invite(
                 &hub.session,
                 &v,
                 &path,
                 &user,
                 role.clone(),
                 accept_new_key,
+                !without_comments,
             )
-            .await?;
+            .await?
+            {
+                note_shares::NoteShared::Done(out) => out,
+                note_shares::NoteShared::Invited(who) => {
+                    crate::out!(
+                        "invited {who} to '{path}' as {}{}: they get it once they accept, and nothing else in the vault",
+                        role.as_str(),
+                        if without_comments {
+                            ""
+                        } else {
+                            ", with its comments so far"
+                        }
+                    );
+                    return Ok(());
+                }
+            };
             if !without_comments {
                 let n = note_shares::carry_comments(&v, &path).await?;
                 if n > 0 {
@@ -582,6 +603,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
             }
             Ok(())
         }
+        Command::Invitations(c) => invitations_cmd(&ctx, c).await,
         Command::Shared(c) => {
             let s = ctx.session()?;
             match c {
@@ -1591,7 +1613,24 @@ async fn vault(ctx: &Ctx, c: VaultCmd) -> Result<()> {
                 MemberRole::Editor => Role::Editor,
                 MemberRole::Viewer => Role::Viewer,
             };
-            let out = manage::share(&hub.session, &v, &user, role.clone(), accept_new_key).await?;
+            let out = match manage::share_or_invite(
+                &hub.session,
+                &v,
+                &user,
+                role.clone(),
+                accept_new_key,
+            )
+            .await?
+            {
+                manage::Shared::Done(out) => out,
+                manage::Shared::Invited(who) => {
+                    crate::out!(
+                        "invited {who} as {}: they get access once they accept (`notekpr invitations list`)",
+                        role.as_str()
+                    );
+                    return Ok(());
+                }
+            };
             let who = format!("{} ({})", out.user.display_name, out.user.kind.as_str());
             if out.updated_role {
                 crate::out!("{who} is now {}", role.as_str());
@@ -2999,6 +3038,170 @@ async fn gateway_cmd(ctx: &Ctx, a: GatewayArgs) -> Result<()> {
         .await;
     hub.save_all().await;
     live_result
+}
+
+/// `notekpr invitations …` (docs/cli.md).
+async fn invitations_cmd(ctx: &Ctx, c: InvitationsCmd) -> Result<()> {
+    use crate::invitations::{self, short};
+    let s = ctx.session()?;
+    match c {
+        InvitationsCmd::List => {
+            let mut list = invitations::list(&s).await?;
+            if complete_invitations(ctx, &list).await? {
+                list = invitations::list(&s).await?;
+            }
+            if ctx.json {
+                ctx.print_json(&list);
+                return Ok(());
+            }
+            if list.received.is_empty() && list.sent.is_empty() {
+                crate::out!("no invitations");
+            }
+            for r in &list.received {
+                crate::out!(
+                    "{}  {} invites you to {} as {}{}",
+                    short(&r.id),
+                    r.from.display_name,
+                    if r.object_id.is_some() {
+                        "a note"
+                    } else {
+                        "a vault"
+                    },
+                    r.role.as_str(),
+                    if r.accepted {
+                        " — accepted: you're in once their app adds you"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            for i in &list.sent {
+                let who = i
+                    .user
+                    .as_ref()
+                    .map(|u| u.display_name.clone())
+                    .or(i.email.clone())
+                    .unwrap_or_default();
+                let to = match s.load_local(&i.vault_id).ok().flatten() {
+                    Some(v) => match &i.object_id {
+                        Some(o) => format!(
+                            "'{}' in {}",
+                            v.replica.index.get(o).map(|e| e.path).unwrap_or(o.clone()),
+                            v.name()
+                        ),
+                        None => v.name().to_string(),
+                    },
+                    None => i.vault_id.clone(),
+                };
+                crate::out!(
+                    "{}  you invited {who} to {to} as {} — {}",
+                    short(&i.id),
+                    i.role.as_str(),
+                    if i.accepted.is_some() {
+                        "accepted"
+                    } else {
+                        "waiting for an answer"
+                    }
+                );
+            }
+        }
+        InvitationsCmd::Accept { id } => {
+            let inv = invitations::accept(&s, &id).await?;
+            crate::out!(
+                "accepted {}'s invitation: you're in as soon as their app adds you (at once while it runs)",
+                inv.from.display_name
+            );
+        }
+        InvitationsCmd::Decline { id } => {
+            let inv = invitations::decline(&s, &id).await?;
+            crate::out!(
+                "declined {}'s invitation (they aren't told)",
+                inv.from.display_name
+            );
+        }
+        InvitationsCmd::Cancel { id } => {
+            let inv = invitations::cancel(&s, &id).await?;
+            crate::out!(
+                "cancelled the invitation of {}",
+                inv.user
+                    .as_ref()
+                    .map(|u| u.display_name.clone())
+                    .or(inv.email.clone())
+                    .unwrap_or_default()
+            );
+        }
+        InvitationsCmd::Verify { id } => {
+            let list = invitations::list(&s).await?;
+            let inv = list
+                .sent
+                .iter()
+                .find(|i| i.id == id || i.id.starts_with(&id))
+                .ok_or_else(|| {
+                    anyhow!("no invitation '{id}': `notekpr invitations list` lists them")
+                })?;
+            let a = inv
+                .accepted
+                .as_ref()
+                .ok_or_else(|| anyhow!("nobody accepted that invitation yet"))?;
+            let key = a
+                .user
+                .account_key
+                .as_ref()
+                .and_then(|k| k.verify().ok())
+                .ok_or_else(|| anyhow!("their key doesn't verify"))?;
+            s.accept_pin(&a.user.id, &key.fingerprint())?;
+            crate::out!(
+                "trusting the key of {} ({})",
+                a.user.display_name,
+                key.fingerprint()
+            );
+            complete_invitations(ctx, &list).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Add whoever accepted an invitation to a vault we own, and say so;
+/// `true` if there were some.
+async fn complete_invitations(
+    ctx: &Ctx,
+    list: &notekpr_core::protocol::InvitationsResponse,
+) -> Result<bool> {
+    let ids: std::collections::BTreeSet<&str> = list
+        .sent
+        .iter()
+        .filter(|i| i.accepted.is_some())
+        .map(|i| i.vault_id.as_str())
+        .collect();
+    if ids.is_empty() {
+        return Ok(false);
+    }
+    let ids: Vec<&str> = ids.into_iter().collect();
+    let hub = match ctx.hub(&ids).await {
+        Ok(h) => h,
+        Err(e) => {
+            ui::warn(&format!("not adding who accepted an invitation now: {e:#}"));
+            return Ok(false);
+        }
+    };
+    let done = crate::invitations::complete(&hub.session, &hub.vaults(), list).await?;
+    for id in &done.to_push {
+        report_push(hub.local_changed(id, vec![], false).await);
+    }
+    if !done.added.is_empty() {
+        crate::out!(
+            "{} accepted your invitation and can open what you shared now (not who you meant? \
+             `vault unshare`)",
+            done.added.join(", ")
+        );
+    }
+    for (name, fp) in done.key_changed {
+        ui::warn(&format!(
+            "{name} accepted, but their key changed since you pinned it (now {fp}): compare it with them, \
+             then run `notekpr invitations verify <id>`"
+        ));
+    }
+    Ok(true)
 }
 
 #[cfg(test)]

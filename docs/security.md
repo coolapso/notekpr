@@ -34,6 +34,8 @@ in an issue or a discussion: [SECURITY.md](../SECURITY.md).
 | Document keys (every note has its own) | wrapped under the vault key for members, HPKE to each person a note is shared with | no; it learns which notes are shared, with whom, and when sharing started |
 | Account secrets | HPKE to each device, and to the recovery key | no |
 | Identities, memberships, roles, devices, sessions | server-enforced authorization | yes (needed to operate) |
+| Invitations (who invites whom, to which vault or note, as what) | signed by the inviting owner and, on accepting, by the person invited | yes, and the address of someone invited by it until the invitation ends — also one that has no account here (below). Never the vault's or the note's name |
+| Who has an account | invitations by address answer the same whether it has one or not; the apps suggest only people one already shares with | yes (it's the server's) — but not to other people, unless its administrator makes the directory searchable |
 
 **Metadata the server necessarily learns:** user accounts (display name,
 e-mail from the IdP, OIDC issuer and subject), which users share which vault and
@@ -81,6 +83,7 @@ What the database holds, besides ciphertext and public keys:
 | `attachments`, `file_deletions` | each attachment's size, who uploaded it, when; when it was deleted for good; the name of its file in the file store (vault and attachment ids and a random part); files to delete from the store, and since when |
 | `device_grants` | device sign-ins waiting for approval: the client's name, when it asked, and the address it asked from — the address only until the code is approved, denied or expires (it is shown to whoever approves the code, so one asked for by someone else stands out) |
 | `object_shares`, `object_keys` | which notes are shared individually, with whom, with which role, by whom and since when |
+| `invitations` | who invited whom (an account, or an e-mail address as typed, which may have no account here) to which vault or note, as what, when, until when; whether they accepted (declined ones look unanswered), and both signatures. An address is kept only until the invitation ends (done, cancelled, expired — `invitation_days`, default 14 — or its inviter stopped being an owner); an ended one is deleted a day after it was sent |
 | `user_prefs` | when someone's encrypted preferences last changed, and their size |
 | `instance_settings` | the instance's limits and read-only switch, and when they last changed |
 | `audit_log` | account, device, membership, sharing and key events: who did what to whom, when (ids, roles and device names; never names of notes or vaults) |
@@ -176,6 +179,25 @@ primitives. Formats:
   make an older app accept anyone's writing. A log entry of a kind an older
   app doesn't know stops it from opening the vault (it says to update), so
   a server can't slip a change past it that way.
+* **Adds someone by inventing an invitation, or accepts one for them?**
+  Sharing is by invitation (protocol.md §5.6): an owner's app adds someone
+  only for an invitation signed by someone the verified log has as an owner
+  now, not older than 90 days, and accepted by the account it named with a
+  signature made with the very key the app then wraps the vault's (or the
+  note's) key to — and pinned already, if the app pinned one for them. So
+  the server can't invent an invitation, can't change its role, vault or
+  note, can't move one made to an account to anyone else, and can't accept
+  for someone whose key an owner's app knows. For someone no app of the
+  owner's has pinned yet, a server that claims they accepted, with a key of
+  its own, is first-contact key substitution (residual risks, 1), as when
+  sharing directly was a click. An invitation **by address** is weaker:
+  who has an address is the server's word (as it is for signing in), so a
+  malicious server can show it to an account of its choosing, which then
+  joins (residual risks, 8); the owner's apps say who accepted which
+  address, so it shows. Nor does it learn more than before: it already
+  knew who shares with whom. Apps of the person invited check the
+  invitation's signature with the inviter's key, and pin that key on
+  accepting.
 * **Shares someone's Personal storage (quick notes, saved shapes)?** The
   server refuses members and note shares there, and as with every vault it
   can't add anyone on its own: their owner's apps never sign anyone into
@@ -281,6 +303,15 @@ primitives. Formats:
 
 ### Malicious collaborators
 
+* **Strangers on a shared server** can't list who has an account, nor check
+  an address: the apps suggest only people one already shares a vault or a
+  note with, and an invitation by address is answered the same whether it
+  has an account or not (an administrator may make the directory
+  searchable by name, for a family's or a company's server). Nor can they
+  put anyone anywhere: every share is an invitation the person accepts.
+  Inviting is limited (per person, waiting and per day), and an invitation
+  shows only who sends it (their name and, for a vault, their address) —
+  never the name of what it's to.
 * **Viewers** cannot write notes: the server rejects their pushes (but for
   comments), snapshots, attachment uploads and deletes. They do hold the vault
   key, but every update and snapshot is signed by its author and clients
@@ -533,3 +564,22 @@ reported, never applied partially. Duplicate deliveries are no-ops.
    log that shows who its owners are, so with the server's help an owner
    removed since could still give them a note key. Who made the vault is
    trusted the first time.
+8. Invitations by address: who has an address is the server's word (its
+   identity provider's, as for signing in), and an owner's app adds
+   whoever accepts one without asking. A malicious server can therefore
+   hand an invitation to `bob@…` to another account — even one the owner
+   knows as someone else — and that account joins; the apps then say
+   "Mallory accepted your invitation to bob@…", and the owner can remove
+   them. Invitations by account (someone one shares with already, picked
+   by name) can't be moved. Planned: a proof of the address the server
+   can't redirect (an invitation code the inviter sends outside notekpr).
+   Also, the server keeps an invitation's signature, so until 90
+   days after it was made it could show one that was cancelled (or that
+   expired) to its person again, and an owner's app would add them if they
+   accepted it — they did want it once, but the owner had changed their
+   mind. Declining isn't signed: a server can keep showing a declined
+   invitation, though it can't accept it for them. It knows the addresses
+   people invite, also of people with no account here, until the
+   invitation ends. Whether an address has an account doesn't show in the
+   answer to an invitation, but how long the server takes to answer isn't
+   made constant.

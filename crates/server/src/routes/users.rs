@@ -26,8 +26,10 @@ pub struct SearchQuery {
     q: String,
 }
 
-/// People the caller can share with: active humans matching the query, plus
-/// the caller's own agents. Never lists vaults or any content.
+/// Whom the apps suggest when sharing: people the caller already shares a
+/// vault or a note with (with the `search` directory: anyone) matching the
+/// query, plus the caller's own agents. Anyone else is invited by their
+/// full address (§5.6). Never lists vaults or any content.
 pub async fn search(
     State(state): State<AppState>,
     who: Principal,
@@ -46,8 +48,8 @@ pub async fn search(
     );
     let ids = match state.instance.settings().user_directory {
         UserDirectory::Search => repo::users::search(&state.db, &who.user_id, &term, &like).await?,
-        UserDirectory::ExactEmail | UserDirectory::Other => {
-            repo::users::search_exact_email(&state.db, &who.user_id, &term, &like).await?
+        UserDirectory::Private | UserDirectory::Other => {
+            repo::users::search_known(&state.db, &who.user_id, &term, &like).await?
         }
     };
     let mut out = Vec::with_capacity(ids.len());

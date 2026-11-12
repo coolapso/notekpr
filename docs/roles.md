@@ -11,7 +11,7 @@ its first owner.
 | Empty the trash (delete for good), and undo that for a while | ✓ | ✓ | | |
 | See the vault's activity log | ✓ | ✓ | | |
 | Delete other people's comments | ✓ | | | |
-| Add and remove people, change their roles, make owners | ✓ | | | |
+| Invite and remove people, change their roles, make owners | ✓ | | | |
 | Share a single note with someone outside the vault | ✓ | | | |
 | Rename the vault, set its icon, archive it, *Viewers can comment* | ✓ | | | |
 | Rotate the vault's encryption key | ✓ | | | |
@@ -47,8 +47,10 @@ settings, so they can't lock anyone out or take the vault over.
 
 ## Agents
 
-AI agents and scripts can be editors or viewers, never admins or owners
-([agents](agents.md)).
+People join by invitation, which they accept (as admin, editor or viewer:
+owners are made from members); any owner's app then adds them. AI agents
+and scripts can be editors or viewers, never admins or owners, and join
+their owner's vaults without one ([agents](agents.md)).
 
 ## Single notes
 

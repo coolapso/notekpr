@@ -42,11 +42,27 @@ def library_file(path, *shapes):
         json.dump({"type": "excalidrawlib", "version": 2, "source": "test", "libraryItems": items}, f)
 
 
+def canvas(b):
+    """The canvas, as the origin of pointer actions, once no toast shows.
+    Toasts take the pointer (their text can be selected), so a press where
+    one shows over the canvas would miss it; they go after 4 seconds
+    (errors 8)."""
+    b.wait("return !document.querySelector('.toast')", 10, "the toasts to go")
+    return {"element-6066-11e4-a52e-4f735466cecf": b.find(CANVAS)}
+
+
+def canvas_click(b, x, y):
+    """A real mouse click at (`x`, `y`) from the canvas's centre."""
+    req("POST", b.p("/actions"), {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+        "actions": [{"type": "pointerMove", "origin": canvas(b), "x": x, "y": y},
+                    {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]}]})
+
+
 def drag(b, frm, to, steps=6, hold=None, pause=0):
     """A mouse drag on the canvas, from and to points relative to its
     centre; `hold`: a key held down meanwhile; `pause`: ms held still at
     the end before letting go."""
-    el = {"element-6066-11e4-a52e-4f735466cecf": b.find(CANVAS)}
+    el = canvas(b)
     acts = [{"type": "pointerMove", "origin": el, "x": frm[0], "y": frm[1]}, {"type": "pointerDown", "button": 0}]
     for i in range(1, steps + 1):
         x = frm[0] + (to[0] - frm[0]) * i / steps
@@ -137,7 +153,7 @@ def main():
 
         # A label on the arrow (double-click it) sits in a gap of its line,
         # as in Excalidraw: the line is cut around it.
-        el = {"element-6066-11e4-a52e-4f735466cecf": a.find(CANVAS)}
+        el = canvas(a)
         click = [{"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]
         req("POST", a.p("/actions"), {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
             "actions": [{"type": "pointerMove", "origin": el, "x": 25, "y": -100}] + click + click}]})
@@ -177,7 +193,7 @@ def main():
         a.shot("drawings-line")
         # Editing its points (Enter): the middle one deleted.
         tool(a, KEYS["enter"])
-        a.click_at(CANVAS, -210, 220)
+        canvas_click(a, -210, 220)
         time.sleep(0.3)
         tool(a, KEYS["backspace"])
         tool(a, KEYS["escape"])
@@ -189,7 +205,7 @@ def main():
         tool(a, KEYS["escape"])
         tool(a, "l")
         drag(a, (-50, -260), (150, -260))
-        el = {"element-6066-11e4-a52e-4f735466cecf": a.find(CANVAS)}
+        el = canvas(a)
         req("POST", a.p("/actions"), {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
             "actions": [{"type": "pointerMove", "origin": el, "x": 50, "y": -260}] + click + click}]})
         time.sleep(0.5)
@@ -202,7 +218,7 @@ def main():
 
         # Alt+drag: a copy of the box moves, the box stays.
         tool(a, KEYS["escape"])
-        a.click_at(CANVAS, -250, -100)
+        canvas_click(a, -250, -100)
         time.sleep(0.3)
         # (Its edges are handles once selected: from inside it.)
         drag(a, (-200, -80), (-200, 270), hold=KEYS["alt"])
@@ -233,7 +249,7 @@ def main():
         a.shot("drawings-picture")
         # Enter crops it: its right side dragged in shows less of it.
         tool(a, KEYS["escape"])
-        a.click_at(CANVAS, 200, 150)
+        canvas_click(a, 200, 150)
         time.sleep(0.3)
         tool(a, KEYS["enter"])
         drag(a, (262, 150), (230, 150))
@@ -263,7 +279,7 @@ def main():
 
         # A sticky note (N): a click places it, its text is typed in.
         tool(a, "n")
-        a.click_at(CANVAS, 250, -150)
+        canvas_click(a, 250, -150)
         time.sleep(0.5)
         a.keys("Buy seeds")
         a.chord(KEYS["escape"])
@@ -285,7 +301,7 @@ def main():
         # Selected on its own (a click on its name), it is exported alone:
         # the menu says so, and the picture is what is in it, its size,
         # cut to it, without its outline or name. (The clipboard is caught.)
-        a.click_at(CANVAS, -290, 190)
+        canvas_click(a, -290, 190)
         time.sleep(0.3)
         a.js("""
             window.copied = {};
@@ -365,7 +381,7 @@ def main():
             b.click_el(b.find_text(".tree-item", "Untitled drawing", 20))
             b.find(CANVAS, 10)
             time.sleep(1.5)
-            el = {"element-6066-11e4-a52e-4f735466cecf": b.find(CANVAS)}
+            el = canvas(b)
             req("POST", b.p("/actions"), {"actions": [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
                 "actions": [{"type": "pointerMove", "origin": el, "x": 100, "y": 100}, {"type": "pointerMove", "origin": el, "x": 120, "y": 110, "duration": 50}]}]})
             a.wait("return document.querySelectorAll('.drawing-page .presence .avatar').length >= 1", 15, "the other's avatar")
@@ -432,7 +448,7 @@ def main():
         """, data)
         a.wait(f"return document.querySelectorAll('{LIBRARY_ITEMS}').length == 3", 10, "a dropped library file is imported (once)")
         # Pictures can't go in (Excalidraw's rule).
-        a.click_at(CANVAS, 200, 150)
+        canvas_click(a, 200, 150)
         time.sleep(0.4)
         a.click(".library-pending", 5)
         a.find_text(".toast", "Pictures", 5)
@@ -561,7 +577,7 @@ def main():
 
         # The whole palette, and a link (Ctrl+K) on the top left box.
         tool(a, KEYS["escape"])
-        a.click_at(CANVAS, -250, -100)
+        canvas_click(a, -250, -100)
         time.sleep(0.3)
         a.click(".drawing-props .color-more .pick")
         a.click(".drawing-props .color-grid .pick[title='#9c36b5']")
@@ -577,7 +593,7 @@ def main():
         # Two fingers pinching apart zoom in.
         tool(a, KEYS["escape"])
         before = a.text(".drawing-zoom .zoom-value")
-        el = {"element-6066-11e4-a52e-4f735466cecf": a.find(CANVAS)}
+        el = canvas(a)
         finger = lambda name, x0, x1: {"type": "pointer", "id": name, "parameters": {"pointerType": "touch"}, "actions": [
             {"type": "pointerMove", "origin": el, "x": x0, "y": 250}, {"type": "pointerDown", "button": 0},
             {"type": "pointerMove", "origin": el, "x": (x0 + x1) // 2, "y": 250, "duration": 100},

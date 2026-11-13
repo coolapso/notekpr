@@ -32,12 +32,69 @@ pub fn clear_timeout(id: i32) {
     window().clear_timeout_with_handle(id);
 }
 
-/// Run `f` every `ms` milliseconds for the lifetime of the page.
+/// Run `f` every `ms` milliseconds for the lifetime of the page. For a
+/// shorter life, [`Interval`].
 pub fn set_interval(ms: i32, f: impl FnMut() + 'static) {
     let cb = Closure::wrap(Box::new(f) as Box<dyn FnMut()>);
     let _ = window()
         .set_interval_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), ms);
     cb.forget();
+}
+
+/// Runs `f` every `ms` milliseconds until it is dropped.
+pub struct Interval {
+    id: i32,
+    _cb: Closure<dyn FnMut()>,
+}
+
+impl Interval {
+    pub fn new(ms: i32, f: impl FnMut() + 'static) -> Interval {
+        let cb = Closure::wrap(Box::new(f) as Box<dyn FnMut()>);
+        let id = window()
+            .set_interval_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), ms)
+            .unwrap_or(0);
+        Interval { id, _cb: cb }
+    }
+}
+
+impl Drop for Interval {
+    // Cleared before the closure goes (fields drop after this).
+    fn drop(&mut self) {
+        window().clear_interval_with_handle(self.id);
+    }
+}
+
+/// An event listener on `target`, removed when dropped. Dropping it from
+/// inside its own call is fine: wasm-bindgen frees the closure once that
+/// call returns.
+pub struct Listener {
+    target: web_sys::EventTarget,
+    event: &'static str,
+    cb: Closure<dyn FnMut(web_sys::Event)>,
+}
+
+impl Listener {
+    pub fn new(
+        target: &web_sys::EventTarget,
+        event: &'static str,
+        f: impl FnMut(web_sys::Event) + 'static,
+    ) -> Listener {
+        let cb = Closure::wrap(Box::new(f) as Box<dyn FnMut(web_sys::Event)>);
+        let _ = target.add_event_listener_with_callback(event, cb.as_ref().unchecked_ref());
+        Listener {
+            target: target.clone(),
+            event,
+            cb,
+        }
+    }
+}
+
+impl Drop for Listener {
+    fn drop(&mut self) {
+        let _ = self
+            .target
+            .remove_event_listener_with_callback(self.event, self.cb.as_ref().unchecked_ref());
+    }
 }
 
 pub async fn sleep(ms: i32) {

@@ -22,15 +22,6 @@ pub(super) fn connect_socket() {
     });
     let sock = Socket::new(token, on_message, on_state);
     step(|c| c.socket = Some(sock));
-    // Reconnect promptly when the browser comes back online.
-    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
-        if let Some(s) = step(|c| c.socket.clone()) {
-            s.kick();
-        }
-    }) as Box<dyn FnMut()>);
-    use wasm_bindgen::JsCast;
-    let _ = util::window().add_event_listener_with_callback("online", cb.as_ref().unchecked_ref());
-    cb.forget();
 }
 
 /// Hand a message to the socket; false if it isn't open.

@@ -36,6 +36,10 @@ pub struct Socket {
     on_state: OnState,
     // Keep JS callbacks alive for the current connection.
     callbacks: RefCell<Vec<Closure<dyn FnMut(JsValue)>>>,
+    /// The ping timer and the browser's "online" listener: they go with
+    /// [`Socket::stop`], or with the socket.
+    watchdog: RefCell<Option<util::Interval>>,
+    online: RefCell<Option<util::Listener>>,
 }
 
 /// How long to keep retrying quickly after the server said it's restarting,
@@ -77,9 +81,19 @@ impl Socket {
             on_message,
             on_state,
             callbacks: RefCell::new(Vec::new()),
+            watchdog: RefCell::new(None),
+            online: RefCell::new(None),
         });
         Socket::connect(&s);
-        Socket::watchdog(&s);
+        Socket::start_watchdog(&s);
+        // Reconnect promptly when the browser comes back online.
+        let me = Rc::downgrade(&s);
+        let online = util::Listener::new(&util::window(), "online", move |_| {
+            if let Some(s) = me.upgrade() {
+                s.kick();
+            }
+        });
+        *s.online.borrow_mut() = Some(online);
         s
     }
 
@@ -126,6 +140,8 @@ impl Socket {
             close_detached(&ws);
         }
         self.callbacks.borrow_mut().clear();
+        self.watchdog.borrow_mut().take();
+        self.online.borrow_mut().take();
     }
 
     /// Force a reconnect (e.g. after coming back online).
@@ -256,9 +272,9 @@ impl Socket {
     }
 
     /// Ping regularly; drop connections that have gone silent (half-open TCP).
-    fn watchdog(this: &Rc<Socket>) {
+    fn start_watchdog(this: &Rc<Socket>) {
         let me = Rc::downgrade(this);
-        util::set_interval(20_000, move || {
+        let timer = util::Interval::new(20_000, move || {
             let Some(s) = me.upgrade() else { return };
             if s.stopped.get() || s.state.get() != ConnState::Open {
                 return;
@@ -273,5 +289,6 @@ impl Socket {
                 nonce: now_ms() as u64,
             });
         });
+        *this.watchdog.borrow_mut() = Some(timer);
     }
 }

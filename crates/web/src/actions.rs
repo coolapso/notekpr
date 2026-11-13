@@ -3624,18 +3624,27 @@ pub fn pick_files(
     if directory {
         let _ = input.set_attribute("webkitdirectory", "");
     }
-    let cell = Rc::new(RefCell::new(Some(on_files)));
-    let inp = input.clone();
-    let cb = wasm_bindgen::closure::Closure::wrap(Box::new(move |_e: web_sys::Event| {
-        let files: Vec<web_sys::File> = inp
-            .files()
-            .map(|l| (0..l.length()).filter_map(|i| l.get(i)).collect())
-            .unwrap_or_default();
-        if let Some(f) = cell.borrow_mut().take() {
+    // The listeners keep themselves (and the input) until the picker closes
+    // with files ("change") or without ("cancel"), then remove themselves.
+    // A browser that doesn't say "cancel" keeps them after a cancel.
+    let held: Rc<RefCell<Vec<util::Listener>>> = Rc::default();
+    let done = {
+        let held = held.clone();
+        move || drop(std::mem::take(&mut *held.borrow_mut()))
+    };
+    let (inp, finish) = (input.clone(), done.clone());
+    let mut on_files = Some(on_files);
+    let change = util::Listener::new(&input, "change", move |_| {
+        finish();
+        if let Some(f) = on_files.take() {
+            let files: Vec<web_sys::File> = inp
+                .files()
+                .map(|l| (0..l.length()).filter_map(|i| l.get(i)).collect())
+                .unwrap_or_default();
             f(files);
         }
-    }) as Box<dyn FnMut(web_sys::Event)>);
-    let _ = input.add_event_listener_with_callback("change", cb.as_ref().unchecked_ref());
-    cb.forget();
+    });
+    let cancel = util::Listener::new(&input, "cancel", move |_| done());
+    held.borrow_mut().extend([change, cancel]);
     input.click();
 }

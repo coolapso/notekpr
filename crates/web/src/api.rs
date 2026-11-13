@@ -13,10 +13,23 @@ use crate::util::{self, window};
 
 pub const BASE: &str = "/api/v1";
 
+/// Where the API is: on the page's own server, or in the desktop app at the
+/// server the person chose ([`crate::desktop`]).
+fn base() -> String {
+    match crate::desktop::server() {
+        Some(s) => format!("{s}{BASE}"),
+        None => BASE.to_string(),
+    }
+}
+
 /// What this app says it is in [`APP_HEADER`] and the WebSocket's `auth`
 /// message.
 pub fn app() -> String {
-    app_id("web")
+    app_id(if crate::desktop::is_desktop() {
+        "desktop"
+    } else {
+        "web"
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -177,7 +190,7 @@ async fn fetch(
     if let Some(b) = body {
         opts.set_body(b);
     }
-    let url = format!("{BASE}{path}");
+    let url = format!("{}{path}", base());
     let req = Request::new_with_str_and_init(&url, &opts).map_err(Error::network)?;
     JsFuture::from(window().fetch_with_request(&req))
         .await

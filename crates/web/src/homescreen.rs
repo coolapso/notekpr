@@ -32,7 +32,7 @@ pub enum Phone {
 /// runs from the home screen, nor once the offer was put away in this
 /// browser.
 pub fn offer() -> Option<Phone> {
-    if storage::home_screen_offer_hidden() || from_home_screen() {
+    if storage::home_screen_offer_hidden() || from_home_screen() || crate::desktop::is_desktop() {
         return None;
     }
     phone()

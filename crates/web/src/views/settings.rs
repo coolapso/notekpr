@@ -24,6 +24,9 @@ pub fn Settings(tab: String) -> impl IntoView {
             ("agents", "AI agents", "bot"),
             ("editor", "Editor", "edit"),
         ];
+        if crate::desktop::is_desktop() {
+            t.insert(1, ("app", "Desktop app", "device"));
+        }
         if is_admin {
             t.push(("admin", "Administration", "settings"));
         }
@@ -52,6 +55,7 @@ pub fn Settings(tab: String) -> impl IntoView {
                         "security" => view! { <Security/> }.into_any(),
                         "agents" => view! { <Agents/> }.into_any(),
                         "editor" => view! { <EditorPrefs/> }.into_any(),
+                        "app" if crate::desktop::is_desktop() => view! { <DesktopApp/> }.into_any(),
                         "admin" => view! { <Admin/> }.into_any(),
                         _ => view! { <Account/> }.into_any(),
                     }}
@@ -63,6 +67,7 @@ pub fn Settings(tab: String) -> impl IntoView {
 
 #[component]
 fn Account() -> impl IntoView {
+    let here = crate::desktop::here();
     let ui = ui();
     let u = ui.user.get_untracked();
     // What an export leaves out (everything goes, unless unticked).
@@ -174,12 +179,12 @@ fn Account() -> impl IntoView {
         <div class="row">
             <button class="btn danger delete-account" on:click=move |_| ui.modal.set(Some(Modal::DeleteAccount))>"Delete my account…"</button>
         </div>
-        <h3>"This browser"</h3>
-        <p class="muted small">"Signing out keeps this browser as one of your devices: it keeps its key and your unsent changes, so next time you only sign in and your notes open right away."</p>
-        <p class="muted small">"On a shared or borrowed computer, forget this browser instead: it signs out, removes this device from your account and deletes its key, unsent changes and local copy of your notes. Signing in here again then needs approval from another device or your recovery key."</p>
+        <h3>{util::capitalize(here)}</h3>
+        <p class="muted small">{format!("Signing out keeps {here} as one of your devices: it keeps its key and your unsent changes, so next time you only sign in and your notes open right away.")}</p>
+        <p class="muted small">{format!("On a shared or borrowed computer, forget {here} instead: it signs out, removes this device from your account and deletes its key, unsent changes and local copy of your notes. Signing in here again then needs approval from another device or your recovery key.")}</p>
         <div class="row">
             <button class="btn" on:click=move |_| leptos::task::spawn_local(state::sign_out())><Icon name="logout"/>" Sign out"</button>
-            <button class="btn danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>"Forget this browser"</button>
+            <button class="btn danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>{format!("Forget {here}")}</button>
         </div>
         <h3>"Version"</h3>
         <p class="muted small app-version">{versions}</p>
@@ -237,7 +242,7 @@ fn Devices() -> impl IntoView {
                             });
                         }>"Rename"</button>
                         {d.current.then(|| view! {
-                            <button class="btn small danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>"Forget this browser"</button>
+                            <button class="btn small danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>{format!("Forget {}", crate::desktop::here())}</button>
                         })}
                         <button class="btn small danger" class:hidden=d.current on:click=move |_| {
                             let id = id2.clone();
@@ -262,8 +267,164 @@ fn Devices() -> impl IntoView {
         </div>
         <OfflineSetting/>
         <h3>"Add the command-line client"</h3>
-        <p class="muted small">"Install the notekpr command-line client and run " <code>{format!("notekpr login --server {}", util::window().location().origin().unwrap_or_default())}</code>
+        <p class="muted small">"Install the notekpr command-line client and run " <code>{format!("notekpr login --server {}", crate::desktop::server().unwrap_or_else(|| util::window().location().origin().unwrap_or_default()))}</code>
             ". It will show a code to confirm here, then ask this device to approve it."</p>
+        {crate::desktop::is_desktop().then(|| view! {
+            <p class="muted small">"The desktop app does what most people need the command-line client for — the Markdown folder too. It's for scripts, AI agents (its gateway) and computers without a screen."</p>
+        })}
+    }
+}
+
+/// The desktop app's own settings ([`crate::desktop`]): the tray, starting
+/// at login, the Markdown folder and the server.
+#[component]
+fn DesktopApp() -> impl IntoView {
+    let ui = ui();
+    let info = RwSignal::new(crate::desktop::info());
+    let reload = move || {
+        leptos::task::spawn_local(async move {
+            if let Ok(i) = crate::desktop::refresh().await {
+                info.set(Some(i));
+            }
+        });
+    };
+    let tray = move || info.get().is_some_and(|i| i.tray);
+    let set = move |what: &'static str, on: bool| {
+        leptos::task::spawn_local(async move {
+            let r = match what {
+                "tray" => crate::desktop::set_close_to_tray(on).await,
+                _ => crate::desktop::set_autostart(on).await,
+            };
+            if let Err(e) = r {
+                state::error(e);
+            }
+            reload();
+        });
+    };
+    let busy = RwSignal::new(false);
+    let choose = move |_| {
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            let r: Result<bool, String> = async {
+                let Some(p) = crate::desktop::choose_folder().await? else {
+                    return Ok(false);
+                };
+                if let Some(why) = p.refused {
+                    return Err(why);
+                }
+                let handoff = step(|c| state::desktop_handoff(c))
+                    .ok_or("This computer isn't set up as one of your devices yet.")?;
+                crate::desktop::folder_start(handoff, p.pick).await?;
+                Ok(true)
+            }
+            .await;
+            match r {
+                Ok(true) => {
+                    state::success("Your notes are being written into the Markdown folder.")
+                }
+                Ok(false) => {}
+                Err(e) if e == "cancelled" => {}
+                Err(e) => state::error(e),
+            }
+            busy.set(false);
+        });
+    };
+    let stop = move |_| {
+        leptos::task::spawn_local(async move {
+            match crate::desktop::folder_off().await {
+                Ok(()) => state::info("The Markdown folder is no longer kept in sync."),
+                Err(e) if e == "cancelled" => {}
+                Err(e) => state::error(e),
+            }
+        });
+    };
+    let open = move |_| {
+        leptos::task::spawn_local(async move {
+            if let Err(e) = crate::desktop::reveal_folder().await {
+                state::error(e);
+            }
+        });
+    };
+    let retry = move |_| {
+        leptos::task::spawn_local(async move {
+            if let Err(e) = crate::desktop::folder_retry().await {
+                state::error(e);
+            }
+        });
+    };
+    let change_server = move |_| {
+        leptos::task::spawn_local(async move {
+            let typed = ask::input("Use another server")
+                .label("The server's address")
+                .value(crate::desktop::server().unwrap_or_default())
+                .required()
+                .button("Continue")
+                .await;
+            if let Some(url) = typed
+                && let Err(e) = crate::desktop::set_server(url.trim()).await
+                && e != "cancelled"
+            {
+                state::error(e);
+            }
+        });
+    };
+    use crate::desktop::FolderStatus;
+    view! {
+        <h3>"In the background"</h3>
+        <label class="check">
+            <input type="checkbox" class="close-to-tray" prop:checked=move || info.get().is_some_and(|i| i.close_to_tray && i.tray)
+                disabled=move || !tray()
+                on:change=move |ev| set("tray", event_target_checked(&ev))/>
+            " Close to the tray"
+        </label>
+        <p class="muted small">{move || if tray() {
+            "Closing the window keeps notekpr running in the tray: it stays in sync and opens again at once. Quit from the tray's menu."
+        } else {
+            "This desktop shows no tray icons, so closing the window quits notekpr."
+        }}</p>
+        <label class="check">
+            <input type="checkbox" class="autostart" prop:checked=move || info.get().is_some_and(|i| i.autostart)
+                on:change=move |ev| set("autostart", event_target_checked(&ev))/>
+            " Start notekpr when you log in"
+        </label>
+        <p class="muted small">"It starts in the tray, without a window, and keeps your notes and the Markdown folder in sync from the start."</p>
+
+        <h3>"Markdown folder"</h3>
+        <p class="muted small">"Keep your notes as a folder of ordinary Markdown files as well, synced both ways while notekpr runs: edit them with any editor — Obsidian, VS Code, Neovim — and changes reach everyone. Each vault is a folder in it."</p>
+        {move || match ui.desktop.get().folder {
+            FolderStatus::Off => view! {
+                <div class="row">
+                    <button class="btn choose-folder" disabled=move || busy.get() on:click=choose><Icon name="folder"/>" Choose a folder…"</button>
+                    <Show when=move || busy.get()><span class="spinner inline"></span></Show>
+                </div>
+                <p class="muted small">"An empty folder, or one notekpr kept before. The files in it are decrypted: readable by any program you run on this computer."</p>
+            }.into_any(),
+            FolderStatus::Starting { dir } => view! {
+                <p class="folder-status">{format!("Starting {dir}…")}</p>
+            }.into_any(),
+            FolderStatus::Syncing { dir, vaults } => view! {
+                <p class="folder-status">{format!("Keeping {dir} in sync ({vaults} vault{}).", if vaults == 1 { "" } else { "s" })}</p>
+                <div class="row">
+                    <button class="btn" on:click=open><Icon name="folder"/>" Open the folder"</button>
+                    <button class="btn danger stop-folder" on:click=stop>"Stop…"</button>
+                </div>
+            }.into_any(),
+            FolderStatus::Stopped { dir, error } => view! {
+                <div class="alert error">{format!("{dir} isn't kept in sync: {error}")}</div>
+                <div class="row">
+                    <button class="btn" on:click=retry>"Try again"</button>
+                    <button class="btn danger stop-folder" on:click=stop>"Stop…"</button>
+                </div>
+            }.into_any(),
+        }}
+
+        <h3>"Server"</h3>
+        <p class="small">{crate::desktop::server().unwrap_or_default()}</p>
+        <div class="row">
+            <button class="btn" on:click=change_server>"Use another server…"</button>
+        </div>
+        <h3>"Version"</h3>
+        <p class="muted small">{move || info.get().map(|i| format!("notekpr desktop app {}", i.version))}</p>
     }
 }
 

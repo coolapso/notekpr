@@ -225,6 +225,9 @@ textarea.input { resize: vertical; }
 .auth-card { width: min(440px, 100%); background: var(--bg); border: 1px solid var(--border); border-radius: 16px; padding: 28px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 14px; }
 .auth-card h1 { margin: 6px 0 0; font-size: 22px; }
 .auth-card p { margin: 0; color: var(--fg-2); }
+.auth-card form.connect { display: flex; flex-direction: column; gap: 10px; }
+.auth-card .desktop-server { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.auth-card .sign-in-code { font: 600 26px var(--mono); letter-spacing: .1em; text-align: center; color: var(--fg); }
 .auth-foot { color: var(--muted); font-size: 12px; margin-top: 16px; }
 .brand { font-weight: 700; font-size: 17px; display: flex; align-items: center; gap: 6px; }
 .logo { color: var(--accent); font-size: 20px; }

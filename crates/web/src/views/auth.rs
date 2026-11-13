@@ -55,7 +55,25 @@ pub fn Login(error: Option<String>) -> impl IntoView {
         .unwrap_or_else(|| "Single sign-on".into());
     let username = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
+    let desktop = crate::desktop::is_desktop();
+    // The desktop app: signing in happens in the browser meanwhile.
+    let waiting = RwSignal::new(false);
+    let failed = RwSignal::new(None::<String>);
     let start_sso = move |_| {
+        if desktop {
+            waiting.set(true);
+            failed.set(None);
+            leptos::task::spawn_local(async move {
+                let r = state::desktop_sign_in().await;
+                waiting.set(false);
+                match r {
+                    Ok(()) => {}
+                    Err(e) if e == "cancelled" => {}
+                    Err(e) => failed.set(Some(e)),
+                }
+            });
+            return;
+        }
         let route = state::current_route();
         let rt = if matches!(route, state::Route::Home) {
             "/".to_string()
@@ -81,9 +99,16 @@ pub fn Login(error: Option<String>) -> impl IntoView {
         <Card>
             <h1>"Sign in"</h1>
             {error.map(|e| view! { <div class="alert error">{e}</div> })}
+            {move || failed.get().map(|e| view! { <div class="alert error">{e}</div> })}
             {homescreen::offer().map(|phone| view! { <HomeScreenOffer phone/> })}
             {oidc.then(|| view! {
-                <button class="btn primary big" on:click=start_sso>{format!("Continue with {sso_name}")}</button>
+                <Show when=move || waiting.get() fallback=move || view! {
+                    <button class="btn primary big" on:click=start_sso>{format!("Continue with {sso_name}")}</button>
+                }>
+                    <p class="muted">"Sign in in your browser: notekpr opened it for you. Before it sends you back here, it shows a code: continue there only if it is this one."</p>
+                    <p class="sign-in-code">{move || ui.desktop.get().sign_in_code.unwrap_or_default()}</p>
+                    <button class="btn" on:click=move |_| crate::desktop::cancel_sign_in()>"Cancel"</button>
+                </Show>
             })}
             {(!oidc && !dev).then(|| view! { <p class="muted">"No sign-in method is configured on this server."</p> })}
             {dev.then(|| view! {
@@ -93,6 +118,10 @@ pub fn Login(error: Option<String>) -> impl IntoView {
                             <div class="dev-title"><Icon name="alert"/>" Demo"</div>
                             <p class="small muted">"Sign in as alice (most to see), bob, carol, dave or eve — no password; other visitors may be signed in as them too. Each browser tab keeps its own session."</p>
                             <p class="small muted">{format!("Everything is deleted at {at}, when the demo starts over.")}</p>
+                        }.into_any(),
+                        None if desktop => view! {
+                            <div class="dev-title"><Icon name="alert"/>" Development mode"</div>
+                            <p class="small muted">"Sign in as any user without a password. For a second person, start the app again with another profile: notekpr-desktop --profile bob."</p>
                         }.into_any(),
                         None => view! {
                             <div class="dev-title"><Icon name="alert"/>" Development mode"</div>
@@ -110,6 +139,57 @@ pub fn Login(error: Option<String>) -> impl IntoView {
                         }).collect_view()}
                     </div>
                 </div>
+            })}
+            {desktop.then(|| view! {
+                <p class="small muted desktop-server">
+                    {crate::desktop::server().map(|s| format!("On {s} · "))}
+                    <button class="btn small ghost" on:click=move |_| ui.phase.set(Phase::Connect { error: None })>"Use another server"</button>
+                </p>
+            })}
+        </Card>
+    }
+}
+
+/// The desktop app's first screen: which server the notes are on
+/// ([`crate::desktop::set_server`]; the app checks it and starts again).
+#[component]
+pub fn Connect(error: Option<String>) -> impl IntoView {
+    let ui = ui();
+    let current = crate::desktop::server();
+    let url = RwSignal::new(current.clone().unwrap_or_default());
+    let busy = RwSignal::new(false);
+    let err = RwSignal::new(error);
+    let had = current.is_some();
+    let submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
+        let u = url.get_untracked();
+        if u.trim().is_empty() {
+            return;
+        }
+        busy.set(true);
+        err.set(None);
+        leptos::task::spawn_local(async move {
+            // A new server starts the app again; the same one changes nothing.
+            match crate::desktop::set_server(u.trim()).await {
+                Ok(()) => ui.phase.set(Phase::SignedOut { error: None }),
+                Err(e) if e == "cancelled" => {}
+                Err(e) => err.set(Some(e)),
+            }
+            busy.set(false);
+        });
+    };
+    view! {
+        <Card>
+            <h1>"Your notekpr server"</h1>
+            <p class="muted">"The address of the server your notes are on — the one you open notekpr at in a browser."</p>
+            {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
+            <form class="connect" on:submit=submit>
+                <input class="input server-address" type="url" inputmode="url" placeholder="https://notes.example.com"
+                    use:focus_on_mount prop:value=move || url.get() on:input=move |ev| url.set(event_target_value(&ev))/>
+                <button class="btn primary" type="submit" disabled=move || busy.get()>"Connect"</button>
+            </form>
+            {had.then(|| view! {
+                <button class="btn ghost" on:click=move |_| ui.phase.set(Phase::SignedOut { error: None })>"Back"</button>
             })}
         </Card>
     }
@@ -302,6 +382,7 @@ pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl 
 pub fn phase_view(p: Phase) -> AnyView {
     match p {
         Phase::Loading => view! { <Loading/> }.into_any(),
+        Phase::Connect { error } => view! { <Connect error=error/> }.into_any(),
         Phase::Fatal(m) => view! { <Fatal msg=m/> }.into_any(),
         Phase::SignedOut { error } => view! { <Login error=error/> }.into_any(),
         Phase::Setup => view! { <Setup/> }.into_any(),

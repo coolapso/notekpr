@@ -7,7 +7,9 @@ use super::*;
 
 pub fn device_name() -> String {
     let ua = util::window().navigator().user_agent().unwrap_or_default();
-    let browser = if ua.contains("Firefox/") {
+    let browser = if crate::desktop::is_desktop() {
+        "notekpr app"
+    } else if ua.contains("Firefox/") {
         "Firefox"
     } else if ua.contains("Edg/") {
         "Edge"
@@ -36,6 +38,24 @@ pub fn device_name() -> String {
 
 pub async fn boot() {
     let ui = ui();
+    // The desktop app: its server, first (crate::desktop).
+    if crate::desktop::is_desktop() {
+        match crate::desktop::refresh().await {
+            Ok(info) => {
+                ui.desktop.set(info.status.clone());
+                crate::desktop::watch(super::desktop_status);
+                if info.server.is_none() {
+                    ui.phase.set(Phase::Connect { error: None });
+                    return;
+                }
+            }
+            Err(e) => {
+                ui.phase
+                    .set(Phase::Fatal(format!("The app didn't answer: {e}")));
+                return;
+            }
+        }
+    }
     api::on_outdated(|| {
         let ui = self::ui();
         if !ui.outdated.get_untracked() {
@@ -159,15 +179,49 @@ pub async fn dev_login(username: String) {
     )
     .await
     {
-        Ok(s) => {
-            storage::set_token(&s.token);
-            api::set_token(Some(s.token));
-            after_login().await;
-        }
+        Ok(s) => signed_in(s).await,
         Err(e) => ui.phase.set(Phase::SignedOut {
             error: Some(e.message),
         }),
     }
+}
+
+/// A new session (any way of signing in): keep it, and go on.
+pub async fn signed_in(s: SessionResponse) {
+    storage::set_token(&s.token);
+    api::set_token(Some(s.token));
+    after_login().await;
+}
+
+/// What the desktop app's Markdown folder is handed: this device as this
+/// window keeps it, the account key it was approved for, and the session
+/// (docs/desktop.md). None before the device is set up.
+pub fn desktop_handoff(c: &Core) -> Option<crate::desktop::Handoff> {
+    let me = c.me.as_ref()?;
+    let rec = storage::device(&c.user_id)?;
+    if c.device_id.as_deref() != Some(rec.device_id.as_str()) {
+        return None;
+    }
+    let account = rec
+        .account()
+        .or_else(|| Some(c.account.as_ref()?.public()))?;
+    Some(crate::desktop::Handoff {
+        user_id: c.user_id.clone(),
+        display_name: me.user.display_name.clone(),
+        device_id: rec.device_id,
+        device_secret: rec.secret,
+        account: notekpr_core::b64::encode(&[account.sign_public, account.enc_public].concat()),
+        token: storage::token()?,
+        expires_at: me.session.expires_at,
+    })
+}
+
+/// The desktop app's "Sign in": through the system browser, back to the
+/// app ([`crate::desktop::sign_in`]).
+pub async fn desktop_sign_in() -> Result<(), String> {
+    let s = crate::desktop::sign_in().await?;
+    signed_in(s).await;
+    Ok(())
 }
 
 pub async fn after_login() {
@@ -596,6 +650,8 @@ pub fn sign_out_local(error: Option<String>) {
 pub async fn sign_out() {
     step(flush_now);
     let _ = api::post_empty::<()>("/auth/logout").await;
+    // The desktop app's Markdown folder shared the session that just ended.
+    crate::desktop::signed_out();
     let uid = step(|c| c.user_id.clone());
     offline::signed_out(&uid);
     sign_out_local(None);
@@ -609,9 +665,13 @@ pub async fn forget_browser() {
         flush_now(c);
         c.pending_count()
     });
-    let mut text = vec![
-        "You will be signed out and this browser's key will be deleted, so opening your notes here again needs approval from another device or your recovery key.".to_string(),
-    ];
+    let here = crate::desktop::here();
+    let mut text = vec![format!(
+        "You will be signed out and {here}'s key will be deleted, so opening your notes here again needs approval from another device or your recovery key."
+    )];
+    if crate::desktop::is_desktop() {
+        text.push("The Markdown folder stops too; its files stay where they are.".into());
+    }
     // Without another device, the recovery key is the only way back in.
     let others = api::get::<Vec<DeviceInfo>>("/devices")
         .await
@@ -630,9 +690,10 @@ pub async fn forget_browser() {
             if unsent == 1 { "" } else { "s" }
         ));
     }
-    if !crate::ask::confirm("Forget this browser?")
+    let title = format!("Forget {here}");
+    if !crate::ask::confirm(format!("{title}?"))
         .text(text.join("\n\n"))
-        .button("Forget this browser")
+        .button(title)
         .danger()
         .await
     {
@@ -651,16 +712,21 @@ pub async fn forget_browser() {
         let _ = api::post_empty::<()>("/auth/logout").await;
     }
     sign_out_local(None);
+    // The desktop app's Markdown folder too (it asks, in a dialog of the
+    // system's).
+    crate::desktop::forget_computer();
     // After signing out, which stores unsent changes.
     offline::forget(&uid).await;
     storage::forget_user(&uid);
     crate::cache::forget_user(&uid).await;
+    let here = crate::desktop::here();
     if removed {
-        success("This browser forgot your account.");
+        success(format!("{} forgot your account.", util::capitalize(here)));
     } else {
-        error(
-            "This browser forgot your keys, but could not remove itself from your devices. Remove it in Settings → Devices on another device.",
-        );
+        error(format!(
+            "{} forgot your keys, but could not remove itself from your devices. Remove it in Settings → Devices on another device.",
+            util::capitalize(here)
+        ));
     }
 }
 
@@ -687,8 +753,17 @@ pub async fn delete_account() -> Result<(), String> {
 pub(super) async fn enter_ready() {
     let ui = ui();
     let device_id = step(|c| c.device_id.clone());
-    if let Some(d) = device_id {
-        let _ = api::put::<_, ()>("/me/session/device", &BindDeviceRequest { device_id: d }).await;
+    if let Some(d) = device_id
+        && api::put::<_, ()>("/me/session/device", &BindDeviceRequest { device_id: d })
+            .await
+            .is_ok()
+    {
+        // The session is this device's now: the desktop app's Markdown
+        // folder goes on with it.
+        let expires = step(|c| c.me.as_ref().map(|m| m.session.expires_at));
+        if let (Some(t), Some(e)) = (storage::token(), expires) {
+            crate::desktop::session_changed(&t, e);
+        }
     }
     load_prefs().await;
     refresh_vaults().await;

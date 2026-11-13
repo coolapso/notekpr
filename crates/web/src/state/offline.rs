@@ -47,8 +47,12 @@ pub fn enabled(c: &Core) -> bool {
     !c.user_id.is_empty() && storage::offline_enabled(&c.user_id)
 }
 
-/// Whether this browser can do it at all (service workers need HTTPS or localhost).
+/// Whether this browser can do it at all (service workers need HTTPS or
+/// localhost). The desktop app can: its files are on the computer already.
 pub fn supported() -> bool {
+    if crate::desktop::is_desktop() {
+        return true;
+    }
     let w = util::window();
     w.is_secure_context()
         && js_sys::Reflect::has(&w.navigator(), &"serviceWorker".into()).unwrap_or(false)
@@ -154,6 +158,9 @@ pub async fn enable() -> Result<(), String> {
     };
     storage::set_offline_enabled(&uid, true);
     save(&uid, &b);
+    if crate::desktop::is_desktop() {
+        return Ok(());
+    }
     register_worker().await
 }
 
@@ -182,6 +189,10 @@ pub(super) fn signed_out(uid: &str) {
 
 /// (Re)install the service worker if the setting is on (a browser may drop it).
 pub(super) async fn ensure_worker() {
+    // The desktop app has its files with it: no worker, no copy of them.
+    if crate::desktop::is_desktop() {
+        return;
+    }
     if step(|c| enabled(c))
         && supported()
         && let Err(e) = register_worker().await
@@ -199,7 +210,7 @@ async fn register_worker() -> Result<(), String> {
 }
 
 async fn unregister_worker() {
-    if !supported() {
+    if !supported() || crate::desktop::is_desktop() {
         return;
     }
     let sw = util::window().navigator().service_worker();
@@ -298,9 +309,10 @@ pub(super) async fn finish_online() {
             // Removed from the account while we were away: forget its keys.
             forget(&uid).await;
             storage::clear_device(&uid);
-            sign_out_local(Some(
-                "This browser was removed from your account. Sign in again to use it.".into(),
-            ));
+            sign_out_local(Some(format!(
+                "{} was removed from your account. Sign in again to use it.",
+                util::capitalize(crate::desktop::here())
+            )));
             return;
         }
         Err(_) => {

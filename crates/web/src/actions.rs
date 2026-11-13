@@ -2543,7 +2543,8 @@ pub async fn open_in_tab(vault: &str, id: &str) {
     let name = state::step(|c| c.entry(vault, id))
         .map(|e| e.path)
         .unwrap_or_default();
-    if !util::opens_inline(&name) {
+    // The desktop app's window opens no tabs: a download it is.
+    if !util::opens_inline(&name) || crate::desktop::is_desktop() {
         download_attachment(vault, id).await;
         return;
     }

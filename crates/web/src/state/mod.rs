@@ -43,6 +43,10 @@ use crate::ws::{ConnState, Socket};
 #[derive(Clone, Debug, PartialEq)]
 pub enum Phase {
     Loading,
+    /// The desktop app, before a server was chosen ([`crate::desktop`]).
+    Connect {
+        error: Option<String>,
+    },
     SignedOut {
         error: Option<String>,
     },
@@ -302,6 +306,8 @@ pub enum Modal {
 #[derive(Clone, Copy)]
 pub struct Ui {
     pub phase: RwSignal<Phase>,
+    /// The desktop app's status (its Markdown folder), as it last said.
+    pub desktop: RwSignal<crate::desktop::Status>,
     pub user: RwSignal<Option<UserInfo>>,
     pub server: RwSignal<Option<ServerInfo>>,
     pub vaults: RwSignal<Vec<VaultView>>,
@@ -375,6 +381,7 @@ pub fn init_ui() -> Ui {
     };
     let ui = Ui {
         phase: RwSignal::new(Phase::Loading),
+        desktop: RwSignal::new(Default::default()),
         user: RwSignal::new(None),
         server: RwSignal::new(None),
         vaults: RwSignal::new(vec![]),
@@ -452,6 +459,17 @@ pub fn after_step(f: impl FnOnce() + 'static) {
 fn run_later() {
     while let Some(f) = LATER.with(|l| l.borrow_mut().pop_front()) {
         f();
+    }
+}
+
+/// What the desktop app says now ([`crate::desktop::watch`]): shown in its
+/// settings; from the tray, "Settings" opens them.
+pub fn desktop_status(s: crate::desktop::Status) {
+    let ui = ui();
+    let asked = s.show_settings > ui.desktop.get_untracked().show_settings;
+    ui.desktop.set(s);
+    if asked && ui.phase.get_untracked() == Phase::Ready {
+        navigate(Route::Settings("app".into()));
     }
 }
 

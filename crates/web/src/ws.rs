@@ -48,6 +48,13 @@ const RESTART_WINDOW_MS: i64 = 60_000;
 const RESTART_QUIET_MS: i64 = 15_000;
 
 fn ws_url() -> String {
+    // The desktop app: at the server the person chose.
+    if let Some(s) = crate::desktop::server() {
+        let s = s
+            .replacen("https://", "wss://", 1)
+            .replacen("http://", "ws://", 1);
+        return format!("{s}/api/v1/ws");
+    }
     let loc = util::window().location();
     let proto = if loc.protocol().unwrap_or_default() == "https:" {
         "wss"

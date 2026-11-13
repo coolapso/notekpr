@@ -576,6 +576,15 @@ pub fn encode_square(
     Some((ty.to_string(), notekpr_core::b64::decode(data).ok()?))
 }
 
+/// `s` with its first letter in upper case ("this browser" → "This browser").
+pub fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

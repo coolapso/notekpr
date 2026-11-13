@@ -21,7 +21,6 @@ use std::rc::Rc;
 
 use notekpr_core::doc::{Entry, EntryKind};
 use notekpr_core::paths;
-use notekpr_core::yrs::updates::encoder::Encode;
 use notekpr_draw::fonts::{self, FontFace};
 use notekpr_draw::scene::Scene;
 use notekpr_draw::svg::{self, SvgOptions};
@@ -398,12 +397,13 @@ pub fn with_pictures_at_hand(mut scene: Scene) -> Scene {
     scene
 }
 
-/// What a preview shows: the drawing's state, and the theme.
+/// What a preview shows: the drawing's revision, and the theme.
 fn version(vault: &str, id: &str, dark: bool) -> Option<u64> {
     step(|c| {
         let d = c.replicas.get(vault)?.notes.get(id)?;
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        d.state_vector().encode_v1().hash(&mut h);
+        // Every change counts, a deletion too (a state vector misses those).
+        d.revision().hash(&mut h);
         dark.hash(&mut h);
         Some(h.finish())
     })

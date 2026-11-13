@@ -685,9 +685,9 @@ def main():
         # Excalidraw's (a file) show as drawings, view-only, where a note
         # embeds them and when opened. A drawing of notekpr's is made of one
         # only when asked.
+        pic = {"id": "pic", "type": "image", "x": 160, "y": 0, "width": 40, "height": 40, "fileId": "cat1", "status": "saved"}
         scene = json.dumps({"type": "excalidraw", "version": 2, "files": {}, "elements": [
-            {"id": "box", "type": "rectangle", "x": 0, "y": 0, "width": 120, "height": 80},
-            {"id": "pic", "type": "image", "x": 160, "y": 0, "width": 40, "height": 40, "fileId": "cat1", "status": "saved"}]})
+            {"id": "box", "type": "rectangle", "x": 0, "y": 0, "width": 120, "height": 80}, pic]})
         obsidian = ("---\nexcalidraw-plugin: parsed\n---\n# Excalidraw Data\n## Text Elements\n"
                     "## Embedded Files\ncat1: [[cat.png]]\n\n%%\n## Drawing\n```json\n" + scene + "\n```\n%%\n")
         cat = os.path.join(home, "cat.png")
@@ -707,7 +707,7 @@ def main():
         # The picture's colours in the preview (a gradient, blue 128; the
         # rest is black on white). The page's rules don't let a script read
         # the preview's file, so it is drawn and looked at.
-        coloured = a.js("""
+        picture_pixels = """
             const img = document.querySelector('.ed img'), c = document.createElement('canvas');
             c.width = img.naturalWidth; c.height = img.naturalHeight;
             const g = c.getContext('2d'); g.drawImage(img, 0, 0);
@@ -715,8 +715,37 @@ def main():
             let n = 0;
             for (let i = 0; i < d.length; i += 4)
                 if (d[i + 3] > 200 && Math.abs(d[i + 2] - 128) < 16 && Math.abs(d[i] - d[i + 1]) > 30) n++;
-            return n;""")
+            return n;"""
+        coloured = a.js(picture_pixels)
         check(coloured > 0, f"Obsidian's drawing shows the picture of the vault it links to ({coloured} pixels)")
+
+        def reopened_walls_pixels(until, what, timeout=20):
+            """The picture's pixels in Walls' first preview, the note opened
+            again (an open note doesn't redraw its embeds) until `until`
+            holds for them."""
+            end = time.time() + timeout
+            while True:
+                a.click_el(a.find_text(".tree-item", "Board", 10))
+                a.wait("return !!(document.querySelector('.ed') || {}).textContent?.includes('The plan')",
+                       10, "another note open")
+                a.click_el(a.find_text(".tree-item", "Walls", 10))
+                a.wait(shown + " == 2", 20, what)
+                n = a.js(picture_pixels)
+                if until(n) or time.time() > end:
+                    return n
+                time.sleep(0.5)
+
+        # Taking the picture out only deletes text, which leaves the note's
+        # state vector as it was: the preview follows all the same.
+        without = obsidian.replace(", " + json.dumps(pic), "")
+        check(without != obsidian and cli("write", "Art", "Sketches/Plan.excalidraw.md", input=without).returncode == 0,
+              "the picture taken out of Obsidian's drawing")
+        coloured = reopened_walls_pixels(lambda n: n == 0, "the previews after a deletion")
+        check(coloured == 0, f"the preview follows a change that only deletes ({coloured} pixels of the picture)")
+        check(cli("write", "Art", "Sketches/Plan.excalidraw.md", input=obsidian).returncode == 0,
+              "the picture put back")
+        coloured = reopened_walls_pixels(lambda n: n > 0, "the previews with the picture back")
+        check(coloured > 0, f"the picture back in the preview ({coloured} pixels)")
         a.click_el(a.find_text(".tree-item", "Sketches", 10))
         a.click_el(a.find_text(".tree-item", "Plan.excalidraw", 10))
         a.find(".other-apps-banner", 10)

@@ -24,16 +24,22 @@ pub mod repo;
 pub mod routes;
 pub mod state;
 pub mod sync;
+pub mod writer;
 pub mod ws;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use metrics_exporter_prometheus::PrometheusHandle;
 
 use crate::config::Config;
 use crate::state::AppState;
+use crate::writer::Role;
 
 /// Open the database, apply migrations and build the application.
+///
+/// If another server writes to the database (the version this one
+/// replaces, `writer.rs`), this one serves reads and takes over writing
+/// when that one stops.
 pub async fn build(
     config: Config,
     metrics: Option<PrometheusHandle>,
@@ -42,12 +48,54 @@ pub async fn build(
     let db = db::connect(&path).await?;
     db::migrate(&db, &path).await?;
     let state = AppState::new(db, config, metrics).await?;
-    if !state.config.dev_mode {
-        end_dev_sessions(&state).await?;
+    if state.write_lock.role() == Role::Writer {
+        prepare(&state).await?;
+        spawn_background(&state);
+    } else {
+        tracing::info!(
+            "another server writes to this database: serving reads, and taking over writing when it stops"
+        );
+        tokio::spawn(take_over(state.clone()));
     }
+    Ok((routes::router(state.clone()), state))
+}
+
+/// What a server writes before anything else, holding the writer lease.
+async fn prepare(state: &AppState) -> anyhow::Result<()> {
+    if !state.config.dev_mode {
+        end_dev_sessions(state).await?;
+    }
+    Ok(())
+}
+
+/// What a server does in the background while it writes.
+fn spawn_background(state: &AppState) {
     spawn_maintenance(state.clone());
     spawn_storage_check(state.clone());
-    Ok((routes::router(state.clone()), state))
+}
+
+/// Wait for the server writing to the database to hand over, then write.
+async fn take_over(state: AppState) {
+    let waited = Instant::now();
+    if !state.write_lock.acquire().await {
+        return;
+    }
+    // Read at start, and an administrator may have changed them on the
+    // other server meanwhile.
+    if let Err(e) = state.instance.reload(&state.db).await {
+        tracing::error!(error = %e, "could not read the instance settings again: using those read at start");
+    }
+    if let Err(e) = prepare(&state).await {
+        tracing::error!(error = %e, "could not end the sessions of development mode");
+    }
+    if !state.write_lock.start_writing() {
+        return;
+    }
+    tracing::info!(
+        waited_ms = waited.elapsed().as_millis() as u64,
+        "took over writing to the database"
+    );
+    spawn_background(&state);
 }
 
 /// [`build`] for tests, whose clients go faster than people: rate limits
@@ -82,12 +130,15 @@ async fn end_dev_sessions(state: &AppState) -> anyhow::Result<()> {
 
 /// Measure the database every few seconds, so that every vault is full
 /// soon after it reaches the server's limit (and has room again after), and
-/// count the full vaults for `/metrics`.
+/// count the full vaults for `/metrics`. While this server writes.
 fn spawn_storage_check(state: AppState) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(10));
         loop {
             tick.tick().await;
+            if !state.write_lock.is_writer() {
+                return;
+            }
             if let Err(e) = sync::check_storage(&state).await {
                 tracing::warn!(error = %e, "could not measure the database");
             }
@@ -95,12 +146,18 @@ fn spawn_storage_check(state: AppState) {
     });
 }
 
-/// Periodic cleanup of expired short-lived records and rate-limiter state.
+/// Periodic cleanup of expired short-lived records and rate-limiter state,
+/// while this server writes. Handing over waits for a round, a few seconds
+/// at most (`writer.rs`); a longer one may overlap the next server's first,
+/// which is safe: each step is its own transaction.
 fn spawn_maintenance(state: AppState) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(300));
         loop {
             tick.tick().await;
+            let Some(_working) = state.write_lock.work() else {
+                return;
+            };
             state.instance.limiters().cleanup();
             let now = db::now();
             let month = 30 * 24 * 3600 * 1000;

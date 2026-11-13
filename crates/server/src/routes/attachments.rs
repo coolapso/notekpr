@@ -36,7 +36,7 @@ pub async fn put(
     // upload holds nobody up; the row claims it under the lock.
     let staged = state.blobs.stage(&v, &id, body).await?;
     let stored = {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         // The bytes may live outside the database, so the role is re-checked
         // under the write lock (which every membership change takes) rather
         // than in a transaction.
@@ -96,7 +96,7 @@ pub async fn delete(
     Path((v, id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
     access::require_admin(&state.db, &v, &who.user_id).await?;
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     access::require_admin(&state.db, &v, &who.user_id).await?;
     let was_full = state.instance.vault_full(&state.db, &v).await?;
     if state.instance.settings().purge_undo_days == 0 {
@@ -116,7 +116,7 @@ pub async fn restore(
     Path((v, id)): Path<(String, String)>,
 ) -> AppResult<StatusCode> {
     access::require_admin(&state.db, &v, &who.user_id).await?;
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     access::require_admin(&state.db, &v, &who.user_id).await?;
     // It counts again.
     state.instance.require_room(&state.db, &v).await?;

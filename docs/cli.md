@@ -625,7 +625,9 @@ matches what the client last saw.
 
 "Offline" includes a server that answers with a server error (HTTP 5xx, e.g.
 a reverse proxy's `502` while the server restarts): changes stay queued and
-reads use the local copies.
+reads use the local copies. A server handing over to its next version says
+so (`503` with `Retry-After`): the command sends the same request again a
+moment later, for up to 30 s, before it counts as offline.
 
 A server can also be **read-only** for a while (its administrators switched
 it): it serves everything but refuses changes.

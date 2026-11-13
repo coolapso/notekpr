@@ -64,6 +64,11 @@ const RESTART_WINDOW: Duration = Duration::from_secs(60);
 #[error("{0}")]
 pub struct Fatal(pub String);
 
+/// The server said it's restarting before the connection was ready.
+#[derive(Debug, thiserror::Error)]
+#[error("the server is restarting")]
+struct Restarting;
+
 struct Backoff {
     attempt: u32,
     /// Retrying quickly until then: the server is restarting.
@@ -148,6 +153,7 @@ pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<(
                 after_session(r)
             }
             Err(e) if e.is::<Fatal>() => Next::Fail(e),
+            Err(e) if e.is::<Restarting>() => Next::RetrySoon,
             Err(e) => Next::Retry(format!("{e:#}")),
         };
         let reason = match next {
@@ -231,6 +237,11 @@ async fn connect(hub: &Hub) -> Result<Ws> {
         .ok_or_else(|| anyhow!("connection closed during authentication"))??;
     let msg: ServerMessage = match first {
         Message::Text(t) => serde_json::from_str(t.as_str())?,
+        // A server waiting to take over from the one it replaces, or
+        // handing over: back in a moment.
+        Message::Close(frame) if matches!(closed(frame.clone()), Exit::Restarting) => {
+            return Err(Restarting.into());
+        }
         other => return Err(anyhow!("unexpected first frame: {other:?}")),
     };
     match msg {

@@ -264,13 +264,7 @@ impl Api {
                     .body(b.to_vec()),
             };
             let resp = req.send().await.map_err(net)?;
-            if let Some(wait) = retry_after(&resp)
-                && waited + wait <= MAX_RATE_LIMIT_WAIT
-            {
-                // Rate limited before it was handled: the same request, later.
-                tracing::debug!("rate limited; retrying in {} s", wait.as_secs());
-                tokio::time::sleep(wait).await;
-                waited += wait;
+            if wait_to_retry(&resp, &mut waited).await {
                 continue;
             }
             if resp.status() == StatusCode::UNAUTHORIZED
@@ -283,6 +277,21 @@ impl Api {
                 continue;
             }
             return check(resp).await;
+        }
+    }
+
+    /// Send an unauthenticated request (sign-in), again while the server
+    /// says the same request works a moment later, as [`Self::send`] does.
+    async fn send_unauthenticated(
+        &self,
+        req: impl Fn() -> reqwest::RequestBuilder,
+    ) -> ApiResult<reqwest::Response> {
+        let mut waited = Duration::ZERO;
+        loop {
+            let resp = req().send().await.map_err(net)?;
+            if !wait_to_retry(&resp, &mut waited).await {
+                return Ok(resp);
+            }
         }
     }
 
@@ -367,12 +376,8 @@ impl Api {
             display_name: None,
         };
         let resp = self
-            .http
-            .post(self.url("/auth/dev-login"))
-            .json(&req)
-            .send()
-            .await
-            .map_err(net)?;
+            .send_unauthenticated(|| self.http.post(self.url("/auth/dev-login")).json(&req))
+            .await?;
         decode(check(resp).await?).await
     }
 
@@ -381,26 +386,24 @@ impl Api {
         client_name: &str,
     ) -> ApiResult<DeviceAuthorizationResponse> {
         let resp = self
-            .http
-            .post(self.url("/oauth/device_authorization"))
-            .form(&[("client_id", "notekpr-cli"), ("client_name", client_name)])
-            .send()
-            .await
-            .map_err(net)?;
+            .send_unauthenticated(|| {
+                self.http
+                    .post(self.url("/oauth/device_authorization"))
+                    .form(&[("client_id", "notekpr-cli"), ("client_name", client_name)])
+            })
+            .await?;
         decode(check(resp).await?).await
     }
 
     pub async fn poll_device_token(&self, device_code: &str) -> ApiResult<DevicePoll> {
         let resp = self
-            .http
-            .post(self.url("/oauth/token"))
-            .form(&[
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                ("device_code", device_code),
-            ])
-            .send()
-            .await
-            .map_err(net)?;
+            .send_unauthenticated(|| {
+                self.http.post(self.url("/oauth/token")).form(&[
+                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                    ("device_code", device_code),
+                ])
+            })
+            .await?;
         if resp.status().is_success() {
             return Ok(DevicePoll::Token(decode(resp).await?));
         }
@@ -430,13 +433,13 @@ impl Api {
         client_secret: &str,
     ) -> ApiResult<TokenResponse> {
         let resp = self
-            .http
-            .post(self.url("/oauth/token"))
-            .basic_auth(client_id, Some(client_secret))
-            .form(&[("grant_type", "client_credentials")])
-            .send()
-            .await
-            .map_err(net)?;
+            .send_unauthenticated(|| {
+                self.http
+                    .post(self.url("/oauth/token"))
+                    .basic_auth(client_id, Some(client_secret))
+                    .form(&[("grant_type", "client_credentials")])
+            })
+            .await?;
         if resp.status().is_success() {
             return decode(resp).await;
         }
@@ -519,14 +522,47 @@ impl Api {
 }
 
 /// How long one request may keep waiting for the server's rate limit
-/// (scripts and agents sending many commands); then it fails as `429`.
-const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(30);
+/// (scripts and agents sending many commands), or for a server handing
+/// over to its next version; then it fails as the `429` or `503` it got.
+const MAX_RETRY_WAIT: Duration = Duration::from_secs(30);
 
-/// How long a `429` says to wait. Only a `Retry-After` means "the same
-/// request will work then"; other `429`s (a snapshot within its cooldown)
-/// are answers, not a busy server.
+/// Whether to send a request again, having waited what `resp` says
+/// ([`retry_after`]), as long as all the waiting stays within
+/// [`MAX_RETRY_WAIT`].
+async fn wait_to_retry(resp: &reqwest::Response, waited: &mut Duration) -> bool {
+    let Some(wait) = retry_after(resp) else {
+        return false;
+    };
+    if *waited + wait > MAX_RETRY_WAIT {
+        return false;
+    }
+    // Rate limited, or the server handing over to its next version, before
+    // it was handled: the same request, later.
+    tracing::debug!(
+        "{}; retrying in {} s",
+        if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+            "rate limited"
+        } else {
+            "the server is restarting"
+        },
+        wait.as_secs()
+    );
+    tokio::time::sleep(wait).await;
+    *waited += wait;
+    true
+}
+
+/// How long a `429` or `503` says to wait. Only a `Retry-After` means "the
+/// same request will work then": the server limited the request's rate, or
+/// is handing over to its next version (`restarting`), before handling it.
+/// Other `429`s (a snapshot within its cooldown) are answers, not a busy
+/// server; other `503`s (read-only mode, a proxy without a server) aren't
+/// over in a moment.
 fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
-    if resp.status() != StatusCode::TOO_MANY_REQUESTS {
+    if !matches!(
+        resp.status(),
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+    ) {
         return None;
     }
     let secs: u64 = resp
@@ -630,5 +666,55 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!other.is_update_required());
+    }
+
+    /// A sign-in reaching a server that hands over to its next version
+    /// (`503` with `Retry-After`) is sent again; read-only mode's `503`
+    /// isn't over in a moment.
+    #[tokio::test]
+    async fn sign_ins_are_sent_again_while_the_server_hands_over() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let tries = std::sync::Arc::new(AtomicU32::new(0));
+        let app = axum::Router::new()
+            .route(
+                "/api/v1/auth/dev-login",
+                axum::routing::post({
+                    let tries = tries.clone();
+                    move || async move {
+                        if tries.fetch_add(1, Ordering::SeqCst) == 0 {
+                            (
+                                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                                [("retry-after", "1")],
+                                r#"{"error":"restarting","message":"try again"}"#,
+                            )
+                        } else {
+                            (
+                                axum::http::StatusCode::IM_A_TEAPOT,
+                                [("x-took", "1")],
+                                r#"{"error":"teapot","message":"handled"}"#,
+                            )
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/oauth/device_authorization",
+                axum::routing::post(|| async {
+                    (
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        r#"{"error":"read_only","message":"read-only"}"#,
+                    )
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let api = Api::new(&server, Credentials::None).unwrap();
+
+        let e = api.dev_login("alice").await.unwrap_err();
+        assert_eq!(e.status(), Some(418), "{e}");
+        assert_eq!(tries.load(Ordering::SeqCst), 2);
+        let e = api.device_authorization("test").await.unwrap_err();
+        assert!(e.is_read_only(), "{e}");
     }
 }

@@ -2,8 +2,8 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use notekpr_core::protocol::{
-    ApiError, ERROR_LIMIT_REACHED, ERROR_READ_ONLY, ERROR_UPDATE_REQUIRED, ERROR_VAULT_FULL,
-    ReadOnly,
+    ApiError, ERROR_LIMIT_REACHED, ERROR_READ_ONLY, ERROR_RESTARTING, ERROR_UPDATE_REQUIRED,
+    ERROR_VAULT_FULL, ReadOnly,
 };
 use notekpr_core::version::Version;
 
@@ -52,6 +52,11 @@ pub enum AppError {
     UpdateRequired(Version),
     #[error("{0}")]
     Unavailable(String),
+    /// This server doesn't write to the database (`writer.rs`): it is
+    /// handing over to its next version, or waiting to take over. Nothing
+    /// was done; the same request works in a moment.
+    #[error("the server is restarting: try again in a moment")]
+    Restarting,
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -81,6 +86,7 @@ impl AppError {
             AppError::VaultFull => ERROR_VAULT_FULL,
             AppError::UpdateRequired(_) => ERROR_UPDATE_REQUIRED,
             AppError::Unavailable(_) => "unavailable",
+            AppError::Restarting => ERROR_RESTARTING,
             AppError::Internal(_) => "internal",
         }
     }
@@ -100,7 +106,7 @@ impl AppError {
             AppError::LimitReached(_) => StatusCode::FORBIDDEN,
             AppError::VaultFull => StatusCode::INSUFFICIENT_STORAGE,
             AppError::UpdateRequired(_) => StatusCode::UPGRADE_REQUIRED,
-            AppError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            AppError::Unavailable(_) | AppError::Restarting => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -127,7 +133,16 @@ impl IntoResponse for AppError {
         if let AppError::Internal(e) = &self {
             tracing::error!(error = %e, "internal error");
         }
-        (self.status(), Json(self.body())).into_response()
+        let mut resp = (self.status(), Json(self.body())).into_response();
+        if let AppError::Restarting = self {
+            // Only here: what else says 503 (read-only mode) won't change
+            // by trying again.
+            resp.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from_static("1"),
+            );
+        }
+        resp
     }
 }
 

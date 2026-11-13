@@ -584,6 +584,168 @@ async fn live_connections_are_told_when_the_server_restarts() {
 }
 
 #[tokio::test]
+async fn the_next_version_takes_over_without_losing_a_change() {
+    use futures::StreamExt;
+    use notekpr_server::writer::Role;
+    use tokio_tungstenite::tungstenite::Message;
+    async fn close_code(
+        ws: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> Option<u16> {
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+                .await
+                .expect("no close within 5 s")
+            {
+                Some(Ok(Message::Close(f))) => return f.map(|f| f.code.into()),
+                Some(Ok(_)) => continue,
+                _ => return None,
+            }
+        }
+    }
+    let root = |base: &str| base.trim_end_matches("/api/v1").to_string();
+    let http = reqwest::Client::new();
+    let ready = |base: &str| {
+        let url = format!("{}/readyz", root(base));
+        let http = http.clone();
+        async move { http.get(url).send().await.unwrap().status().as_u16() }
+    };
+
+    let old = start().await;
+    let mut alice = new_user(&old.base, "alice").await;
+    let v = alice.create_vault("Home").await;
+    let note = NoteDoc::new();
+    let u = note.set_text("before the update").unwrap();
+    alice
+        .push(&v, vec![alice.encrypt_update(&v, "n", &u)])
+        .await
+        .unwrap();
+    let token = alice.api.token.clone().unwrap();
+    let mut live = Ws::connect(&old.ws, &token).await;
+
+    // The next version starts beside it: ready, it reads, and holds
+    // changes and live connections until it writes.
+    let new = start_next(&old).await;
+    assert_eq!(new.state.write_lock.role(), Role::Waiting);
+    assert_eq!(ready(&new.base).await, 200);
+    let on_new = Api {
+        base: new.base.clone(),
+        ..alice.api.clone()
+    };
+    assert_eq!(
+        on_new
+            .status::<()>(reqwest::Method::GET, &format!("/vaults/{v}"), None)
+            .await,
+        200
+    );
+    let push = format!("/vaults/{v}/updates");
+    let u = note.set_text("during the update").unwrap();
+    let held = tokio::spawn({
+        let (api, push) = (on_new.clone(), push.clone());
+        let body = PushRequest {
+            updates: vec![alice.encrypt_update(&v, "n", &u)],
+        };
+        async move {
+            api.call::<_, PushResponse>(reqwest::Method::POST, &push, Some(&body))
+                .await
+        }
+    });
+    let held_ws = tokio::spawn({
+        let (url, token) = (new.ws.clone(), token.clone());
+        async move { Ws::connect(&url, &token).await }
+    });
+    // An administrator changes a setting on the old one meanwhile.
+    let retention = old.state.instance.settings().snapshot_retention + 1;
+    old.set(InstanceSettingsUpdate {
+        snapshot_retention: Some(retention),
+        ..Default::default()
+    })
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!held.is_finished() && !held_ws.is_finished());
+
+    // The old one stops: it hands over, and its live connections hear it's
+    // a restart.
+    old.state.hand_off().await;
+    assert_eq!(close_code(&mut live.stream).await, Some(CLOSE_RESTARTING));
+    let pushed = held.await.unwrap().unwrap();
+    let mut ws = held_ws.await.unwrap();
+    assert_eq!(new.state.write_lock.role(), Role::Writer);
+    assert_eq!(
+        new.state.instance.settings().snapshot_retention,
+        retention,
+        "read again when taking over"
+    );
+
+    // What still reaches the old one: reads, and changes are told to try
+    // again in a moment; live connections hear it's a restart.
+    assert_eq!(ready(&old.base).await, 503);
+    assert_eq!(
+        alice
+            .api
+            .status::<()>(reqwest::Method::GET, &format!("/vaults/{v}"), None)
+            .await,
+        200
+    );
+    let u = NoteDoc::new().set_text("too late for the old one").unwrap();
+    let refused = alice
+        .api
+        .req(reqwest::Method::POST, &push)
+        .json(&PushRequest {
+            updates: vec![alice.encrypt_update(&v, "m", &u)],
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status().as_u16(), 503);
+    assert_eq!(refused.headers()["retry-after"], "1");
+    let body: ApiError = refused.json().await.unwrap();
+    assert_eq!(body.error, ERROR_RESTARTING);
+    let (mut late, _) = tokio_tungstenite::connect_async(&old.ws).await.unwrap();
+    assert_eq!(close_code(&mut late).await, Some(CLOSE_RESTARTING));
+
+    // The new one has every change, in order, and goes on live.
+    ws.send(&ClientMessage::Subscribe {
+        vault_id: v.clone(),
+        since: Some(0),
+        object_id: None,
+    })
+    .await;
+    let mut seqs = Vec::new();
+    ws.until(|m| match m {
+        ServerMessage::Changes { changes, .. } => {
+            seqs.extend(changes.updates.iter().map(|u| u.seq));
+            None
+        }
+        ServerMessage::Synced { .. } => Some(()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(seqs, (1..=pushed.head_seq).collect::<Vec<_>>());
+    let u = note.set_text("after the update").unwrap();
+    let after: PushResponse = on_new
+        .post(
+            &push,
+            &PushRequest {
+                updates: vec![alice.encrypt_update(&v, "n", &u)],
+            },
+        )
+        .await;
+    assert_eq!(after.head_seq, pushed.head_seq + 1);
+    let seq = ws
+        .until(|m| match m {
+            ServerMessage::Update { update, .. } => Some(update.seq),
+            _ => None,
+        })
+        .await;
+    assert_eq!(seq, after.head_seq);
+    alice.api.base = new.base.clone();
+    let (_, notes) = alice.read_vault(&v).await;
+    assert_eq!(notes["n"].text(), "after the update");
+}
+
+#[tokio::test]
 async fn device_enrollment_and_recovery() {
     let srv = start().await;
     let alice = new_user(&srv.base, "alice").await;

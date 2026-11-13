@@ -42,30 +42,16 @@ spec:
       services:
         - name: notekpr
           port: 80
-      # Untested possibility — holding requests while the pod is replaced
-      # (docs/operations.md, "Holding requests during an update"): with
-      # `strategy: Recreate` there is a moment without a ready pod, and
-      # Traefik has no pod to send to. Sent to the Service's own address
-      # instead (nativeLB), a request might fail to connect there and be
-      # retried by the middleware until the new pod is ready. Whether it
-      # does depends on how the cluster routes Service traffic; try it
-      # before relying on it.
-      #
-      # middlewares:
-      #   - name: notekpr-retry
-      # services:
-      #   - name: notekpr
-      #     port: 80
-      #     nativeLB: true
+          # Optional: while an update runs the old and the new version side
+          # by side (docs/operations.md §7), sticky sessions keep each
+          # browser on the one it started with, so its changes aren't held
+          # by the new one until the old one hands over. Not needed: only
+          # one of them writes either way.
+          # sticky:
+          #   cookie:
+          #     name: notekpr_server
+          #     secure: true
+          #     httpOnly: true
+          #     sameSite: strict
   tls:
     secretName: notekpr-tls
-# ---
-# apiVersion: traefik.io/v1alpha1
-# kind: Middleware
-# metadata:
-#   name: notekpr-retry
-#   namespace: notekpr
-# spec:
-#   retry:
-#     attempts: 6
-#     initialInterval: 250ms

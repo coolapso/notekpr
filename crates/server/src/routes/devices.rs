@@ -53,7 +53,7 @@ pub async fn register(
         ));
     }
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         insert_device(&mut tx, &who.user_id, &reg, None, db::now()).await?;
         repo::sessions::bind_device(&mut *tx, &who.session_id, &reg.device_id).await?;
@@ -109,7 +109,7 @@ pub async fn activate(
     let public = key
         .verify()
         .map_err(|e| AppError::Internal(anyhow::anyhow!("stored key invalid: {e}")))?;
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     // Checked and activated in one transaction, so a removal in between
     // can't be undone by the activation.
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
@@ -177,12 +177,19 @@ pub async fn revoke(
 ) -> AppResult<StatusCode> {
     who.require_human()?;
     let now = db::now();
-    if repo::devices::revoke(&state.db, &id, &who.user_id, now).await? == 0 {
-        return Err(AppError::NotFound);
-    }
-    let sessions = repo::sessions::revoke_for_device(&state.db, &id, now).await?;
-    for s in sessions {
-        state.hub.control(&who.user_id, Control::SessionRevoked(s));
+    // Under the write lock, with closing its connections: a server taking
+    // over from this one can't miss it (`writer.rs`).
+    {
+        let _w = state.write_lock.lock().await?;
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        if repo::devices::revoke(&mut *tx, &id, &who.user_id, now).await? == 0 {
+            return Err(AppError::NotFound);
+        }
+        let sessions = repo::sessions::revoke_for_device(&mut *tx, &id, now).await?;
+        tx.commit().await?;
+        for s in sessions {
+            state.hub.control(&who.user_id, Control::SessionRevoked(s));
+        }
     }
     db::audit(
         &state.db,

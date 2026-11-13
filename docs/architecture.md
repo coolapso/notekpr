@@ -53,6 +53,7 @@ handles opaque byte strings and public keys.
 | `access.rs` | Authorization decisions (`404` without access so ids can't be probed, `403` for too low a role). A write that depends on a role checks it again inside its own transaction; membership, role and share changes run under the write lock in a transaction too, so a write can't land after a removal or demotion. |
 | `repo/` | All SQL except the log's, as small functions per table group (users, sessions, devices, vaults and members, keys, shares, the membership log, agents, audit, attachments, usage statistics for administrators, the instance settings). One place to review and test authorization-sensitive queries; unit tests run against a migrated database. |
 | `sync.rs` | The encrypted log: push, catch-up pages, snapshots, purges, the key-epoch checks. |
+| `writer.rs` | The writer lease: one server writes to a database at a time (a `flock` on `notekpr.db-writer`), so the write lock and the event bus stay in one process. During an update the next version runs beside the old one, serves reads, holds changes and live connections, and takes over writing when the old one hands over (operations.md §7). |
 | `hub.rs` | `EventBus`: vault events and per-user control messages to live connections. Today in-process channels. Its interface states what another backend (polling the log, a message broker) must guarantee — per-vault order, nothing lost after `subscribe` returns, gaps reported as lag, connection ids unique across processes — so an instance could later run as several processes on one database without touching callers. |
 | `blobs.rs` | Attachment bytes: in a file store (a folder by default, or S3-compatible storage, through the `object_store` crate) or in SQLite (`--file-store database`). The rows stay in the database either way; a file is written first, then claimed by its row, and deleted from the store a grace period after its row goes (a trigger records it, so deleted vaults and accounts are covered). The store is never listed. |
 | `instance.rs` | Settings administrators change at runtime — limits on accounts, agents and vaults (also per person), read-only mode, the instance's storage limit, the storage limit per vault — kept in the database and in memory, and whether the server accepts changes now. Limits are checked in the transaction that creates something; read-only mode is enforced by a guard in front of every changing route (with a short list of exceptions) and in `sync.rs`, and live connections hear when it changes. Each vault's size is kept by SQLite triggers (first migration) whichever query adds or removes content; a full vault refuses new content in the writing transaction, and its subscribers hear when it fills or has room again (`sync::storage_changed`). Administrators (`auth.rs`'s `Admin`: people with the admin role, and admin clients) are accepted only by the administration routes. |
@@ -60,7 +61,9 @@ handles opaque byte strings and public keys.
 
 One server-wide write lock serializes writes (SQLite has a single writer
 anyway); log events are published after their commit while it is still held,
-which is what makes each vault's live stream gapless and ordered.
+which is what makes each vault's live stream gapless and ordered. Only the
+server holding the database's writer lease takes it (`writer.rs`), so this
+holds while an update runs two servers on one database.
 
 ## 2. Technology decisions
 

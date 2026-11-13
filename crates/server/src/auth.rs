@@ -226,7 +226,7 @@ pub async fn provision_user(
     display_name: &str,
     email: Option<&str>,
 ) -> AppResult<String> {
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let now = db::now();
     let configured_admin = state.config.is_admin_identity(issuer, subject);
     let existing = repo::users::identity_user(&state.db, issuer, subject).await?;

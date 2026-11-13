@@ -333,8 +333,29 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         let state = state.clone();
         async move {
             shutdown_signal().await;
-            tracing::info!("shutting down: live connections are told it's a restart");
-            state.shutting_down.send_replace(true);
+            // Asked before handing over: the next one stops waiting then.
+            let next = state.write_lock.successor_waiting();
+            if next {
+                tracing::info!(
+                    "shutting down: handing over to the server waiting to take over; live connections are told it's a restart"
+                );
+            } else {
+                tracing::info!("shutting down: live connections are told it's a restart");
+            }
+            state.hand_off().await;
+            if next {
+                // Proxies take a moment to send everything to the next
+                // one: meanwhile, answer what still comes here (reads; a
+                // change is told to try again).
+                tracing::info!(
+                    "handed over; answering for {} s more while proxies move to the next server",
+                    DRAIN.as_secs()
+                );
+                tokio::select! {
+                    _ = tokio::time::sleep(DRAIN) => {}
+                    _ = shutdown_signal() => {}
+                }
+            }
         }
     })
     .await?;
@@ -346,6 +367,10 @@ async fn serve(config: Config) -> anyhow::Result<()> {
     tracing::info!("shut down cleanly");
     Ok(())
 }
+
+/// How long a server that handed over to the next one keeps answering
+/// (docs/operations.md, "Updates without downtime").
+const DRAIN: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Minimal HTTP probe so distroless images need no curl or shell.
 fn healthcheck(listen: SocketAddr) -> anyhow::Result<()> {

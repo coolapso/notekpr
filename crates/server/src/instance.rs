@@ -157,11 +157,24 @@ impl Instance {
         next.apply(change);
         next.check().map_err(AppError::BadRequest)?;
         repo::settings::save(db, &next, db::now()).await?;
-        *self.settings.write().unwrap() = next.clone();
-        self.limiters.follow(&next);
+        self.take(db, next.clone()).await?;
+        Ok(next)
+    }
+
+    /// Read the settings again, as another server may have changed them:
+    /// the one this server took over writing from (`writer.rs`).
+    pub async fn reload(&self, db: &Db) -> anyhow::Result<()> {
+        let settings = repo::settings::load(db).await?;
+        self.take(db, settings).await?;
+        Ok(())
+    }
+
+    async fn take(&self, db: &Db, settings: InstanceSettings) -> AppResult<()> {
+        self.limiters.follow(&settings);
+        *self.settings.write().unwrap() = settings;
         self.update_mode();
         self.refresh_storage(db).await?;
-        Ok(next)
+        Ok(())
     }
 
     /// Measure the database and fill every vault or make room by its limit

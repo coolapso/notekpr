@@ -33,7 +33,10 @@ agents, quick notes or drawings, §9, §5.3, §5.5; the message says which), `va
 send them once `vault_full` says it has room, §7; files, revisions and
 undoing a deletion fail until then),
 `update_required` (426: the app is older than the server accepts, with
-`oldest_version`, §11), `unavailable`, `internal`. Vaults the
+`oldest_version`, §11), `restarting` (503 with `Retry-After: 1`: the server
+is handing over to its next version, or waiting to take over from the one it
+replaces, and did nothing — send the same request again then; both apps do,
+for up to 30 s; operations.md §7), `unavailable`, `internal`. Vaults the
 caller is not a member of always return `404` so their existence cannot be
 probed.
 
@@ -569,7 +572,10 @@ limit counts it), then deletes it.
 Each vault has one monotonically increasing sequence counter. Every accepted
 update, every purge and every undone purge consumes one sequence number. The server writes and
 publishes while holding a single write lock, so **subscribers always observe a
-vault's events in strictly increasing order without gaps.**
+vault's events in strictly increasing order without gaps.** During an update
+two servers share the database for a moment, but only one writes and
+serves live connections: the one holding the database's writer lease
+(operations.md §7).
 
 | Endpoint | Notes |
 |---|---|
@@ -704,6 +710,12 @@ it exits. Clients then reconnect soon — about every second, jittered, for up
 to a minute — rather than backing off as after a failure, and may show the
 connection as briefly *connecting* rather than *offline*. Any other close, or
 a connection that just drops, is a failure: reconnect with backoff.
+
+Only the server writing to the database serves live connections (§6). The
+next version, started beside it for an update, holds a new connection's
+upgrade until it writes, at most 10 s; then — and a server that handed over
+at once — it accepts the connection and closes it with 1012 right away,
+before `ready`.
 
 A client must subscribe to a vault before pushing to it over the socket.
 Awareness payloads are encrypted by clients (purpose `Awareness`); the server
@@ -870,7 +882,8 @@ also refused deleting.)
 
 ## 10. Operations endpoints
 
-`/healthz` (liveness), `/readyz` (database reachable, else `503`), `/metrics`
+`/healthz` (liveness), `/readyz` (database reachable, else `503`; also
+`503` once the server hands over to its next version), `/metrics`
 (Prometheus; optional bearer token) live at the root, not under `/api/v1`.
 `/metrics` answers `404` when metrics are turned off and `401` without the
 right token. All responses carry a strict CSP and security headers.

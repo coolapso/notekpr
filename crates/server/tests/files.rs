@@ -37,6 +37,7 @@ async fn row(state: &AppState, id: &str) -> Option<(Option<String>, i64)> {
 }
 
 /// A server on `data` (which outlives it), as `common::start_with` makes.
+/// Hand the last one off first, as it stops (`writer.rs`).
 async fn serve(data: &Path, f: impl FnOnce(&mut Config)) -> anyhow::Result<(String, AppState)> {
     let mut cfg = Config::for_tests(data.to_path_buf());
     f(&mut cfg);
@@ -194,7 +195,9 @@ async fn attachments_in_the_database_move_to_the_file_store() {
     assert_eq!(alice.api.status::<()>(Method::DELETE, &a2, None).await, 204);
     assert!(files_in(&files).is_empty());
 
-    // With a folder (the default), they move there by themselves.
+    // Started again with a folder (the default): they move there by
+    // themselves.
+    state.hand_off().await;
     let (base, state) = serve(data, |_| {}).await.unwrap();
     alice.api.base = base;
     for _ in 0..100 {
@@ -221,6 +224,7 @@ async fn attachments_in_the_database_move_to_the_file_store() {
     assert_eq!(download(&alice, &v, "a2").await.0, b"two");
 
     // Back to the database store: refused, saying why.
+    state.hand_off().await;
     let refused = serve(data, |c| c.file_store = Some("database".into()))
         .await
         .err()

@@ -248,7 +248,7 @@ pub async fn create(
         check_object(o)?;
     }
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
         if let Some(o) = object
@@ -422,7 +422,7 @@ pub async fn accept(
     }
     let now = db::now();
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         if has_access(&mut tx, &i, &who.user_id).await? {
             // In already: nothing to add.
@@ -465,7 +465,7 @@ pub async fn decline(
 ) -> AppResult<StatusCode> {
     let i = mine(&state, &who, &id).await?;
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         repo::invitations::decline(&state.db, &id).await?;
     }
     if i.state == "accepted" {
@@ -486,7 +486,7 @@ pub async fn cancel(
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
     let i = {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
         let i = repo::invitations::get(&mut *tx, &id)

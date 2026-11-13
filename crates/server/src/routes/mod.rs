@@ -227,6 +227,9 @@ pub fn router(state: AppState) -> Router {
         .route("/ws", get(ws::handler))
         .merge(login)
         .route_layer(from_fn_with_state(state.clone(), read_only_guard))
+        // (Before the read-only check: the server taking over reads the
+        // settings again first.)
+        .route_layer(from_fn_with_state(state.clone(), writer_guard))
         // (Before the read-only check: an app too old for the server can't
         // be told anything else.)
         .route_layer(from_fn_with_state(
@@ -335,6 +338,36 @@ const WRITABLE_WHEN_READ_ONLY: &[(&str, &str)] = &[
     ("DELETE", "/admin/clients/{id}/tokens/{token_id}"),
 ];
 
+/// Changes go to the server that writes to the database (`writer.rs`):
+/// one waiting to take over holds them until it does, at most a few
+/// seconds, and one handing over takes no new ones; both then say to try
+/// again, before anything was done. Handing over waits for those admitted.
+/// (Live connections wait the same way: `ws::handler`.)
+async fn writer_guard(
+    State(state): State<AppState>,
+    matched: Option<axum::extract::MatchedPath>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let path = matched.as_ref().map(|m| m.as_str()).unwrap_or_default();
+    let path = path.strip_prefix("/api/v1").unwrap_or(path);
+    if req.method().is_safe() && !CHANGING_GETS.contains(&path) {
+        return next.run(req).await;
+    }
+    match state.write_lock.admit().await {
+        Ok(admitted) => {
+            let resp = next.run(req).await;
+            drop(admitted);
+            resp
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET` routes that change something a retry needs untouched: the sign-in
+/// callback uses up its login (once only) before it makes the session.
+const CHANGING_GETS: &[&str] = &["/auth/oidc/callback"];
+
 /// Refuse changes while the server is read-only (`instance.rs`).
 async fn read_only_guard(
     State(state): State<AppState>,
@@ -411,7 +444,17 @@ async fn healthz() -> &'static str {
     "ok"
 }
 
+/// Ready while it can answer: also while waiting to take over writing (an
+/// update starts the next version next to this one, and stops this one
+/// once that is ready), no longer once it hands over.
 async fn readyz(State(state): State<AppState>) -> Response {
+    if state.write_lock.stopping() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "handing over to the next server",
+        )
+            .into_response();
+    }
     if crate::db::ping(&state.db).await {
         (StatusCode::OK, "ready").into_response()
     } else {

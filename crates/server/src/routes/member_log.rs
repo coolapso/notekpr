@@ -279,7 +279,7 @@ pub async fn append(
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
         check_and_append(

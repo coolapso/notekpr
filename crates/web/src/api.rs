@@ -9,7 +9,7 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, Request, RequestInit, Response};
 
-use crate::util::window;
+use crate::util::{self, window};
 
 pub const BASE: &str = "/api/v1";
 
@@ -102,35 +102,29 @@ pub fn outdated() {
     });
 }
 
+/// How long a request keeps being sent again while the server hands over
+/// to its next version, before it fails as the `503` it got.
+const MAX_RESTART_WAIT_MS: i32 = 30_000;
+
 async fn send(
     method: &str,
     path: &str,
     body: Option<JsValue>,
     content_type: Option<&str>,
 ) -> Result<Response> {
-    let opts = RequestInit::new();
-    opts.set_method(method);
-    let headers = Headers::new().map_err(Error::network)?;
-    headers.set(APP_HEADER, &app()).map_err(Error::network)?;
-    if let Some(t) = token() {
-        headers
-            .set("Authorization", &format!("Bearer {t}"))
-            .map_err(Error::network)?;
-    }
-    if let Some(ct) = content_type {
-        headers.set("Content-Type", ct).map_err(Error::network)?;
-    }
-    opts.set_headers(&headers);
-    if let Some(b) = &body {
-        opts.set_body(b);
-    }
-    let url = format!("{BASE}{path}");
-    let req = Request::new_with_str_and_init(&url, &opts).map_err(Error::network)?;
-    let resp: Response = JsFuture::from(window().fetch_with_request(&req))
-        .await
-        .map_err(Error::network)?
-        .dyn_into()
-        .map_err(Error::network)?;
+    let mut waited = 0;
+    let resp = loop {
+        let resp = fetch(method, path, body.as_ref(), content_type).await?;
+        if let Some(ms) = restarting(&resp)
+            && waited + ms <= MAX_RESTART_WAIT_MS
+        {
+            // Refused before it was handled: the same request, in a moment.
+            util::sleep(ms).await;
+            waited += ms;
+            continue;
+        }
+        break resp;
+    };
     if resp.ok() {
         return Ok(resp);
     }
@@ -158,6 +152,58 @@ async fn send(
         code,
         message,
     })
+}
+
+/// One try of a request.
+async fn fetch(
+    method: &str,
+    path: &str,
+    body: Option<&JsValue>,
+    content_type: Option<&str>,
+) -> Result<Response> {
+    let opts = RequestInit::new();
+    opts.set_method(method);
+    let headers = Headers::new().map_err(Error::network)?;
+    headers.set(APP_HEADER, &app()).map_err(Error::network)?;
+    if let Some(t) = token() {
+        headers
+            .set("Authorization", &format!("Bearer {t}"))
+            .map_err(Error::network)?;
+    }
+    if let Some(ct) = content_type {
+        headers.set("Content-Type", ct).map_err(Error::network)?;
+    }
+    opts.set_headers(&headers);
+    if let Some(b) = body {
+        opts.set_body(b);
+    }
+    let url = format!("{BASE}{path}");
+    let req = Request::new_with_str_and_init(&url, &opts).map_err(Error::network)?;
+    JsFuture::from(window().fetch_with_request(&req))
+        .await
+        .map_err(Error::network)?
+        .dyn_into()
+        .map_err(Error::network)
+}
+
+/// How long to wait before sending a request again that the server refused
+/// because it is handing over to its next version
+/// ([`ERROR_RESTARTING`](notekpr_core::protocol::ERROR_RESTARTING)):
+/// a `503` with `Retry-After` — other `503`s (read-only mode, a proxy
+/// without a server) aren't over in a moment. Spread out, so not everyone
+/// comes back in the same instant.
+fn restarting(resp: &Response) -> Option<i32> {
+    if resp.status() != 503 {
+        return None;
+    }
+    let secs: i32 = resp
+        .headers()
+        .get("Retry-After")
+        .ok()??
+        .trim()
+        .parse()
+        .ok()?;
+    Some(secs.clamp(1, 10) * 1000 + (js_sys::Math::random() * 500.0) as i32)
 }
 
 async fn text_of(resp: Response) -> Result<String> {

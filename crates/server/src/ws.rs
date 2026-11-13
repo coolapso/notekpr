@@ -9,7 +9,8 @@
 //!    sequence order; the client's own pushes come back as `ack` in that order.
 //!
 //! When the server shuts down it closes every connection with
-//! [`CLOSE_RESTARTING`]: clients come back as soon as it's up again.
+//! [`CLOSE_RESTARTING`]: clients come back as soon as it's up again, or to
+//! the next version that takes over (`writer.rs`).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -49,6 +50,11 @@ enum Out {
 }
 
 pub async fn handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Response {
+    // Live events come from this server's writes: only the server writing
+    // to the database serves live connections (`writer.rs`). One waiting
+    // to take over holds them until it does, a few seconds at most; then,
+    // or after handing over, it says it's restarting, and they come back.
+    let writing = state.write_lock.writing().await;
     // Pushes check the update limit; this only bounds a frame. A
     // connection keeps the limit it started with: after the update limit
     // was raised, a client sending larger frames is cut off, connects
@@ -56,7 +62,23 @@ pub async fn handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> Res
     let max = (state.instance.settings().max_update_bytes() as usize) * 2 + 1024 * 1024;
     ws.max_message_size(max)
         .max_frame_size(max)
-        .on_upgrade(move |socket| connection(socket, state))
+        .on_upgrade(move |socket| async move {
+            if writing {
+                connection(socket, state).await
+            } else {
+                restarting(socket).await
+            }
+        })
+}
+
+/// Close a connection at once: it's a restart.
+async fn restarting(mut socket: WebSocket) {
+    let frame = CloseFrame {
+        code: CLOSE_RESTARTING,
+        reason: "restarting".into(),
+    };
+    let _ = socket.send(Message::Close(Some(frame))).await;
+    let _ = socket.close().await;
 }
 
 fn error_msg(e: &AppError, vault_id: Option<&str>) -> ServerMessage {

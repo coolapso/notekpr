@@ -107,7 +107,7 @@ pub async fn update_user(
         return Err(bad("you cannot disable or demote yourself"));
     }
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         let Some((kind, disabled)) = repo::users::kind_and_disabled(&mut *tx, &id).await? else {
             return Err(AppError::NotFound);
@@ -145,7 +145,22 @@ pub async fn update_user(
             }
             repo::users::set_quick_notes_storage_allowance(&mut *tx, &id, a).await?;
         }
+        // A disabled account's sessions end with it, and its agents stop
+        // too (authentication checks the owner): their live connections
+        // close right away. In this transaction, under the write lock: a
+        // server taking over from this one can't miss it (`writer.rs`).
+        let (mut sessions, mut agent_sessions) = (Vec::new(), Vec::new());
+        if req.disabled == Some(true) {
+            sessions = repo::sessions::revoke_for_user(&mut *tx, &id, db::now()).await?;
+            agent_sessions = repo::sessions::unrevoked_of_agents(&mut *tx, &id).await?;
+        }
         tx.commit().await?;
+        for s in sessions {
+            state.hub.control(&id, Control::SessionRevoked(s));
+        }
+        for (agent, s) in agent_sessions {
+            state.hub.control(&agent, Control::SessionRevoked(s));
+        }
         if let Some((was_full, q)) = quick_notes {
             storage_changed(&state, &q, was_full).await;
         }
@@ -153,18 +168,6 @@ pub async fn update_user(
     // Their apps reload their quick notes' limit.
     if req.quick_note_allowance.is_some() {
         notify_user(&state, &id, UserEventKind::VaultsChanged);
-    }
-    if req.disabled == Some(true) {
-        let sessions = repo::sessions::revoke_for_user(&state.db, &id, db::now()).await?;
-        for s in sessions {
-            state.hub.control(&id, Control::SessionRevoked(s));
-        }
-        // Their agents stop too (authentication checks the owner); close
-        // the agents' live connections right away.
-        let agent_sessions = repo::sessions::unrevoked_of_agents(&state.db, &id).await?;
-        for (agent, s) in agent_sessions {
-            state.hub.control(&agent, Control::SessionRevoked(s));
-        }
     }
     audit(
         &state,
@@ -226,7 +229,7 @@ pub async fn update_vault(
         return Ok(Json(serde_json::json!({ "ok": true })));
     }
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         let was_full = state.instance.vault_full(&mut *tx, &id).await?;
         if let Some(a) = req.storage_allowance
@@ -294,7 +297,7 @@ pub async fn update_settings(
     // Under the write lock: once read-only mode is on, no write that began
     // before is still landing.
     let settings = {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let old = state.instance.settings();
         let was_full = state.instance.storage_full();
         let settings = state.instance.update(&state.db, &req).await?;
@@ -374,7 +377,7 @@ pub async fn create_client(
         return Err(forbidden("you can't give scopes you don't have"));
     }
     let made = {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         admin_clients::create(&state.db, &req.name, &scopes, Some(admin.actor_id())).await?
     };
     audit(

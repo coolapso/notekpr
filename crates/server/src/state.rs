@@ -19,8 +19,10 @@ pub struct Inner {
     pub hub: EventBus,
     /// SQLite has a single writer. Serialising writes in-process avoids busy
     /// errors and, because events are published while the lock is held,
-    /// guarantees subscribers see each vault's log in sequence order.
-    pub write_lock: tokio::sync::Mutex<()>,
+    /// guarantees subscribers see each vault's log in sequence order. Only
+    /// the server holding the database's writer lease takes it: during an
+    /// update the next version runs next to this one (`writer.rs`).
+    pub write_lock: crate::writer::WriteLock,
     pub oidc: Option<Oidc>,
     pub blobs: crate::blobs::Blobs,
     pub metrics: Option<PrometheusHandle>,
@@ -41,17 +43,27 @@ impl AppState {
         let oidc = Oidc::from_config(&config)?;
         let blobs = crate::blobs::Blobs::open(&config, db.clone()).await?;
         let instance = Instance::load(&db).await?;
+        let write_lock = crate::writer::WriteLock::open(&config.db_path())?;
         Ok(AppState(Arc::new(Inner {
             db,
             config,
             hub: EventBus::new(),
             blobs,
-            write_lock: tokio::sync::Mutex::new(()),
+            write_lock,
             oidc,
             metrics,
             instance,
             shutting_down: tokio::sync::watch::Sender::new(false),
         })))
+    }
+
+    /// Stop writing, for the next version of this server to take over
+    /// (`writer.rs`): live connections are told it's a restart (they come
+    /// back to the next one), the changes under way finish, and the
+    /// writer lease is given up.
+    pub async fn hand_off(&self) {
+        self.shutting_down.send_replace(true);
+        self.write_lock.hand_off().await;
     }
 
     /// Tell every live connection the server is going away to be started

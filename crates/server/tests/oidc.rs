@@ -165,6 +165,17 @@ async fn setup(
     profile_in_id_token: bool,
     email_verified: bool,
 ) -> Setup {
+    let dir = tempfile::tempdir().unwrap();
+    setup_in(dir, auth_methods, profile_in_id_token, email_verified).await
+}
+
+/// [`setup`] on a database that's there already.
+async fn setup_in(
+    dir: tempfile::TempDir,
+    auth_methods: Vec<&'static str>,
+    profile_in_id_token: bool,
+    email_verified: bool,
+) -> Setup {
     let idp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let issuer = format!("http://{}", idp_listener.local_addr().unwrap());
     let idp = Idp(Arc::new(IdpInner {
@@ -190,12 +201,32 @@ async fn setup(
     tokio::spawn(async move { axum::serve(idp_listener, app).await.unwrap() });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let mut cfg = notekpr_server::config::Config::for_tests(dir.path().to_path_buf());
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let state = serve(dir.path(), &issuer, &base, listener).await;
+    Setup {
+        idp,
+        base,
+        http: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap(),
+        _dir: dir,
+        state,
+    }
+}
+
+/// A server signing in with the provider at `issuer`, at `public_url`,
+/// answering on `listener`.
+async fn serve(
+    dir: &std::path::Path,
+    issuer: &str,
+    public_url: &str,
+    listener: tokio::net::TcpListener,
+) -> notekpr_server::state::AppState {
+    let mut cfg = notekpr_server::config::Config::for_tests(dir.to_path_buf());
     cfg.dev_mode = false;
-    cfg.public_url = format!("http://{addr}");
-    cfg.oidc_issuer = Some(issuer);
+    cfg.public_url = public_url.to_string();
+    cfg.oidc_issuer = Some(issuer.to_string());
     cfg.oidc_client_id = Some(CLIENT_ID.into());
     cfg.oidc_client_secret = Some(CLIENT_SECRET.into());
     let (app, state) = notekpr_server::build_for_tests(cfg).await.unwrap();
@@ -207,16 +238,7 @@ async fn setup(
         .await
         .unwrap()
     });
-    Setup {
-        idp,
-        base: format!("http://{addr}"),
-        http: reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap(),
-        _dir: dir,
-        state,
-    }
+    state
 }
 
 fn location(r: &reqwest::Response) -> String {
@@ -317,12 +339,10 @@ async fn unverified_email_is_not_used() {
 
 #[tokio::test]
 async fn dev_accounts_never_take_the_first_admin_role() {
-    let s = setup(vec!["client_secret_basic"], true, true).await;
-    // The same database was used in development mode before.
-    let dir = s._dir.path().to_path_buf();
-    let mut cfg = notekpr_server::config::Config::for_tests(dir.clone());
-    cfg.public_url = s.base.clone();
-    let (dev_app, _) = notekpr_server::build_for_tests(cfg).await.unwrap();
+    // The database was used in development mode before.
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = notekpr_server::config::Config::for_tests(dir.path().to_path_buf());
+    let (dev_app, dev_state) = notekpr_server::build_for_tests(cfg).await.unwrap();
     let dev_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let dev_base = format!("http://{}", dev_listener.local_addr().unwrap());
     tokio::spawn(async move {
@@ -333,8 +353,7 @@ async fn dev_accounts_never_take_the_first_admin_role() {
         .await
         .unwrap()
     });
-    let r = s
-        .http
+    let r = reqwest::Client::new()
         .post(format!("{dev_base}/api/v1/auth/dev-login"))
         .json(&json!({"username": "tester"}))
         .send()
@@ -342,30 +361,14 @@ async fn dev_accounts_never_take_the_first_admin_role() {
         .unwrap();
     let dev: SessionResponse = r.json().await.unwrap();
     assert!(dev.user.is_admin, "first dev user is admin in dev mode");
+    dev_state.hand_off().await;
 
-    // The first real person to sign in still becomes the administrator.
-    let session = s.exchange(&s.login(true).await).await;
-    assert!(session.user.is_admin);
-
-    // Restarting without development mode ends the dev account's sessions.
-    let mut cfg = notekpr_server::config::Config::for_tests(dir);
-    cfg.dev_mode = false;
-    cfg.oidc_issuer = Some(s.idp.0.issuer.clone());
-    cfg.oidc_client_id = Some(CLIENT_ID.into());
-    let (app, _) = notekpr_server::build_for_tests(cfg).await.unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap()
-    });
+    // Started again without development mode: the dev account's sessions
+    // end.
+    let s = setup_in(dir, vec!["client_secret_basic"], true, true).await;
     let me = |token: String| {
         let http = s.http.clone();
-        let base = base.clone();
+        let base = s.base.clone();
         async move {
             http.get(format!("{base}/api/v1/me"))
                 .bearer_auth(token)
@@ -376,7 +379,61 @@ async fn dev_accounts_never_take_the_first_admin_role() {
         }
     };
     assert_eq!(me(dev.token).await, 401);
+
+    // The first real person to sign in still becomes the administrator.
+    let session = s.exchange(&s.login(true).await).await;
+    assert!(session.user.is_admin);
     assert_eq!(me(session.token).await, 200);
+}
+
+#[tokio::test]
+async fn a_sign_in_reaching_the_server_handing_over_finishes_on_the_next_one() {
+    let s = setup(vec!["client_secret_basic"], true, true).await;
+    let start = s
+        .http
+        .get(format!("{}/api/v1/auth/oidc/start", s.base))
+        .send()
+        .await
+        .unwrap();
+    let cookie = start
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .find(|c| c.starts_with("notekpr_login="))
+        .unwrap();
+    let cookie = cookie.split(';').next().unwrap().to_string();
+    let at_idp = s.http.get(location(&start)).send().await.unwrap();
+    let callback = location(&at_idp);
+
+    // The server stops meanwhile: the way back from the provider is
+    // refused before it uses up the sign-in.
+    s.state.hand_off().await;
+    let refused = s
+        .http
+        .get(&callback)
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 503);
+    assert_eq!(refused.headers()["retry-after"], "1");
+
+    // The next version, at the same address for the provider, finishes it.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let next = format!("http://{}", listener.local_addr().unwrap());
+    serve(s._dir.path(), &s.idp.0.issuer, &s.base, listener).await;
+    let done = s
+        .http
+        .get(callback.replacen(&s.base, &next, 1))
+        .header(header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    let complete = location(&done);
+    assert!(complete.contains("#code="), "{complete}");
+    let session = Setup { base: next, ..s }.exchange(&complete).await;
+    assert!(session.user.is_admin, "the first person");
 }
 
 #[tokio::test]

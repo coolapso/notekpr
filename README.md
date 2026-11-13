@@ -59,7 +59,8 @@ how to use the app.
 * **[For AI agents](docs/features.md#for-ai-agents)** — their own identity,
   only the vaults you share, through the CLI, files or an HTTP gateway.
 * **[Running it](docs/features.md#running-it)** — one Rust server with
-  SQLite, attachments in S3 or a folder, an admin page, limits and metrics.
+  SQLite, attachments in S3 or a folder, updates without downtime, an admin
+  page, limits and metrics.
 
 ## Try it (development mode, no identity provider needed)
 

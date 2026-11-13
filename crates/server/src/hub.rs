@@ -2,7 +2,9 @@
 //! interface ([`EventBus`]).
 //!
 //! Today everything runs in one process ([`EventBus::Local`]: a broadcast
-//! channel per vault and a queue per WebSocket connection). A backend that
+//! channel per vault and a queue per WebSocket connection): while an update
+//! runs two servers on one database, only the one holding the writer lease
+//! writes and serves live connections (`writer.rs`). A backend that
 //! connects several server processes sharing one database (polling the log,
 //! or a message broker) can be added as another variant without touching the
 //! callers: routes and `sync.rs` only call [`EventBus::publish`] and

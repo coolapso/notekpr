@@ -115,7 +115,7 @@ pub async fn create(
         return Err(conflict("set up account keys first"));
     }
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let now = db::now();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         match req.kind {
@@ -225,7 +225,7 @@ pub async fn update(
         return Err(bad("quick notes keep their name and settings"));
     }
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
         if let Some(meta) = &req.encrypted_meta {
@@ -268,7 +268,7 @@ pub async fn delete(
     // Who to notify is read in the same transaction as the delete, so
     // nobody added meanwhile keeps a live subscription.
     let (members, recipients) = {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
         let members = repo::vaults::member_ids(&mut *tx, &v).await?;
@@ -382,7 +382,7 @@ pub async fn add_member(
     };
     check_envelope(current_epoch(&state.db, &v).await?)?;
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let now = db::now();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         // Re-checked in the transaction: the checks above ran before the lock.
@@ -486,7 +486,7 @@ pub async fn update_member(
     {
         // Under the write lock like every membership change, so a push or
         // snapshot checked under it can't land after a demotion.
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
         let was = access::member_role_opt(&mut *tx, &v, &u)
@@ -589,7 +589,7 @@ pub async fn remove_member(
     let now = db::now();
     let mut invited = vec![];
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         may_remove(access::member_role(&mut *tx, &v, &who.user_id).await?)?;
         let role = access::member_role_opt(&mut *tx, &v, &u)
@@ -665,7 +665,7 @@ pub async fn grant_keys(
     {
         // Members and epoch are read in the write transaction, so a member
         // removed (or a rotation) meanwhile can't get an envelope back.
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let now = db::now();
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
@@ -729,7 +729,7 @@ pub async fn rotate_keys(
     who.require_human()?;
     access::require_owner(&state.db, &v, &who.user_id).await?;
     check_rotation(&req)?;
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     access::require_owner(&mut *tx, &v, &who.user_id).await?;
     // Keys rotate in a full vault too (the notes' new snapshots may make room).

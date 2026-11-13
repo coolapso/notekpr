@@ -77,7 +77,7 @@ pub async fn create(
     }
     let id = db::new_id();
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         state
             .instance
@@ -116,7 +116,7 @@ pub async fn delete(
     // What to revoke is read in the same transaction as the delete, so
     // access granted meanwhile doesn't keep a live connection open.
     let (vaults, notes, sessions) = {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         if repo::agents::get(&mut *tx, &who.user_id, &id)
             .await?
@@ -199,12 +199,20 @@ pub async fn revoke_credential(
     who.require_human()?;
     load(&state, &who.user_id, &id).await?;
     let now = db::now();
-    if repo::agents::revoke_credential(&state.db, &client_id, &id, now).await? == 0 {
-        return Err(AppError::NotFound);
-    }
-    let sessions = repo::sessions::revoke_for_credential(&state.db, &id, &client_id, now).await?;
-    for s in sessions {
-        state.hub.control(&id, Control::SessionRevoked(s));
+    // Under the write lock, with closing its connections: a server taking
+    // over from this one can't miss it (`writer.rs`).
+    {
+        let _w = state.write_lock.lock().await?;
+        let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+        if repo::agents::revoke_credential(&mut *tx, &client_id, &id, now).await? == 0 {
+            return Err(AppError::NotFound);
+        }
+        let sessions =
+            repo::sessions::revoke_for_credential(&mut *tx, &id, &client_id, now).await?;
+        tx.commit().await?;
+        for s in sessions {
+            state.hub.control(&id, Control::SessionRevoked(s));
+        }
     }
     db::audit(
         &state.db,

@@ -1,5 +1,8 @@
 # notekpr on Kubernetes.
 # Single replica by design: the server uses SQLite and an in-process event hub.
+# An update starts the new version next to the old one, on the same node and
+# database, and the old one hands writing over to it as it stops
+# (docs/operations.md §7, "Updates without downtime").
 # Apply with:  kubectl apply -f deploy/kubernetes/notekpr.yaml
 # (edit the ConfigMap and Secret first). It serves plain HTTP inside the
 # cluster: put the ingress you use in front of the Service, with TLS — e.g.
@@ -48,6 +51,7 @@ metadata:
   name: notekpr-data
   namespace: notekpr
 spec:
+  # Not ReadWriteOncePod: during an update two pods on one node use it.
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
@@ -60,8 +64,15 @@ metadata:
   namespace: notekpr
 spec:
   replicas: 1
+  # The new version starts while the old one still serves, and the old one
+  # stops only once the new one is ready: it hands writing over then. One
+  # that never gets ready leaves the old one serving. (`Recreate` stops the
+  # old one first: seconds without a server, which the apps ride out.)
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: notekpr
@@ -70,6 +81,17 @@ spec:
       labels:
         app: notekpr
     spec:
+      # Both versions on one node, where the ReadWriteOnce volume is
+      # attached: SQLite and the writer lease work between processes on one
+      # machine, not across machines. (The first pod goes anywhere: nothing
+      # it could join runs yet.)
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: notekpr
+              topologyKey: kubernetes.io/hostname
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

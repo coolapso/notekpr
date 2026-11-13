@@ -16,7 +16,8 @@ use tokio_tungstenite::tungstenite::Message;
 pub struct TestServer {
     pub base: String,
     pub ws: String,
-    pub dir: tempfile::TempDir,
+    /// Shared by the next version of a server ([`start_next`]).
+    pub dir: std::sync::Arc<tempfile::TempDir>,
     pub state: notekpr_server::state::AppState,
 }
 
@@ -43,7 +44,19 @@ pub async fn start() -> TestServer {
 }
 
 pub async fn start_with(f: impl FnOnce(&mut notekpr_server::config::Config)) -> TestServer {
-    let dir = tempfile::tempdir().unwrap();
+    serve_in(std::sync::Arc::new(tempfile::tempdir().unwrap()), f).await
+}
+
+/// The next version of a server, started beside it on the same database
+/// (an update): it takes over writing when that one hands over.
+pub async fn start_next(srv: &TestServer) -> TestServer {
+    serve_in(srv.dir.clone(), |_| {}).await
+}
+
+async fn serve_in(
+    dir: std::sync::Arc<tempfile::TempDir>,
+    f: impl FnOnce(&mut notekpr_server::config::Config),
+) -> TestServer {
     let mut cfg = notekpr_server::config::Config::for_tests(dir.path().to_path_buf());
     f(&mut cfg);
     let (app, state) = notekpr_server::build_for_tests(cfg).await.unwrap();

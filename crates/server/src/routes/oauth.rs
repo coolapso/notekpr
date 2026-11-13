@@ -169,7 +169,7 @@ async fn device_token(state: &AppState, f: TokenForm) -> AppResult<Response> {
         ));
     };
     let hash = db::sha256(code.as_bytes());
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let Some(grant) = repo::sessions::device_grant(&state.db, &hash).await? else {
         return Ok(oauth_error(StatusCode::BAD_REQUEST, "invalid_grant", None));
     };

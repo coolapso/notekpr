@@ -126,7 +126,9 @@ crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions
                 read-only mode) · apps.rs (apps too old for the server:
                 OLDEST_APP_VERSION) · admin_clients.rs (scripts administering the
                 instance: scopes, tokens) · auth.rs (sessions; Admin: admins and
-                admin clients), oidc.rs · migrations/
+                admin clients), oidc.rs · writer.rs (the writer lease: one server
+                writes to a database; an update's next version takes over) ·
+                migrations/
 crates/editor   the live-preview Markdown editor. Pure model (native tests): text.rs
                 (source + line index) · change.rs (ChangeSet: compose, transform,
                 map) · state.rs (EditorState, Transaction) · decorations.rs
@@ -311,6 +313,16 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 - Live events go through `hub.rs`'s `EventBus` only; publish log events after
   the commit, while still holding `write_lock` (its docs list what
   subscribers rely on).
+- Only the server holding the database's writer lease writes (`writer.rs`):
+  during an update the next version runs beside the old one on the same
+  database. `state.write_lock.lock().await?` refuses on the other one;
+  changing routes (and `GET`s that use something up: `CHANGING_GETS`) are
+  held by `writer_guard` (`routes/mod.rs`), live connections by
+  `ws::handler`; background work that writes runs while it holds
+  `write_lock.work()`. Whatever live connections must hear about — the log,
+  and access ending (sessions, membership, shares) — is written under the
+  write lock. Something read once at start that another server can change is
+  read again when taking over (`lib.rs`, `take_over`).
 - While the server is read-only, every changing route is refused except
   those in `WRITABLE_WHEN_READ_ONLY` (`routes/mod.rs`): a new route is
   refused until added there, and only sign-in, revocation and administration

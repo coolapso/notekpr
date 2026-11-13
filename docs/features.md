@@ -339,8 +339,11 @@ notes](writing.md) and [Drawings](drawings.md).
 * Attachments in a folder, in S3 or anything compatible (several servers can
   share a bucket, each under its own prefix), or inside the database for
   one-file backups; existing ones move there by themselves.
-* Updates without fuss: the server tells connected apps it's restarting;
-  they keep working and are back about a second after it is.
+* Updates without downtime on Kubernetes: the new version starts next to
+  the old one and takes over writing the moment it stops; changes made right
+  then wait a moment, nothing is lost. Elsewhere, the server tells
+  connected apps it's restarting; they keep working and are back about a
+  second after it is.
 * Backups, upgrades, Prometheus metrics, and an admin page for accounts
   (make admins, disable accounts), server statistics and the server's
   version — never content.

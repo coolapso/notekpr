@@ -694,7 +694,7 @@ pub async fn push(
         .collect();
     // Access is checked under the write lock, so a push can't land after
     // the writer was removed (membership changes take the same lock).
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     // Checked here for WebSocket pushes (REST ones are refused before):
     // under the lock, so nothing lands after read-only mode began.
     state.instance.require_writable()?;
@@ -953,7 +953,7 @@ pub async fn create_snapshot(
     if payload.len() as u64 > settings.max_snapshot_bytes() {
         return Err(AppError::TooLarge);
     }
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let member = access::member_role_opt(&state.db, vault_id, &who.user_id).await?;
     let is_member = member.is_some();
     write_access(&state.db, member, vault_id, object_id, &who.user_id).await?;
@@ -1276,7 +1276,7 @@ pub async fn purge(
         return Err(bad("comments go with their note"));
     }
     access::require_admin(&state.db, vault_id, &who.user_id).await?;
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     // Re-checked in the transaction: the role may have changed meanwhile.
@@ -1386,7 +1386,7 @@ pub async fn restore(
         return Err(AppError::NotFound);
     }
     access::require_admin(&state.db, vault_id, &who.user_id).await?;
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     access::require_admin(&mut *tx, vault_id, &who.user_id).await?;
@@ -1477,7 +1477,7 @@ pub async fn storage_changed(state: &AppState, vault_id: &str, was_full: bool) {
 ///
 /// [`Instance::refresh_storage`]: crate::instance::Instance::refresh_storage
 pub async fn check_storage(state: &AppState) -> AppResult<u64> {
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let was_full = state.instance.storage_full();
     let used = state.instance.refresh_storage(&state.db).await?;
     if state.instance.storage_full() != was_full {

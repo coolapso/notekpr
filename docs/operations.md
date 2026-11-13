@@ -2,7 +2,8 @@
 
 notekpr is a single binary (`notekpr-server`) plus static files for
 the browser client. State is one SQLite database in the data directory. Run one
-instance per database.
+server per database: during an update, the next version runs beside it for
+a moment and takes over (§7, "Updates without downtime").
 
 ## 1. Choose a setup
 
@@ -106,7 +107,8 @@ becomes the administrator (§5).
 ### Kubernetes
 
 Edit and apply [`deploy/kubernetes/notekpr.yaml`](../deploy/kubernetes/notekpr.yaml)
-(single replica, `Recreate` strategy, a `ReadWriteOnce` volume, an
+(single replica, updated without downtime by starting the new version next
+to the old one on the same node — §7 —, a `ReadWriteOnce` volume, an
 `emptyDir` at `/tmp` for [temporary files](#a-writable-temporary-directory)) and optionally
 [`backup-cronjob.yaml`](../deploy/kubernetes/backup-cronjob.yaml). Both use
 `ghcr.io/coolapso/notekpr:latest`: pin a version in both to choose when you
@@ -433,30 +435,29 @@ releases or security fixes since — so there's no example for it.)
 
 ### Holding requests during an update
 
-An update replaces the server: for a moment — seconds, mostly what Docker or
-Kubernetes need to swap the container — nothing answers. The apps are fine
-with that (§7). A proxy, though, usually answers requests meanwhile with an
-error (502, 503 or 404), which is what someone opening the page or signing
-in right then sees. Some proxies can hold such a request instead and try
-again until the new server answers, so it only takes a moment longer. Only
-requests that couldn't reach the server are tried again: nothing is sent
-twice.
+On Kubernetes, with the manifest's rolling update, there is no moment
+without a server (§7, "Updates without downtime"): nothing in front needs
+to hold requests. Optionally, sticky sessions keep each browser on the
+server it started with while both run, so its changes aren't held by the
+new one until the old one hands over — commented out in the Traefik
+example. Not needed: only one of them writes either way.
 
-Measured with 120 requests sent while the server's container was swapped
-(outside Kubernetes):
+Elsewhere an update replaces the server: for a moment — seconds, mostly
+what Docker needs to swap the container — nothing answers. The apps are
+fine with that (§7). A proxy, though, usually answers requests meanwhile
+with an error (502, 503 or 404), which is what someone opening the page or
+signing in right then sees. Some proxies can hold such a request instead
+and try again until the new server answers, so it only takes a moment
+longer. Only requests that couldn't reach the server are tried again:
+nothing is sent twice.
+
+Measured with 120 requests sent while the server's container was swapped:
 
 | Proxy | Requests that failed |
 |---|---|
 | Caddy, as it is by default | 33 (502) |
 | Caddy holding requests (`lb_try_duration 15s`, `lb_try_interval 250ms`, as in the example) | 0 |
 | Traefik with the server at a fixed address (file provider) and its `retry` middleware | 0 |
-
-On Kubernetes, with `strategy: Recreate`, there is a moment without a ready
-pod, and an ingress usually has nothing to send requests to. A possibility,
-**not tested yet**: Traefik's `retry` middleware with the route sent to the
-Service's own address (`nativeLB: true`) instead of to its pods — commented
-out in the Traefik example. Whether it holds requests depends on how the
-cluster routes Service traffic, so try it before relying on it.
 
 ## 5. The first administrator
 
@@ -790,7 +791,8 @@ notekpr at all.
    ```sh
    # docker compose (with a pinned version, set the new one in docker-compose.yml first)
    docker compose pull && docker compose up -d
-   # kubernetes: set the new version in notekpr.yaml and backup-cronjob.yaml, apply them;
+   # kubernetes: set the new version in notekpr.yaml and backup-cronjob.yaml, apply them
+   # (the new version takes over from the old one, below);
    # on latest: kubectl -n notekpr rollout restart deployment notekpr
    # from source
    git pull && cargo build --release --locked -p notekpr-server && ./scripts/build-web.sh
@@ -803,7 +805,11 @@ notekpr at all.
 
 `notekpr-server migrate` applies migrations without starting the server.
 
-**What people notice.** On SIGTERM the server tells every connected app it is
+**What people notice.** On Kubernetes, nothing much: the new version
+takes over from the old one (below), apps reconnect to it within about a
+second, and a change made right then waits a moment. Elsewhere — Docker
+Compose, a service manager, `strategy: Recreate` — the old server stops
+before the new one starts: on SIGTERM it tells every connected app it is
 restarting, finishes the requests under way and exits; the new one is up
 within about a second. Meanwhile people keep working: their apps keep every
 change and send it once the server is back, trying again about every second
@@ -814,10 +820,62 @@ new server answered — some 6 s in all, most of it Docker swapping the
 container. Someone opening the page during those seconds gets whatever the
 proxy answers then (§4, "Holding requests during an update").
 
+### Updates without downtime
+
+On Kubernetes ([`notekpr.yaml`](../deploy/kubernetes/notekpr.yaml)), an
+update starts the new version next to the running one, on the same node and
+database, and stops the old one only once the new one is ready
+(`RollingUpdate`, `maxSurge: 1`, `maxUnavailable: 0`). A release that never
+gets ready leaves the old one serving.
+
+One server writes to a database at a time: the one holding its *writer
+lease*, a lock on `notekpr.db-writer` next to it.
+
+1. The new server migrates the database as it starts (after the automatic
+   backup), then is ready while the old one still writes. It serves the
+   web app and reads, and holds changes and live connections until it
+   writes — at most 10 s, then it answers "try again in a moment" (`503`
+   with `Retry-After`), which the apps do.
+2. The old one, told to stop (SIGTERM), tells the apps it's restarting,
+   takes no new changes, lets those under way finish (at most 5 s), and
+   gives the lease up. The new one takes it at once, reads the instance
+   settings again (an administrator may have changed them on the old one
+   meanwhile), and writes: the changes it held go through, and the apps
+   reconnect to it.
+3. The old one keeps answering for 5 s more — reads, and "try again" for
+   changes — while the ingress moves everything to the new one, then
+   exits. (With nobody waiting to take over, it exits at once.)
+
+The old one logs `handing over to the server waiting to take over`; the new
+one `another server writes to this database` when it starts, and `took over
+writing to the database` (with how long it waited) when it does.
+
+What it needs:
+
+* **Both servers on one machine.** SQLite's write-ahead log and the lease
+  work between processes on one machine (containers sharing a volume
+  included), not over a network file system. A `ReadWriteOnce` volume is
+  attached to one node and both pods can use it there (`ReadWriteOncePod`
+  would refuse the second one). The manifest's pod affinity puts the new pod
+  on the old one's node, which a network volume (Longhorn, a cloud disk)
+  needs; a local one is on one node anyway.
+* **Migrations the old version can live with**: for a moment the old
+  server runs on the new schema. From 1.0.0 on, every migration works with
+  the previous release (a column is added, used a release later, dropped
+  after that). Before 1.0 one may not: the old server's changes then fail
+  during those seconds — apps keep note edits and send them to the new one;
+  other changes are tried again by the person.
+
+Several servers on one database by mistake (`replicas: 2`, two Compose
+projects on one data directory) can't both write: the other one serves
+reads and, after holding them, refuses changes. Run one.
+
 ## 8. Monitoring
 
-* `GET /healthz` — process is alive. `GET /readyz` — database reachable.
-  `notekpr-server healthcheck` probes `/readyz` (used by the image).
+* `GET /healthz` — process is alive. `GET /readyz` — database reachable
+  (also while waiting to take over writing; `503` once the server hands
+  over to the next one, §7). `notekpr-server healthcheck` probes `/readyz`
+  (used by the image).
 * `GET /metrics` — Prometheus: `notekpr_http_requests_total{method,status}`
   (`status` is the class: `2xx`, `4xx`, …),
   `notekpr_http_request_duration_seconds` (a summary with quantiles: no

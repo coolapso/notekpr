@@ -352,7 +352,7 @@ pub async fn set_key(
 ) -> AppResult<StatusCode> {
     check_object(&o)?;
     access::require_writer(&state.db, &v, &who.user_id).await?;
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let owner = access::require_writer(&mut *tx, &v, &who.user_id)
         .await?
@@ -416,7 +416,7 @@ pub async fn sign_grants(
     if req.grants.len() > 1000 || req.grants.iter().any(|g| g.signature.len() != 64) {
         return Err(bad("invalid grant signatures"));
     }
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     access::require_owner(&mut *tx, &v, &who.user_id).await?;
     for g in &req.grants {
@@ -468,7 +468,7 @@ pub async fn set_meta(
     {
         // Re-checked in the transaction: the writer may have been demoted,
         // or the note's key rotated, since the checks above.
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_writer(&mut *tx, &v, &who.user_id).await?;
         let Some(cur) = object_key_epoch(&mut *tx, &v, &o, false).await? else {
@@ -535,7 +535,7 @@ pub async fn add(
     {
         return Err(conflict("this person already has access through the vault"));
     }
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     // Re-checked in the transaction: the person may have become a member
     // since the check above (membership supersedes shares).
@@ -661,7 +661,7 @@ pub async fn update(
         return Err(bad("notes can be shared as editor or viewer"));
     }
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         access::require_owner(&mut *tx, &v, &who.user_id).await?;
         if repo::shares::set_role(&mut *tx, &v, &o, &u, &req.role).await? == 0 {
@@ -739,7 +739,7 @@ pub async fn remove(
     }
     let now = db::now();
     {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         may_remove(&mut *tx, &v, &o, &u, &who.user_id).await?;
         if repo::shares::delete(&mut *tx, &v, &o, &u).await? == 0 {

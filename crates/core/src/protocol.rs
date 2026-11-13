@@ -2006,6 +2006,11 @@ pub struct AdminSettings {
 /// (HTTP 503; the WebSocket's `error`). Clients keep the change and send it
 /// once the server says it's writable again ([`ServerMessage::Mode`]).
 pub const ERROR_READ_ONLY: &str = "read_only";
+/// The error code of a change refused because the server is handing over
+/// to its next version (HTTP 503 with `Retry-After`): nothing was done, and
+/// the same request works in a moment (docs/operations.md, "Updates without
+/// downtime").
+pub const ERROR_RESTARTING: &str = "restarting";
 /// The error code of a creation refused by an instance limit (HTTP 403):
 /// accounts, vaults, agents, quick notes, drawings.
 pub const ERROR_LIMIT_REACHED: &str = "limit_reached";

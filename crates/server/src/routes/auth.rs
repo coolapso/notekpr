@@ -291,6 +291,9 @@ pub async fn logout(State(state): State<AppState>, who: Principal) -> AppResult<
 }
 
 pub async fn revoke_session(state: &AppState, user_id: &str, session_id: &str) -> AppResult<()> {
+    // Under the write lock, with closing its connections: a server taking
+    // over from this one can't miss it (`writer.rs`).
+    let _w = state.write_lock.lock().await?;
     if repo::sessions::revoke(&state.db, session_id, user_id, db::now()).await? == 0 {
         return Err(AppError::NotFound);
     }

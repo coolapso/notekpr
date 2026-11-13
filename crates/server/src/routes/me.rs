@@ -44,7 +44,7 @@ pub async fn delete_account(
     who.require_human()?;
     // Who to tell is read in the same transaction as the delete.
     let (owned, joined, notes, connections) = {
-        let _w = state.write_lock.lock().await;
+        let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
         let kept = repo::vaults::last_owner_of_shared(&mut *tx, &who.user_id).await?;
         if !kept.is_empty() {
@@ -183,7 +183,7 @@ pub async fn setup_account_key(
             )
             .map_err(|_| bad("invalid device approval signature"))?;
     }
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let now = db::now();
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     if repo::users::has_account_key(&mut *tx, &who.user_id).await? {
@@ -354,7 +354,7 @@ pub async fn put_prefs(
     if req.ciphertext.len() > MAX_PREFS_BYTES {
         return Err(AppError::TooLarge);
     }
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let current = repo::users::prefs_version(&state.db, &who.user_id)
         .await?
         .unwrap_or(0);
@@ -378,7 +378,7 @@ pub async fn bind_session_device(
     who.require_human()?;
     // One transaction: a device removed meanwhile has already had its
     // sessions revoked, so binding to it now would escape that.
-    let _w = state.write_lock.lock().await;
+    let _w = state.write_lock.lock().await?;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let owner = repo::devices::owner_unless_revoked(&mut *tx, &req.device_id).await?;
     if owner.as_deref() != Some(who.user_id.as_str()) {

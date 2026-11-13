@@ -365,8 +365,26 @@ fn app_sign_in_over() -> Response {
     r
 }
 
-fn app_cookie_hash(headers: &HeaderMap) -> Option<Vec<u8>> {
-    cookie_value(headers, APP_COOKIE).map(|v| db::sha256(v.as_bytes()))
+/// The confirmation form's token: derived from the browser's cookie, so
+/// only a page that could read the form (this origin) can send it — a
+/// sibling site, whose forms the cookie reaches too (SameSite is per
+/// site), can neither read the page nor work the token out.
+fn app_form_token(cookie: &str) -> String {
+    let mut m = b"notekpr app sign-in form\0".to_vec();
+    m.extend_from_slice(cookie.as_bytes());
+    data_encoding::BASE64URL_NOPAD.encode(&db::sha256(&m))
+}
+
+/// A form posted from this server's own origin: an `Origin` naming
+/// another is refused (browsers send it with every form post).
+fn from_own_origin(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let own = url::Url::parse(&state.config.public_url())
+        .map(|u| u.origin().ascii_serialization())
+        .unwrap_or_default();
+    origin.to_str().is_ok_and(|o| !own.is_empty() && o == own)
 }
 
 /// `GET /auth/oidc/app`: the code to compare with the app's, and the
@@ -375,9 +393,11 @@ pub async fn app_confirm_page(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let Some(hash) = app_cookie_hash(&headers) else {
+    let Some(cookie) = cookie_value(&headers, APP_COOKIE) else {
         return Ok(app_sign_in_over());
     };
+    let hash = db::sha256(cookie.as_bytes());
+    let form = app_form_token(cookie);
     let Some(s) = repo::sessions::get_app_sign_in(&state.db, &hash).await? else {
         return Ok(app_sign_in_over());
     };
@@ -388,28 +408,39 @@ pub async fn app_confirm_page(
     Ok(app_page(&format!(
         "<h1>Sign in to the notekpr app?</h1><p>The notekpr app on this computer asks to be signed in as you. \
          Continue only if it shows this code:</p><p class=\"code\">{code}</p><p>Didn't start a sign-in in the app, \
-         or it shows another code? Cancel.</p><form method=\"post\"><button name=\"approve\" value=\"no\">\
-         Cancel</button><button class=\"yes\" name=\"approve\" value=\"yes\">Continue</button></form>"
+         or it shows another code? Cancel.</p><form method=\"post\"><input type=\"hidden\" name=\"form\" \
+         value=\"{form}\"><button name=\"approve\" value=\"no\">Cancel</button><button class=\"yes\" name=\"approve\" value=\"yes\">Continue</button></form>"
     )))
 }
 
 #[derive(Deserialize)]
 pub struct AppConfirm {
     approve: String,
+    #[serde(default)]
+    form: String,
 }
 
 /// `POST /auth/oidc/app`: the person's choice. Continue sends the browser
 /// back to the app with a one-time code bound to its challenge; Cancel
-/// sends it back with `access_denied`. Either way the sign-in is used up.
+/// sends it back with `access_denied`. Either way the sign-in is used up —
+/// but only by the page's own form (its token, this origin): a post from
+/// anywhere else changes nothing.
 pub async fn app_confirm(
     State(state): State<AppState>,
     headers: HeaderMap,
     axum::Form(f): axum::Form<AppConfirm>,
 ) -> AppResult<Response> {
-    let taken = match app_cookie_hash(&headers) {
-        Some(hash) => repo::sessions::take_app_sign_in(&state.db, &hash).await?,
-        None => None,
+    let Some(cookie) = cookie_value(&headers, APP_COOKIE) else {
+        return Ok(app_sign_in_over());
     };
+    let own_form = {
+        use subtle::ConstantTimeEq;
+        bool::from(app_form_token(cookie).as_bytes().ct_eq(f.form.as_bytes()))
+    };
+    if !own_form || !from_own_origin(&state, &headers) {
+        return Ok(app_sign_in_over());
+    }
+    let taken = repo::sessions::take_app_sign_in(&state.db, &db::sha256(cookie.as_bytes())).await?;
     let mut resp = match taken {
         Some(s) if s.expires_at >= db::now() => {
             if f.approve == "yes" {

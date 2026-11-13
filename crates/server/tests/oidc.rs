@@ -499,6 +499,14 @@ fn pkce(seed: u8) -> (String, String) {
 
 const APP_BACK: &str = "http://127.0.0.1:4321/callback/x9-_";
 
+/// The confirmation page's form token.
+fn form_token(page: &str) -> String {
+    page.split_once("name=\"form\" value=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(v, _)| v.to_string())
+        .unwrap_or_else(|| panic!("no form token in {page}"))
+}
+
 /// The value of the response's `Set-Cookie` that starts with `name`.
 fn first_cookie(r: &reqwest::Response, name: &str) -> String {
     r.headers()
@@ -551,11 +559,16 @@ impl Setup {
         (page.text().await.unwrap(), cookie)
     }
 
-    fn app_confirm(&self, cookie: Option<&str>, approve: &str) -> reqwest::RequestBuilder {
+    fn app_confirm(
+        &self,
+        cookie: Option<&str>,
+        form: &str,
+        approve: &str,
+    ) -> reqwest::RequestBuilder {
         let mut r = self
             .http
             .post(format!("{}/api/v1/auth/oidc/app", self.base))
-            .form(&[("approve", approve)]);
+            .form(&[("approve", approve), ("form", form)]);
         if let Some(c) = cookie {
             r = r.header(header::COOKIE, c);
         }
@@ -565,8 +578,14 @@ impl Setup {
     /// An app's sign-in in the browser, confirmed: where the browser is
     /// sent back to.
     async fn app_login(&self, challenge: &str) -> String {
-        let (_, cookie) = self.app_to_confirm(challenge).await;
-        location(&self.app_confirm(Some(&cookie), "yes").send().await.unwrap())
+        let (page, cookie) = self.app_to_confirm(challenge).await;
+        location(
+            &self
+                .app_confirm(Some(&cookie), &form_token(&page), "yes")
+                .send()
+                .await
+                .unwrap(),
+        )
     }
 
     async fn exchange_app(&self, back: &str, verifier: Option<&str>) -> reqwest::Response {
@@ -813,14 +832,41 @@ async fn an_apps_sign_in_waits_for_the_person_to_confirm_its_code() {
     let (page, cookie) = s.app_to_confirm(&challenge).await;
     assert!(page.contains(&code), "{page}");
     assert!(page.contains("method=\"post\""));
-    // No other browser (no cookie: another site's form can't send it) can
-    // confirm it.
-    let r = s.app_confirm(None, "yes").send().await.unwrap();
+    let form = form_token(&page);
+    // No other browser (no cookie) can confirm it; nor can a form from
+    // another page of the same site, which the cookie reaches but which
+    // can't read the token, or from another origin — and their posts use
+    // nothing up.
+    let r = s.app_confirm(None, &form, "yes").send().await.unwrap();
     assert_eq!(r.status(), 400);
+    for bad in ["", "not-the-token"] {
+        let r = s
+            .app_confirm(Some(&cookie), bad, "yes")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 400, "form token {bad:?}");
+    }
+    let r = s
+        .app_confirm(Some(&cookie), &form, "yes")
+        .header(header::ORIGIN, "https://sibling.example.com")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400, "another origin");
     // Cancelled: back to the app, without a code — and used up.
-    let r = s.app_confirm(Some(&cookie), "no").send().await.unwrap();
+    let r = s
+        .app_confirm(Some(&cookie), &form, "no")
+        .header(header::ORIGIN, s.base.as_str())
+        .send()
+        .await
+        .unwrap();
     assert_eq!(location(&r), format!("{APP_BACK}?error=access_denied"));
-    let r = s.app_confirm(Some(&cookie), "yes").send().await.unwrap();
+    let r = s
+        .app_confirm(Some(&cookie), &form, "yes")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 400, "single use");
 
     // Continued: back to the app with a code its verifier swaps.

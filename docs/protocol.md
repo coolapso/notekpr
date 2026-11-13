@@ -160,8 +160,11 @@ with the one-time code bound to the app that asked by PKCE (RFC 7636):
    from the challenge, `keys::app_sign_in_code`: 40 bits, `ABCD-EFGH` — and
    asks the person to continue only if they match: a sign-in link someone
    else made carries their challenge, so their code. Its form posts to
-   `POST /auth/oidc/app` (`approve=yes|no`, the cookie: no other site's form
-   carries it). Continue sends the browser to `<redirect_uri>?code=…` (a
+   `POST /auth/oidc/app` (`approve=yes|no`, and `form`: a token derived from
+   the cookie, which only a page that could read the form has — the cookie
+   reaches sibling sites' forms too); a post without the cookie or the
+   token, or with an `Origin` other than the server's, uses nothing up and
+   gets `400`. Continue sends the browser to `<redirect_uri>?code=…` (a
    query: no fragment reaches the app's listener), Cancel to
    `<redirect_uri>?error=access_denied`; either uses the sign-in up, and
    without its cookie, used up or expired the page says the sign-in is over

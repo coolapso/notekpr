@@ -36,18 +36,33 @@ Never the model that wrote the change. As set up now:
 
 The maintainer may name others; this table changes with them.
 
-**With T3 Code** (`delegate_task`): call `orchestrator_capabilities` once
-(search for the model) to check it is there, then one `delegate_task` per
-review — each its own new session, never a message to an earlier one —
-with `role: "review"`, `target: {providerInstanceId: "codex", model,
-options: {reasoningEffort}}`, in the background. Its completion wakes you:
-don't poll. Work on (tests, docs) meanwhile; a review on code you are still
-changing reads a moving target, so start it once the change is nearly
-final.
+**Starting a review**: call the Codex CLI from your harness's shell. Write
+the brief (below) to a file outside the repository, then start one new
+session per review, a second pass included; never `codex exec resume` an
+earlier one:
 
-**Elsewhere**: start the reviewer however your harness allows. If it can't
-reach another model family, say so to the maintainer instead of reviewing
-your own work.
+```sh
+command codex exec -C <repository path> \
+  -m gpt-6.1-sol -c model_reasoning_effort=high \
+  -s read-only \
+  -o "${TMPDIR:-/tmp}/notekpr-code-review.md" \
+  - < <brief file>
+```
+
+For a design or cryptography review, use `-m gpt-daybreak-blue-latest -c
+model_reasoning_effort=xhigh` and name the output file after the review.
+
+- `command` skips a shell alias that adds flags, such as one that changes
+  the sandbox. `-s read-only` lets the reviewer read files and run
+  commands, but not change anything.
+- Run it in the background: a review takes minutes, longer than a
+  foreground command may run. If your harness tells you when a background
+  command ends, don't poll. The findings are in the `-o` file.
+- Work on (tests, docs) meanwhile. A review on code you are still changing
+  reads a moving target, so start it once the change is nearly final.
+
+If `codex` is missing or not signed in (`codex login status`), say so to
+the maintainer instead of reviewing your own work.
 
 ## The brief
 

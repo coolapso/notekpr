@@ -117,15 +117,25 @@ mod tests {
     #[test]
     #[allow(clippy::unnecessary_cast)]
     fn the_open_files_limit_goes_up_to_the_hard_one() {
-        let limit = raise_open_files_limit().unwrap();
-        let mut l = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
+        let get = || {
+            let mut l = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            // SAFETY: as above.
+            assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut l) }, 0);
+            l
         };
-        // SAFETY: as above.
-        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut l) }, 0);
+        let before = get();
+        let limit = raise_open_files_limit().unwrap();
+        let l = get();
         assert_eq!(l.rlim_cur as u64, limit);
-        assert_eq!(limit, (l.rlim_max as u64).min(1 << 20));
+        // Up to the hard limit, at most about a million; a soft limit
+        // already above that stays.
+        assert_eq!(
+            limit,
+            (before.rlim_cur as u64).max((l.rlim_max as u64).min(1 << 20))
+        );
     }
 
     #[cfg(target_os = "linux")]

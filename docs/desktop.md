@@ -68,6 +68,11 @@ How changes made at the same time are merged, renames, deletes and
 conflicts: the same as the CLI's folder ([cli.md §4–7](cli.md#4-sync-and-the-markdown-mirror)),
 since it is the same code.
 
+If the folder isn't the one you chose any more when the sync starts —
+moved away and replaced, or turned into a link — the app stops and says
+so instead of writing into it; put it back and *Try again*, or choose it
+again.
+
 *Stop…* stops it: the files stay where they are, and the app forgets its own
 copies for the folder. A folder the CLI already keeps in sync, one inside the
 app's own data, your home folder itself, or one holding other files is

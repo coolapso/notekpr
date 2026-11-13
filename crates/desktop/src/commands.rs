@@ -366,7 +366,7 @@ pub async fn folder_start(
     let adopt = adopt_from(server, handoff)?;
     state
         .folder
-        .adopt_and_start(adopt, dir)
+        .adopt_and_start(adopt, pinned)
         .await
         .map_err(chain)
 }

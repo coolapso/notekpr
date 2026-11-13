@@ -223,6 +223,24 @@ def main():
         a.find_text(".tree-item", "From disk", 20)
         check(True, "a new file becomes a note")
 
+        # ---- the folder swapped for a link while the app wasn't running
+        a.quit()
+        decoy = f"{home}/Decoy"
+        os.makedirs(decoy)
+        os.rename(notes, f"{notes}-real")
+        os.symlink(decoy, notes)
+        a = App(app_bin, profile)
+        a.find(".sb-bottom", 20)
+        a.route("/settings/app")
+        wait_for("the swapped folder refused", lambda: "isn't the folder you chose" in a.folder_status())
+        time.sleep(2)
+        check(os.listdir(decoy) == [], "a folder swapped for a link isn't written into: the app stops and says so")
+        os.remove(notes)
+        os.rename(f"{notes}-real", notes)
+        a.click_el(a.find_text(".settings-body button", "Try again", 10))
+        wait_for("the folder back", lambda: "Keeping" in a.folder_status())
+        check(True, "the folder back where it was, it goes on")
+
         # ---- signing out stops it; signing in again resumes it
         a.route("/settings/account")
         a.click_el(a.find_text(".settings-body button", "Sign out", 10))

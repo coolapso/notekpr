@@ -528,8 +528,9 @@ browser. What it adds to the above:
   for a web or mail address, or changes the server or the Markdown folder
   without a yes in a system dialog, which a script in the window can't
   give. The folder picked is pinned (its real path and which folder it
-  is) and checked again after that yes: swapped meanwhile, or holding
-  links, it is refused. Downloads (exports, attachments) go to the
+  is), checked again after that yes and before every start of its sync:
+  swapped meanwhile — for another folder, or a link anywhere on its path —
+  or holding links, it is refused, and nothing is written into it. Downloads (exports, attachments) go to the
   Downloads folder under a name of their own, never over a file, as in a
   browser — a script could put files there too, as on the web. Its CSP is the web app's, with the chosen server (and Tauri's IPC)
   in `connect-src`; Tauri's prototype freezing is on.

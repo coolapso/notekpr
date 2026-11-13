@@ -383,7 +383,7 @@ fn has_mirrorable_content(dir: &Path) -> bool {
 
 /// `p` made absolute, with its longest existing ancestor canonicalised (works
 /// for paths that do not exist).
-pub(crate) fn resolve_lenient(p: &Path) -> PathBuf {
+pub fn resolve_lenient(p: &Path) -> PathBuf {
     let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
     let mut base = abs.as_path();
     let mut rest = Vec::new();

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use notekpr_core::engine;
-use notekpr_core::keys::{AccountSecret, DeviceKey, RecoveryKey};
+use notekpr_core::keys::{AccountPublic, AccountSecret, DeviceKey, RecoveryKey};
 use notekpr_core::protocol::*;
 
 use crate::api::{Api, Credentials, DevicePoll};
@@ -670,6 +670,119 @@ pub async fn logout(dirs: &Dirs, profile: &str, forget: bool) -> Result<()> {
             p.session_token = None;
             p.session_expires_at = None;
         })?;
+    }
+    Ok(())
+}
+
+/// What another app on this computer hands over so a profile can use the
+/// device it holds — the desktop app's Markdown folder, which runs this
+/// library with the window's device and session (docs/desktop.md): one
+/// computer, one device.
+pub struct Adopt {
+    pub server: String,
+    pub user_id: String,
+    pub display_name: String,
+    pub device_id: String,
+    pub device_name: Option<String>,
+    /// The device's X25519 secret.
+    pub device_secret: zeroize::Zeroizing<[u8; 32]>,
+    /// The account key the device was approved for, as the handing app
+    /// pinned it: the account secret must belong to exactly this key.
+    pub account_public: AccountPublic,
+    pub token: String,
+    pub expires_at: i64,
+}
+
+/// Set up profile `profile` from what another app hands over ([`Adopt`]):
+/// the account secret is unwrapped from the device's own envelope and kept
+/// only if it belongs to the pinned account key — which the server must
+/// publish too, so a server can't hand this profile a secret of its own.
+/// A profile of another account or server is refused (forget it first).
+pub async fn adopt(dirs: &Dirs, profile: &str, a: Adopt) -> Result<()> {
+    let server = normalize_server_url(&a.server, false)?;
+    let ps = ProfileStore::new(dirs, profile)?;
+    if let Some(p) = ps.load()?
+        && p.user_id.is_some()
+        && (p.server != server || p.user_id.as_deref() != Some(a.user_id.as_str()))
+    {
+        bail!("profile '{profile}' belongs to another account or server; forget it first");
+    }
+    let api = Api::new(&server, Credentials::Session(a.token.clone()))?;
+    let me = api.me().await.context("checking the session")?;
+    if me.user.id != a.user_id || me.user.kind != PrincipalKind::Human {
+        bail!("the session belongs to someone else");
+    }
+    // The session is bound to the device it was handed over with: the
+    // device key and the session go together.
+    if me.session.device_id.as_deref() != Some(a.device_id.as_str()) {
+        bail!("the session isn't this device's");
+    }
+    let key = me
+        .account_key
+        .ok_or_else(|| anyhow!("the server has no account key for you"))?;
+    if key.user_id != a.user_id {
+        bail!("the server returned an account key for a different user");
+    }
+    let published = key
+        .verify()
+        .map_err(|e| anyhow!("your account key on the server failed verification: {e}"))?;
+    if published != a.account_public {
+        bail!(
+            "the account key on the server differs from the one this device was approved for. This can mean \
+             the server was compromised or the account was reset; refusing to continue"
+        );
+    }
+    let device =
+        DeviceKey::from_secret(*a.device_secret).map_err(|e| anyhow!("not a device key: {e}"))?;
+    let env: DeviceEnvelope = api
+        .get(&format!("/devices/{}/envelope", a.device_id))
+        .await
+        .context("fetching this device's keys")?;
+    let account = device
+        .unwrap_account(&env.account_envelope, &a.user_id, &a.device_id)
+        .map_err(|e| anyhow!("this device's keys could not be decrypted: {e}"))?;
+    if account.public() != a.account_public {
+        bail!("this device's keys belong to another account key; refusing to continue");
+    }
+    let secrets = SecretStore::open(&ps.data_dir())?;
+    secrets.save_device(&a.user_id, &a.device_id, &device)?;
+    secrets.save_account(&a.user_id, &account)?;
+    ps.upsert(
+        || Profile::new(&server, PrincipalKind::Human, false),
+        |p| {
+            p.server = server.clone();
+            p.session_token = Some(a.token.clone());
+            p.session_expires_at = Some(a.expires_at);
+            p.user_id = Some(a.user_id.clone());
+            p.display_name = Some(a.display_name.clone());
+            p.device_id = Some(a.device_id.clone());
+            p.device_name = a.device_name.clone();
+            p.device_pending = false;
+        },
+    )?;
+    Ok(())
+}
+
+/// Forget this profile's session token locally, without telling the server
+/// (the app that handed it over ends the session itself).
+pub fn drop_session(dirs: &Dirs, profile: &str) -> Result<()> {
+    let ps = ProfileStore::new(dirs, profile)?;
+    if ps.load()?.is_some() {
+        ps.update(|p| {
+            p.session_token = None;
+            p.session_expires_at = None;
+        })?;
+    }
+    Ok(())
+}
+
+/// Delete this profile and all its local data (keys, local copies) without
+/// telling the server. Files it mirrored stay where they are.
+pub fn forget_locally(dirs: &Dirs, profile: &str) -> Result<()> {
+    let ps = ProfileStore::new(dirs, profile)?;
+    SecretStore::wipe(&ps.data_dir())?;
+    if ps.load()?.is_some() {
+        ps.delete()?;
     }
     Ok(())
 }

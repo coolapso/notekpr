@@ -10,6 +10,7 @@ use anyhow::{Result, bail};
 static QUIET: AtomicBool = AtomicBool::new(false);
 static SILENT: AtomicBool = AtomicBool::new(false);
 static NO_PROMPTS: AtomicBool = AtomicBool::new(false);
+static VIA_PRINT: AtomicBool = AtomicBool::new(false);
 
 /// Suppress informational status lines (warnings are still shown).
 pub fn set_quiet(q: bool) {
@@ -26,6 +27,13 @@ pub fn set_silent(on: bool) {
 /// Never prompt, as if stdin were not a terminal (tests).
 pub fn set_non_interactive(on: bool) {
     NO_PROMPTS.store(on, Ordering::Relaxed);
+}
+
+/// Print command output with `print!`, which the test harness collects (and
+/// shows for failing tests only), instead of writing it to stdout directly:
+/// for tests that run commands in-process.
+pub fn set_print_output(on: bool) {
+    VIA_PRINT.store(on, Ordering::Relaxed);
 }
 
 /// What a command run for another process prints (a one-shot command
@@ -71,14 +79,50 @@ pub fn out_line(line: &str) {
         c.stdout.push('\n');
     });
     if kept.is_none() {
-        println!("{line}");
+        to_stdout(&[line.as_bytes(), b"\n"]);
     }
 }
 
 /// Command output without a line break of its own (text that has one).
 pub fn out_text(text: &str) {
     if captured(|c| c.stdout.push_str(text)).is_none() {
-        print!("{text}");
+        to_stdout(&[text.as_bytes()]);
+    }
+}
+
+/// Command output as it is, text or not (`cat` of an attachment). Collected
+/// output is text: commands run for another process print text only.
+pub fn out_bytes(data: &[u8]) {
+    if captured(|c| c.stdout.push_str(&String::from_utf8_lossy(data))).is_none() {
+        to_stdout(&[data]);
+    }
+}
+
+/// Write command output to stdout. When nobody reads it any more
+/// (`notekpr ls | head -1`), the process ends here, quietly and
+/// successfully, as other Unix tools do: Rust ignores SIGPIPE, so the write
+/// fails instead (and `println!` panics on that). It ends with an error when
+/// output can't be written for another reason (a full disk).
+fn to_stdout(parts: &[&[u8]]) {
+    if VIA_PRINT.load(Ordering::Relaxed) {
+        for p in parts {
+            print!("{}", String::from_utf8_lossy(p));
+        }
+        return;
+    }
+    let mut out = std::io::stdout().lock();
+    let written = parts
+        .iter()
+        .try_for_each(|p| out.write_all(p))
+        .and_then(|()| out.flush());
+    drop(out);
+    match written {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(e) => {
+            eprintln!("error: writing the output: {e}");
+            std::process::exit(1);
+        }
     }
 }
 

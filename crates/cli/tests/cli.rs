@@ -80,6 +80,46 @@ fn writes_shell_completions() {
     ));
 }
 
+/// When nobody reads its output any more (`notekpr ls | head -1` once `head`
+/// has gone), the program stops quietly and successfully, as other Unix tools
+/// do, instead of panicking with "failed printing to stdout: Broken pipe".
+#[tokio::test]
+async fn stops_quietly_when_nobody_reads_its_output() {
+    use std::process::{Command, Stdio};
+    let srv = start().await;
+    login(&srv, "alice").await;
+    let dirs = srv.dirs("alice");
+    let notekpr = |args: &[&str]| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_notekpr"));
+        c.args(args)
+            .env("NOTEKPR_CONFIG_DIR", &dirs.config)
+            .env("NOTEKPR_DATA_DIR", &dirs.data)
+            .env_remove("NOTEKPR_LOG")
+            .stdin(Stdio::null());
+        c
+    };
+    // Lines (`profiles`, offline) and a long text (`completions`).
+    for (args, says) in [
+        (&["profiles"][..], "alice"),
+        (&["completions", "zsh"][..], "#compdef notekpr"),
+    ] {
+        let read = notekpr(args).output().unwrap();
+        assert!(read.status.success(), "{args:?}: {read:?}");
+        assert!(
+            String::from_utf8_lossy(&read.stdout).contains(says),
+            "{args:?}"
+        );
+
+        // Its output goes into a pipe whose reading end is already closed.
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let unread = notekpr(args).stdout(writer).output().unwrap();
+        let stderr = String::from_utf8_lossy(&unread.stderr);
+        assert!(unread.status.success(), "{args:?}: {unread:?}");
+        assert!(stderr.is_empty(), "{args:?}: {stderr}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn plaintext_mirror_is_confirmed_per_directory() {
     let srv = start().await;

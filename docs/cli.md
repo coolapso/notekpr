@@ -328,7 +328,9 @@ don't use the local copies run right away, whatever else is running:
 profiles for a mirror and a gateway at the same time.) The lock is released
 automatically when a process ends, also after a crash. `--json` gives
 machine-readable output for listings, `-q` silences status lines. Status and
-warnings go to stderr, results to stdout.
+warnings go to stderr, results to stdout. When whatever reads the results
+stops reading (`notekpr ls Home | head -1`), the command stops there and
+exits successfully.
 
 Revisions: a note gets a revision when an editing session ends (after a CLI
 write, when `sync`/the gateway stop, or after two idle minutes, once at least

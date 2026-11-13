@@ -278,7 +278,7 @@ pub async fn forward(dirs: &Dirs, mut cli: Cli) -> Result<bool> {
         eprintln!("(run by the notekpr process that keeps this profile in sync)");
     }
     eprint!("{}", reply.stderr);
-    print!("{}", reply.stdout);
+    crate::ui::out_text(&reply.stdout);
     match reply.error {
         Some(e) => Err(anyhow!(e)),
         None => Ok(true),

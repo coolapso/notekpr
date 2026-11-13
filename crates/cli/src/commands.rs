@@ -1,6 +1,6 @@
 //! Implementations of the CLI commands (thin wrappers over the library).
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -636,9 +636,7 @@ async fn execute(ctx: Ctx, command: Command) -> Result<()> {
                 }
                 SharedCmd::Cat { note } => {
                     let (_, text) = note_shares::read_shared(&s, &note).await?;
-                    let mut out = std::io::stdout().lock();
-                    out.write_all(text.as_bytes())?;
-                    out.flush()?;
+                    ui::out_text(&text);
                 }
                 SharedCmd::Write { note, append } => {
                     let mut data = String::new();
@@ -1798,9 +1796,7 @@ async fn cat(ctx: &Ctx, vault: &str, path: &str) -> Result<()> {
         EntryKind::Drawing => ops::drawing_file(&hub, &v, &e.id).await.into_bytes(),
         EntryKind::Folder => bail!("'{path}' is a folder; use `ls`"),
     };
-    let mut out = std::io::stdout().lock();
-    out.write_all(&data)?;
-    out.flush()?;
+    ui::out_bytes(&data);
     Ok(())
 }
 
@@ -2277,12 +2273,7 @@ async fn shapes(ctx: &Ctx, c: ShapesCmd) -> Result<()> {
             let items = op(ops::find_library(&hub, &ids).await)?;
             let file = notekpr_draw::file::write_library(&items);
             match out {
-                None => {
-                    let mut o = std::io::stdout().lock();
-                    o.write_all(file.as_bytes())?;
-                    o.write_all(b"\n")?;
-                    o.flush()?;
-                }
+                None => crate::out!("{file}"),
                 Some(out) => {
                     if out.exists() && !force {
                         bail!("{} exists (use --force to replace it)", out.display());

@@ -33,6 +33,8 @@ pub async fn start_with(configure: impl FnOnce(&mut notekpr_server::config::Conf
     notekpr_cli::ui::set_quiet(std::env::var_os("TEST_LOG").is_none());
     // Never wait for a prompt, even when `cargo test` runs in a terminal.
     notekpr_cli::ui::set_non_interactive(true);
+    // Command output to the test harness, which shows it for failing tests.
+    notekpr_cli::ui::set_print_output(true);
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_env("TEST_LOG"))
         .with_writer(std::io::stderr)

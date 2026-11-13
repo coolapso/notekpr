@@ -865,6 +865,13 @@ What it needs:
   after that). Before 1.0 one may not: the old server's changes then fail
   during those seconds — apps keep note edits and send them to the new one;
   other changes are tried again by the person.
+* **An old version that hands over.** 0.16 and older hold no lease, so a new
+  server started beside one writes at once, next to it, until it stops. The
+  database stays whole (SQLite takes one change at a time), but an app
+  connected to one server doesn't hear of the other's changes until it
+  reconnects, and someone signed out on one stays connected to the other
+  for up to a minute. Update from those once the way you did before
+  (`strategy: Recreate`), then switch to `RollingUpdate`.
 
 Several servers on one database by mistake (`replicas: 2`, two Compose
 projects on one data directory) can't both write: the other one serves

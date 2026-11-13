@@ -68,6 +68,8 @@ spec:
   # stops only once the new one is ready: it hands writing over then. One
   # that never gets ready leaves the old one serving. (`Recreate` stops the
   # old one first: seconds without a server, which the apps ride out.)
+  # Coming from 0.16 or older, which can't hand over, update once with
+  # `Recreate`, then switch (docs/operations.md §7).
   strategy:
     type: RollingUpdate
     rollingUpdate:

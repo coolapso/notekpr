@@ -1,7 +1,8 @@
 # Use your own editor (Obsidian, Neovim, VS Code, …)
 
-Your notes don't have to live in the notekpr app. The CLI (`notekpr`) can
-keep your vaults as an ordinary folder of Markdown files, always up to date
+Your notes don't have to live in the notekpr app. The
+[desktop app](desktop.md) and the CLI (`notekpr`) can each keep your vaults
+as an ordinary folder of Markdown files, always up to date
 and in plain text on your machine, while the server only ever stores them
 encrypted. Edit them with whatever you like — Obsidian, Neovim, VS Code, grep
 and sed, an AI coding agent — and changes sync both ways, live, with everyone
@@ -30,7 +31,14 @@ the server accepts — the server never takes plaintext.
 
 ## Set it up
 
-Install the client ([cli.md §1](cli.md#1-install--build)), then:
+**With the desktop app**: *Settings → Desktop app → Markdown folder →
+Choose a folder…*, an empty one. It keeps the folder in sync while the app
+runs, in the tray too ([desktop.md](desktop.md#the-markdown-folder)). The
+rest of this page is about the CLI, which does the same where there is no
+desktop app — a server, a computer without a screen — and brings the notes
+of a folder you already have along.
+
+**With the CLI**: install it ([cli.md §1](cli.md#1-install--build)), then:
 
 ```sh
 notekpr setup

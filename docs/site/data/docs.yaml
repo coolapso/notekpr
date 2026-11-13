@@ -27,8 +27,11 @@
 
 - section: tools
   title: Your own tools
-  description: Your notes outside the app, in your editor, in a terminal, and for AI agents.
+  description: The desktop app, and your notes outside the app, in your editor, in a terminal, and for AI agents.
   pages:
+    - file: desktop
+      nav: The desktop app
+      description: notekpr in a window of its own on your computer, in the tray, starting at login, with a Markdown folder.
     - file: own-editor
       nav: Your own editor
       description: An end-to-end encrypted sync server for your Obsidian vault, or for Neovim, VS Code and any other editor.

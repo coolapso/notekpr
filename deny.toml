@@ -11,6 +11,10 @@ ignore = [
     { id = "RUSTSEC-2023-0071", reason = "rsa (Marvin attack) via openidconnect: the timing leak is about private-key operations. The server only verifies ID token signatures with the provider's public keys and sends a client secret, never an RSA-signed assertion; RSA private keys appear only in tests (the mock provider). No rsa release is fixed yet." },
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained (archived), no known vulnerability: a compile-time macro used inside Leptos 0.8, nothing of it runs in the client. Goes away when Leptos drops it." },
     { id = "RUSTSEC-2026-0215", reason = "smallstr is unmaintained, no known vulnerability: yrs (vendor/yrs, 0.28.0 is the latest release) stores short strings with it. Goes away when yrs drops it, or with a patch in vendor/yrs." },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained, no known vulnerability: a compile-time macro of gtk-rs 0.18, which Tauri 2 (the desktop app, crates/desktop) draws its Linux windows, menus and tray with. Goes away when Tauri moves on from GTK 3's bindings." },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained as a crate of its own (now part of zbus 6), no known vulnerability: zbus 5's D-Bus messages in the desktop app's single-instance and opener plugins (Linux). Goes away when those plugins move to zbus 6." },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained as a crate of its own (now part of zbus 6), no known vulnerability: see RUSTSEC-2026-0370." },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained as a crate of its own (now part of zbus 6), no known vulnerability: see RUSTSEC-2026-0370." },
 ]
 
 [licenses]
@@ -33,12 +37,17 @@ allow = [
     "BSL-1.0",
 ]
 # MPL-2.0 is compatible too (it names the GPL family as secondary licenses),
-# but file by file: allowed only for these, which merman (crates/diagram, the
-# diagram module) parses CSS with. Unmodified, from crates.io.
+# but file by file: allowed only for these, unmodified, from crates.io —
+# what merman (crates/diagram, the diagram module) parses CSS with, Servo's
+# CSS selectors that Tauri's build step edits the desktop app's HTML with
+# (its Content-Security-Policy), and a helper of the dirs crate (where the
+# desktop app's system folders are).
 exceptions = [
     { name = "cssparser", allow = ["MPL-2.0"] },
     { name = "cssparser-macros", allow = ["MPL-2.0"] },
     { name = "dtoa-short", allow = ["MPL-2.0"] },
+    { name = "selectors", allow = ["MPL-2.0"] },
+    { name = "option-ext", allow = ["MPL-2.0"] },
 ]
 
 [bans]

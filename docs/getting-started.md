@@ -188,9 +188,10 @@ download it. More in [Writing notes](writing.md#pictures-video-sound-and-files).
   reached. Changes sync when it's back.
 * **Where you're signed in**: *Settings → Sessions* lists it, and signs a
   device out from afar.
-* **On your computer, in your own editor**: the `notekpr` app for your
-  computer keeps your notes in a folder of plain Markdown files, for
-  Obsidian, VS Code or any editor ([how](own-editor.md)).
+* **On your computer**: the [desktop app](desktop.md) is notekpr in a
+  window of its own that stays in the tray, and it can keep your notes in
+  a folder of plain Markdown files too, for Obsidian, VS Code or any
+  editor (*Settings → Desktop app*; [more](own-editor.md)).
 
 ## On your phone
 

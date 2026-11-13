@@ -35,6 +35,10 @@ jobs:
           # The runner image ships Chrome and a matching chromedriver too.
           [ -n "${CHROMEWEBDRIVER:-}" ] && echo "$CHROMEWEBDRIVER" >> "$GITHUB_PATH"
           echo "NOTEKPR_CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome)" >> "$GITHUB_ENV"
+      - name: The desktop app's libraries, and what its browser test runs in
+        run: |
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            sway webkit2gtk-driver dbus
       - name: Hugo, for the docs site (docs/site)
         run: |
           v=0.168.0

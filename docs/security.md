@@ -412,6 +412,8 @@ sessions and envelope), rotate keys of shared vaults, rotate the recovery key.
 | Browser, "Keep this browser usable offline" (opt-in) | Additionally the session token, this device's wrapped account key, the vault list with the wrapped vault keys (only those that checked out against the vault's membership log, and that log as verified) and the encrypted preferences (`localStorage`), and a service worker with a copy of the app's own files. With the device secret next to them, a copy of the browser profile can then be decrypted **without the server — and removing the device no longer cuts it off**. Off by default; the setting explains this. Turning it off, "Forget this browser", a dead session or a device the server reports as removed delete the stored data. |
 | CLI, default | Encrypted local replica (vault-key encrypted CRDT state, sealed with a local key file `0600`). The key file sits in the same profile directory, so this protects against other OS users and stray copies of single files, but not against a copy of the whole directory (a backup, a synced folder) or malware running as the same user; use full-disk encryption. Moving the key to the OS keyring is planned. |
 | CLI, plaintext mirror (explicit opt-in) | Ordinary Markdown files readable by any program running as the user — the point of the mode. It must be enabled explicitly and the CLI explains the implications. |
+| Desktop app, its window | As the browser's rows above, in the app's own webview profile (one per server it was used with, so nothing of one server's session ever goes to another), under the app's data folder ([desktop.md](desktop.md#where-it-keeps-things)); no service worker. |
+| Desktop app, Markdown folder (opt-in) | As the CLI's two rows above: a CLI profile of the app's own holding this computer's device key and the account secret (unwrapped by the app from the device's envelope, never handed over by the window), sealed with a local key file `0600` beside them, and the encrypted replicas; plus the decrypted Markdown files in the folder chosen, after the person confirmed in a system dialog what that means. "Forget this computer" and *Stop* delete the profile (never the Markdown files), each after a yes in a system dialog; a device the server reports as removed stops it (what it kept stays until then); signing out drops its session token once the server says the session ended. |
 | Agent gateway host | Holds the agent's keys and plaintext of the vaults shared with the agent. Treat it like any server with secrets; the gateway listens on localhost by default and requires a bearer token. |
 
 ### Untrusted sync operations
@@ -489,6 +491,58 @@ reported, never applied partially. Duplicate deliveries are no-ops.
 * **Supply chain**: the browser client contains no third-party JavaScript; all
   dependencies are Rust crates pinned in `Cargo.lock`. Run `cargo audit` /
   `cargo deny` in CI (see development.md).
+
+### The desktop app
+
+The desktop app ([desktop.md](desktop.md)) runs the web client in the
+system's webview (WebKitGTK on Linux), from files built into the app; it
+never loads a page from anywhere else, and links open in the default
+browser. What it adds to the above:
+
+* **Signing in** happens in the system browser, which comes back to the
+  app over loopback with a one-time code (protocol.md §3, "Apps"). The
+  server sends the code only to an IP-literal loopback address the sign-in
+  started with, only in the browser that started it (the login cookie),
+  only after the person confirmed it on the server's page comparing a code
+  with the one the app shows, and swaps it only with the PKCE verifier that
+  never leaves the app's native side — a code seen in the browser's
+  history, a log or by another program is useless. The confirmation is
+  what stops a sign-in link someone else made (another account on the
+  same computer, listening on a loopback port of its own, with its own
+  verifier): signing in at the identity provider alone, even silently,
+  sends nothing to anyone's app. The app's listener answers only its
+  random path, on its own address (a page reaching the port under another
+  name gets nothing).
+* **Cross-origin API calls** are allowed for the app's fixed origins only
+  (`tauri://localhost`, `http(s)://tauri.localhost`), without credentials:
+  the API takes bearer tokens, so no web page gains anything, and other
+  origins get no CORS headers (so a page can't, say, start device-code
+  requests that would show the visitor's own address).
+* **The window and the app's native side** talk through Tauri's IPC, and
+  only the app's own window may (its capability names each command; none
+  of Tauri's own or its plugins'). The commands are written for a window
+  running someone else's script — the second layer behind the HTML allow
+  list above: none reads or writes a file the person didn't choose in the
+  system's own folder picker (the window gets a number for the folder,
+  never a path to name one), runs a program other than the default browser
+  for a web or mail address, or changes the server or the Markdown folder
+  without a yes in a system dialog, which a script in the window can't
+  give. The folder picked is pinned (its real path and which folder it
+  is) and checked again after that yes: swapped meanwhile, or holding
+  links, it is refused. Downloads (exports, attachments) go to the
+  Downloads folder under a name of their own, never over a file, as in a
+  browser — a script could put files there too, as on the web. Its CSP is the web app's, with the chosen server (and Tauri's IPC)
+  in `connect-src`; Tauri's prototype freezing is on.
+* **The Markdown folder** runs the CLI's own sync in the app, with this
+  computer's device: the window hands over the device key, the account key
+  it was approved for (its pin) and its session — never the account
+  secret. The app checks that the session is this device's and this
+  person's, that the server publishes that same account key, then unwraps
+  the account secret from the device's envelope and keeps it only if it
+  belongs to the pinned key, as the CLI does after an approval. A new
+  session from the window is checked the same way before the folder uses
+  it; the window saying it signed out stops the folder, and only the
+  server saying so ends its session.
 
 ### Server hardening
 

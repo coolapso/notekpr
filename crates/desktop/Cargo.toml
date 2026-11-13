@@ -1,0 +1,45 @@
+[package]
+name = "notekpr-desktop"
+description = "The notekpr desktop app: the app in a window of its own, with a tray, sync in the background and a Markdown folder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "notekpr_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "notekpr-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.5", default-features = false }
+
+[dependencies]
+notekpr-core = { path = "../core" }
+notekpr-cli = { path = "../cli" }
+tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart = "2.5"
+tauri-plugin-dialog = "2.4"
+tauri-plugin-opener = "2.5"
+tauri-plugin-single-instance = "2.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "query"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+sha2 = "0.11"
+data-encoding = "2.11"
+zeroize = "1.9"
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+reqwest = { version = "0.13", default-features = false }

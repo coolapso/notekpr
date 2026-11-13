@@ -446,6 +446,7 @@ HOME = [
         - [ ] Your *Scans* vault is full: the billing script gave it only 1 MiB, and three scanned letters take more. The banner says so; edit a note there and the edit waits in your browser. *Vault settings* shows how much of its room it uses and its id (*Copy*). As the administrator, paste the id into *Find* under Settings → Administration → *Vaults* (every vault by size, with its owner — never its name) and give it more with *Limit*; or delete a letter for good from its trash. Either way the waiting edit goes out
         - [ ] Settings → AI agents: the *Home assistant* agent, which writes in *Assistant*
         - [ ] Your notes as plain Markdown files, synced both ways: `task demo:cli -- --profile alice sync --dir /tmp/alice-notes`
+        - [ ] The desktop app (Linux): `task desktop -- --profile demo`, choose `http://localhost:8099` and sign in as **alice** — its own device, so approve it here. Settings → *Desktop app*: start at login, close to the tray (if your desktop has one), and a Markdown folder kept in sync by the app itself: edit a file, and the note changes here
 
         ## Map of this vault
 

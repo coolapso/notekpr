@@ -1,0 +1,26 @@
+{
+  "identifier": "main",
+  "description": "What the app's own window may ask of the app (docs/desktop.md): its commands, nothing of Tauri's or its plugins'.",
+  "local": true,
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-desktop-info",
+    "allow-set-server",
+    "allow-sign-in",
+    "allow-cancel-sign-in",
+    "allow-set-close-to-tray",
+    "allow-set-autostart",
+    "allow-open-external",
+    "allow-choose-folder",
+    "allow-folder-start",
+    "allow-folder-off",
+    "allow-folder-retry",
+    "allow-reveal-folder",
+    "allow-session-changed",
+    "allow-signed-out",
+    "allow-forget-computer",
+    "allow-next-event"
+  ]
+}

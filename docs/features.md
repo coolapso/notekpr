@@ -292,9 +292,15 @@ notes](writing.md) and [Drawings](drawings.md).
   its own icon, in a window of its own. The sign-in screen offers it: one
   tap on Android, the steps on an iPhone
   ([how](getting-started.md#on-your-phone)).
+* The desktop app (Linux): notekpr in a window of its own, signed in
+  through your browser, that keeps running in the tray (closing the window
+  hides it there), can start when you log in, and keeps your vaults as a
+  two-way folder of Markdown files itself — no CLI needed for that
+  ([desktop app](desktop.md)).
 * A command-line client (CLI) with a local encrypted copy, live sync, and a
   two-way folder of plain Markdown files for Obsidian, Neovim, VS Code or
-  anything else ([how](own-editor.md)).
+  anything else ([how](own-editor.md)), for scripts, agents and computers
+  without a screen.
 * The command line does everything: list, read, write, search, move, icons,
   trash, history, quick notes, sharing, archiving, key rotation, devices and
   recovery keys, import and export — also while its sync daemon runs. Shell

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Build the server and browser client, then run the browser end-to-end suite
-# and the browser ↔ CLI tests. `-k NAME` runs only the tests whose name
-# contains NAME (the browser ↔ CLI tests are called `cross_client` and
-# `drawings`).
-# Requirements: chromium (or chrome) + a matching chromedriver on PATH, python3.
+# Build the server and browser client, then run the browser end-to-end suite,
+# the browser ↔ CLI tests and the desktop app's. `-k NAME` runs only the tests
+# whose name contains NAME (the browser ↔ CLI tests are called `cross_client`
+# and `drawings`, the desktop app's `desktop`).
+# Requirements: chromium (or chrome) + a matching chromedriver on PATH, python3;
+# for the desktop app's, sway and WebKitWebDriver (skipped without them).
 set -euo pipefail
 # Print as it goes, also into a pipe (`task release` runs it in one): a
 # failure's traceback then lands next to its test, not somewhere earlier.
@@ -28,4 +29,10 @@ if [ -z "$filter" ] || [[ "cross_client" == *"$filter"* ]]; then
 fi
 if [ -z "$filter" ] || [[ "drawings" == *"$filter"* ]]; then
   python3 tests/e2e/drawings.py --server target/debug/notekpr-server --cli target/debug/notekpr --web "$web"
+fi
+if [ -z "$filter" ] || [[ "desktop" == *"$filter"* ]]; then
+  # The desktop app with this web client inside (crates/desktop: its build
+  # takes the web client's folder from TAURI_CONFIG).
+  TAURI_CONFIG="{\"build\":{\"frontendDist\":\"../../$web\"}}" cargo build -p notekpr-desktop
+  python3 tests/e2e/desktop.py --server target/debug/notekpr-server --app target/debug/notekpr-desktop
 fi

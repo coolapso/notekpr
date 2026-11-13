@@ -12,6 +12,8 @@ alternatives were considered. The wire protocol is in
                  ┌────────────────────────── trusted clients ───────────────────────────┐
                  │                                                                      │
  Browser ──────▶ │  Web client (Rust → WebAssembly, Leptos)                             │
+ Desktop ──────▶ │  Desktop app: the web client in a window of its own (Tauri), with    │
+                 │    the CLI's library for its Markdown folder                         │
                  │  CLI `notekpr` (Rust): sync daemon, Markdown mirror                  │
  AI agents ────▶ │  same client: CLI commands, a Markdown folder, local HTTP gateway    │
                  │                                                                      │
@@ -38,6 +40,7 @@ alternatives were considered. The wire protocol is in
 | `crates/notion` | Notion's HTML exports as notes for the clients' imports (`notekpr-notion`): pages, databases (folders of notes with their properties in front matter, checklists, tables), links between pages, files, icons, and a report of what didn't come along. *Sans-IO*: the client unzips and imports what it returns, so the server never sees an export. |
 | `crates/web` | Browser client compiled to WebAssembly; served as static files by the server. Hosts the editor, all decryption in the browser. |
 | `crates/cli` | The CLI: login (device flow), enrollment, encrypted local replica, live sync daemon with plaintext Markdown mirror, export/import, agent gateway (local HTTP API). |
+| `crates/desktop` | The desktop app (`notekpr-desktop`, [desktop.md](desktop.md)): Tauri 2 around the web client, whose files are built into it; sign-in through the system browser, the tray, running in the background, starting at login, and a Markdown folder kept in sync by the CLI's library with this computer's device. |
 | `crates/load` | The load test (`task load`): simulated people — real clients built on the CLI's library, with real keys — against the server image with CPU and memory limits; kills the server midway through each level, starts it again, and checks that nothing was lost ([load-test.md](load-test.md)). |
 | `crates/load-events` | The event types the load test streams to its live dashboard. |
 | `crates/load-ui` | The load test's live dashboard: Rust compiled to wasm32, drawing on a canvas (`scripts/build-load-ui.sh`). |
@@ -82,6 +85,7 @@ holds while an update runs two servers on one database.
 | Auth (CLI) | RFC 8628 device authorization grant served by our server | Loopback redirect (RFC 8252) | Works over SSH and headless machines; approval happens in the already signed-in web app. |
 | Auth (agents) | OAuth 2.0 client credentials (RFC 6749 §4.4), per-agent revocable secrets | Long-lived API keys | Standard, short-lived tokens (1 h), rotation without downtime. |
 | Web UI framework | Leptos 0.8 (CSR) | Yew, Dioxus | Fine-grained reactivity, small output, active project. |
+| Desktop app | Tauri 2 around the web client, its files built in; the CLI's library for the Markdown folder | wry and tao directly; a shell around the server's page; a native UI (egui, iced, Slint) | One UI for the browser and the desktop, the editor included; what runs is what was installed, not what a server serves; the tray, autostart, single instance and dialogs come as Rust plugins, built with cargo (no npm). Tauri's own IPC script comes with the crate. |
 | Editor | Custom `contenteditable` editor (`crates/editor`) with a CodeMirror-like model: transactions over a line-indexed buffer, line-granular re-rendering | CodeMirror 6, ProseMirror, Lexical | No JS dependencies allowed. Live-preview styling with the full source always in the DOM keeps caret mapping exact and CRDT edits precise. |
 | Markdown rendering | pulldown-cmark (CommonMark + GFM tables, task lists, strikethrough, footnotes, wiki links, math) | comrak | Fast, pure Rust, wasm-friendly. Raw HTML is rendered as text (no sanitizer needed). |
 | Math and diagrams | LaTeX → MathML with math-core (the browser typesets it), mhchem ported to Rust; Mermaid with merman, loaded on demand | KaTeX, MathJax, mermaid.js | No JavaScript. The browser lays MathML out itself; merman is Mermaid's look in Rust, but bigger than the app, hence a module of its own ([development.md](development.md#math-chemistry-and-diagrams)). |
@@ -362,6 +366,11 @@ period the server deletes the data and an admin's client drops the entry.
 * Each browser tab keeps its own session (sessionStorage), seeded from the last
   login in local storage. In development mode this lets several people be
   signed in side by side in one browser.
+* The same build runs in the desktop app's window (`crates/web/src/desktop.rs`):
+  it knows by Tauri's IPC being there, and then asks the app for the server
+  (the API and the WebSocket go there instead of to the page's origin),
+  signs in through the app (the system browser), and hands the app what its
+  Markdown folder needs. Everything else is the browser's code path.
 
 ## 8. Accommodating future work
 
@@ -405,6 +414,7 @@ period the server deletes the data and an admin's client drops the entry.
 | M5 Agents | agent identities, CLI and Markdown-folder access, gateway | done (`crates/cli`); local MCP server removed, remote MCP connector considered for later |
 | M6 Packaging | Docker image, compose, Kubernetes, backup/restore docs | done |
 | M7 Note sharing | share single notes outside a vault: document keys, per-note subscriptions, web + CLI | done (S `individual_note_sharing`, L `single_note_sharing_end_to_end`, E `test_note_sharing`) |
-| Next | native desktop GUI shell (Tauri around the web UI), mobile apps | planned |
+| M8 Desktop app | the web client in Tauri 2, sign-in through the system browser (loopback + PKCE), tray, background, start at login, the Markdown folder; packages next | in progress (`tests/e2e/desktop.py`) |
+| Next | mobile apps | planned |
 
 Acceptance criteria and how each is verified: [acceptance.md](acceptance.md).

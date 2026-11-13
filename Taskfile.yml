@@ -87,6 +87,17 @@ tasks:
           else
             echo "· for the browser tests (task test:e2e, task test:editor, task ci): chromium with chromedriver, and python3 (Arch: chromium python)"
           fi
+          if pkg-config --exists webkit2gtk-4.1 gtk+-3.0 2>/dev/null; then
+            echo "✓ WebKitGTK 4.1 and GTK 3 (the desktop app)"
+          else
+            echo "✗ the desktop app (crates/desktop, built by task test and task lint) needs WebKitGTK 4.1 and GTK 3 with their headers (Arch: webkit2gtk-4.1; Debian, Ubuntu: libwebkit2gtk-4.1-dev)"; ok=0
+          fi
+          pkg-config --exists ayatana-appindicator3-0.1 2>/dev/null && echo "✓ libayatana-appindicator (the desktop app's tray)" || echo "· for the desktop app's tray icon when it runs: libayatana-appindicator (Arch: libayatana-appindicator; Debian, Ubuntu: libayatana-appindicator3-1)"
+          if command -v sway >/dev/null && command -v WebKitWebDriver >/dev/null && command -v dbus-run-session >/dev/null; then
+            echo "✓ sway + WebKitWebDriver (the desktop app's browser test)"
+          else
+            echo "· for the desktop app's browser test (task test:e2e, skipped without): sway, WebKitWebDriver and dbus-run-session (Arch: sway webkit2gtk-4.1 dbus; Debian, Ubuntu: sway webkit2gtk-driver dbus)"
+          fi
           command -v cargo-deny >/dev/null && echo "✓ cargo-deny (task audit)" || echo "· for task audit and task ci: cargo-deny (Arch: cargo-deny; or cargo install cargo-deny --locked)"
           command -v docker >/dev/null && echo "✓ docker (container image, Docker dev stack)" || echo "· for the docker:* tasks, task load and task ci: docker + compose (Arch: docker docker-compose docker-buildx)"
           command -v semrel >/dev/null && command -v jq >/dev/null && echo "✓ semrel + jq (task release)" || echo "· for task release: semrel (task tools:release, needs Go) and jq (Arch: jq)"
@@ -171,6 +182,13 @@ tasks:
     cmds:
       - ./scripts/build-web.sh
 
+  build:desktop:
+    desc: "Build the desktop app (target/release/notekpr-desktop) with the optimized web client inside"
+    deps: [rust]
+    cmds:
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} OUT=dist/desktop-web ./scripts/build-web.sh
+      - 'TAURI_CONFIG=''{"build":{"frontendDist":"../../dist/desktop-web"}}'' cargo build --release --locked -p notekpr-desktop'
+
   build:web:dev:
     desc: Build the web client quickly (unoptimized) into dist/web
     deps: [rust]
@@ -202,6 +220,13 @@ tasks:
       - cmd: 'echo "admin client: curl -H \"Authorization: Bearer {{.DEV_ADMIN_TOKEN}}\" {{.PUBLIC_URL}}/api/v1/admin/settings"'
         silent: true
       - ./target/debug/notekpr-server --dev-mode --adminless {{.ADMINLESS}} --web-dir dist/web --data-dir {{.DATA_DIR}} --listen {{.LISTEN}} --public-url {{.PUBLIC_URL}} --log-format pretty {{.CLI_ARGS}}
+
+  desktop:
+    desc: "Run the desktop app with the web client inside (unoptimized), e.g. against `task dev`: choose http://localhost:8080 in it. A second person side by side: task desktop -- --profile bob"
+    deps: [rust]
+    cmds:
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} PROFILE=dev OUT=dist/desktop-web ./scripts/build-web.sh > /dev/null
+      - 'TAURI_CONFIG=''{"build":{"frontendDist":"../../dist/desktop-web"}}'' cargo run -q -p notekpr-desktop -- {{.CLI_ARGS}}'
 
   dev:adminless:
     desc: "`task dev` as an admin-less instance: nobody signing in administers anything, only admin clients (the dev one: its curl line) do. Same data as `task dev`"
@@ -357,7 +382,7 @@ tasks:
     desc: Clippy on every crate (warnings are errors), including the web client for wasm32
     deps: [rust]
     cmds:
-      - cargo clippy --locked -p notekpr-core -p notekpr-draw -p notekpr-server -p notekpr-sync -p notekpr-cli -p notekpr-editor -p notekpr-mhchem -p notekpr-notion -p notekpr-load-events -p notekpr-load -p notekpr-load-ui --all-targets -- -D warnings
+      - cargo clippy --locked -p notekpr-core -p notekpr-draw -p notekpr-server -p notekpr-sync -p notekpr-cli -p notekpr-editor -p notekpr-mhchem -p notekpr-notion -p notekpr-load-events -p notekpr-load -p notekpr-load-ui -p notekpr-desktop --all-targets -- -D warnings
       # The web client's tests run natively.
       - cargo clippy --locked -p notekpr-web --tests -- -D warnings -A clippy::type_complexity
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} cargo clippy --locked -p notekpr-web --target wasm32-unknown-unknown -- -D warnings -A clippy::type_complexity

@@ -1,8 +1,9 @@
 # The command-line client (CLI)
 
 `notekpr` is the command-line client (Linux first; it also builds for
-macOS and Windows). It is not the desktop app, which is planned as a
-separate client. It keeps an **encrypted local replica** of your vaults for
+macOS and Windows). It is not the [desktop app](desktop.md), a separate
+client that keeps a Markdown folder too; the CLI is for scripts, AI agents
+and computers without a screen. It keeps an **encrypted local replica** of your vaults for
 offline use, syncs live over the WebSocket, can **mirror vaults as ordinary
 Markdown files** you edit with Neovim, VS Code or Obsidian, and
 imports/exports plain Markdown. The same binary is how [AI agents](agents.md) work with notes (CLI, Markdown folder, local HTTP gateway).

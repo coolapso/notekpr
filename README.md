@@ -54,8 +54,9 @@ how to use the app.
   for every note, signed membership and edits, new devices approved from one
   you already use.
 * **[Offline, and your own tools](docs/features.md#offline-and-your-own-tools)**
-  — works offline; the CLI does everything and keeps your vaults as a
-  folder of Markdown files; import (Markdown, Obsidian, Notion) and export.
+  — works offline; a desktop app in the tray; the desktop app or the CLI
+  keeps your vaults as a folder of Markdown files; import (Markdown,
+  Obsidian, Notion) and export.
 * **[For AI agents](docs/features.md#for-ai-agents)** — their own identity,
   only the vaults you share, through the CLI, files or an HTTP gateway.
 * **[Running it](docs/features.md#running-it)** — one Rust server with

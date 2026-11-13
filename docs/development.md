@@ -12,6 +12,7 @@ crates/diagram  Mermaid diagrams as SVG (merman), a wasm module the app loads wh
 crates/web      browser client (Leptos → wasm32)       → dist/web
 crates/notion   Notion's HTML exports as notes, for both clients' imports
 crates/cli      the CLI, Markdown mirror, gateway      → notekpr
+crates/desktop  the desktop app (Tauri 2 around crates/web) → notekpr-desktop
 crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view
 crates/load-ui  the load test's live view (wasm32)     → dist/load
@@ -42,6 +43,9 @@ get it.
 | Chromium + chromedriver, Python 3 | browser tests (`task test:e2e`) | `chromium` (includes chromedriver), `python` | matching Chrome/Chromium + chromedriver |
 | cargo-deny | supply-chain checks (`task audit`) | `cargo-deny` | `cargo install cargo-deny --locked` |
 | Docker + Compose | container image, Docker dev stack, local Dex for OIDC, the load test (`task load`), the S3 file store's test (`task test:s3`, with Garage) | `docker`, `docker-compose`, `docker-buildx` | Docker docs |
+| WebKitGTK 4.1, GTK 3 (with headers) | the desktop app (`crates/desktop`, built by `task test` and `task lint`) | `webkit2gtk-4.1` | Debian, Ubuntu: `libwebkit2gtk-4.1-dev librsvg2-dev` |
+| libayatana-appindicator | the desktop app's tray, when it runs | `libayatana-appindicator` | Debian, Ubuntu: `libayatana-appindicator3-dev` |
+| sway, WebKitWebDriver, dbus-run-session | the desktop app's browser test (`tests/e2e/desktop.py`; skipped without them) | `sway`, `webkit2gtk-4.1`, `dbus` | Debian, Ubuntu: `sway webkit2gtk-driver dbus` |
 | Hugo ≥ 0.168 (the standard edition is enough) | the docs site (`task docs:serve`, `task docs:check`, `task ci`) | `hugo` | a single binary from Hugo's GitHub releases |
 
 The `wasm-bindgen` CLI must match the `wasm-bindgen` crate pinned
@@ -74,6 +78,8 @@ task docs:serve               # the docs as a website on http://localhost:8091, 
 task web:watch                # in a 2nd terminal: rebuild the web client on change, then reload the browser
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls Family   # run any CLI command
+task desktop                  # the desktop app (choose http://localhost:8080 in it); task desktop -- --profile bob for a second person
+task build:desktop            # the desktop app's release build, the optimized web client inside
 task test                     # all Rust tests;  task test:e2e -- -k collab  for browser tests
 task test:editor              # the editor's DOM view in headless Chromium (wasm-bindgen-test)
 task test:s3                  # attachments in S3-compatible storage (Garage in Docker)
@@ -212,7 +218,9 @@ cargo test -p notekpr-load -p notekpr-load-events   # the load test: world, outa
 tests/e2e/run.sh                     # headless browsers: every UI flow (TESTS in suite.py:
                                      # onboarding, collaboration, devices and recovery, offline,
                                      # attachments, note sharing, tables, editor, mobile, icons,
-                                     # graph, …) — then browser ↔ CLI mirror sync
+                                     # graph, …) — then browser ↔ CLI mirror sync,
+                                     # then the desktop app's (tests/e2e/desktop.py)
+cargo test -p notekpr-desktop   # the desktop app: settings, sign-in's loopback, links, its CSP
 ```
 
 The browser suite starts its own dev-mode server on a free port with a
@@ -221,7 +229,17 @@ changes that). It runs `/usr/bin/chromium`; for another browser set
 `NOTEKPR_CHROME=/path/to/chrome` (with a matching chromedriver on `PATH`).
 `-k NAME` (`task test:e2e -- -k collab`) runs only the tests whose name
 contains NAME; the browser ↔ CLI tests are `cross_client` and `drawings`
-(drawing in the browser, checked with the CLI).
+(drawing in the browser, checked with the CLI), the desktop app's `desktop`.
+
+The desktop app's test (`tests/e2e/desktop.py`) runs the real app — a debug
+build with the web client inside — in a headless sway on a private D-Bus,
+with a home folder of its own, driven by WebKitGTK's own WebDriver
+(`WebKitWebDriver`, which starts the app; `TAURI_WEBVIEW_AUTOMATION=true`
+lets it). The system's dialogs (the folder picker, its questions) are out of
+a WebDriver's reach: debug builds answer them from
+`NOTEKPR_DESKTOP_TEST_FOLDER` (yes, and that folder), release builds don't
+read it. WebKitWebDriver reads elements' text as empty: the test finds
+elements by their text in the page instead.
 
 Property tests (`proptest`) run with `cargo test`; `PROPTEST_CASES=20000`
 searches harder. Fuzz targets for everything that parses untrusted input
@@ -452,7 +470,9 @@ notekpr-cloud repository) has a copy in `site/favicon.svg` and, drawn in the
 theme's colours, in the header of each page. The docs site uses the favicon
 as it is and draws the icon in its theme's colours from
 `docs/site/assets/icon.svg`. Change them together, then run
-`scripts/logo.py` for `icon.svg`, `icon.png` and the web app's icons.
+`scripts/logo.py` for `icon.svg`, `icon.png`, the web app's icons and the
+desktop app's (`crates/desktop/icons/`: the window's, the packages' and the
+tray's).
 
 The web app can be added to a phone's home screen, as an app of its own
 (`crates/web/static/manifest.webmanifest`). Its icons there are PNGs made

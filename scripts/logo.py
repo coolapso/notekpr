@@ -11,7 +11,7 @@ writes, all with transparent backgrounds:
     docs/assets/icon.svg, icon.png            the icon alone
 
 and the web app's icons for home screens, in crates/web/static/ (see
-APP_ICONS).
+APP_ICONS), and the desktop app's, in crates/desktop/icons/ (DESKTOP_ICONS).
 
 The logo is "notekpr" in Fira Code SemiBold with the icon's diamond ring as
 the "o". The letters are stored as outlines, so it looks the same where the
@@ -45,6 +45,7 @@ except ImportError:
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(ROOT, "docs", "assets")
 STATIC = os.path.join(ROOT, "crates", "web", "static")
+DESKTOP_ICONS_DIR = os.path.join(ROOT, "crates", "desktop", "icons")
 FAVICON = os.path.join(STATIC, "favicon.svg")
 
 # Sizes in the icon's units (its viewBox is 64 x 64).
@@ -72,6 +73,16 @@ APP_ICONS = (
     ("icon-192.png", 192, False),
     ("icon-512.png", 512, False),
     ("icon-maskable.png", 512, True),
+)
+
+# The desktop app's (crates/desktop): the window's and the packages' icons
+# (tauri.conf.json's bundle.icon), and the tray's. The favicon as it is.
+DESKTOP_ICONS = (
+    ("32x32.png", 32),
+    ("128x128.png", 128),
+    ("128x128@2x.png", 256),
+    ("icon.png", 512),
+    ("tray.png", 64),
 )
 
 
@@ -131,7 +142,8 @@ def png(svg, width):
 
 
 def app_icons():
-    """The web app's PNG icons (APP_ICONS), from the favicon."""
+    """The web app's PNG icons (APP_ICONS) and the desktop app's
+    (DESKTOP_ICONS), from the favicon."""
     with open(FAVICON) as f:
         rounded = f.read()
     square = rounded.replace(' rx="14"', "", 1)
@@ -142,6 +154,10 @@ def app_icons():
         out = os.path.join(STATIC, name)
         svg = (square if full else rounded).encode()
         subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), "-o", out], input=svg, check=True)
+        written.append(out)
+    for name, size in DESKTOP_ICONS:
+        out = os.path.join(DESKTOP_ICONS_DIR, name)
+        subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), "-o", out], input=rounded.encode(), check=True)
         written.append(out)
     return written
 

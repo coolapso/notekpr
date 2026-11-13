@@ -19,8 +19,9 @@ Read this first; it is short on purpose and links to the detailed docs.
 notekpr is a self-hosted, local-first, **end-to-end encrypted**
 Markdown notes platform with real-time collaboration, written entirely in
 Rust: a zero-knowledge sync server, a browser client compiled to WebAssembly,
-and a command-line client, the CLI (sync daemon, Markdown mirror, agent
-gateway). A desktop app is planned; it is a separate client, not the CLI.
+a command-line client, the CLI (sync daemon, Markdown mirror, agent
+gateway), and a desktop app: the browser client in a window of its own
+(Tauri), with a tray and a Markdown folder — a separate client, not the CLI.
 The original requirements are in [spec.md](spec.md).
 
 | Doc | Read it when you… |
@@ -31,6 +32,7 @@ The original requirements are in [spec.md](spec.md).
 | [docs/development.md](docs/development.md) | set up a machine, run things locally, run tests |
 | [docs/acceptance.md](docs/acceptance.md) | want to know which test proves which requirement |
 | [docs/cli.md](docs/cli.md), [docs/operations.md](docs/operations.md) | change the CLI or deployment/ops behaviour |
+| [docs/desktop.md](docs/desktop.md) | change the desktop app |
 | [docs/load-test.md](docs/load-test.md) | run or change the load test and its live view |
 
 Known work and review findings are issues on the
@@ -159,6 +161,12 @@ crates/web      Leptos CSR → wasm32. state/ (Core + Ui in mod.rs; session, vau
 crates/cli      `notekpr` CLI: session.rs + livesync.rs (sync), mirror.rs
                 (Markdown files), gateway.rs, ops.rs, note_shares.rs, setup.rs
                 (`notekpr setup`: sign-in, the folder, existing notes moved in)
+crates/desktop  the desktop app (`notekpr-desktop`): Tauri 2 around crates/web, its files
+                built in (TAURI_CONFIG's build.frontendDist; a placeholder without) · app.rs
+                (window, tray, close to tray, single instance) · commands.rs (the IPC the
+                window may call: capabilities/main.json, build.rs) · signin.rs (system
+                browser, loopback + PKCE) · folder.rs (the Markdown folder: the CLI's
+                library with this computer's device) · paths.rs, settings.rs, status.rs
 crates/load     load test (`task load`): simulated people = real clients (the CLI's
                 library) against the server image with CPU/memory limits; crash,
                 check, report. load-events: what it streams; load-ui: its live
@@ -211,6 +219,8 @@ task demo                        # a dev-mode server with demo users, vaults and
 task load                        # load test with a live view (:8098): USERS= DURATION= CPUS= MEMORY=
 task web:watch                   # rebuild the web client on change (then reload the browser)
 task cli -- --profile alice ls Family   # run the CLI;  task cli:login DEV_USER=alice
+task desktop                     # the desktop app (unoptimized web client inside); -- --profile bob for a second person
+task build:desktop               # the desktop app's release build
 task fmt / task lint             # rustfmt; clippy with warnings as errors
 task test                        # all Rust tests
 task test:s3                     # attachments in S3-compatible storage (Garage in Docker)
@@ -231,7 +241,7 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 
 - `task fmt`, `task lint` and `task test` pass. Run the relevant browser test
   (`task test:e2e -- -k <name>`; the browser ↔ CLI tests are `cross_client`
-  and `drawings`)
+  and `drawings`, the desktop app's `desktop`)
   for UI changes, and the whole suite for changes to sync, keys or the
   editor.
 - New behaviour has a test at the right level:
@@ -241,6 +251,8 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   - outbox, refusals, snapshots, membership-log rules → unit and property
     tests in `crates/sync` (`src/tests.rs`, `tests/properties.rs`)
   - CLI, mirror, gateway → `crates/cli/tests/`
+  - the desktop app: its native side → unit tests in `crates/desktop`;
+    what it does end to end → `tests/e2e/desktop.py`
   - editor model, syntax, commands → unit and property tests in
     `crates/editor` (native); the editor's DOM behaviour (typing, IME,
     selection, native edits) → `crates/editor/tests/browser.rs`
@@ -374,6 +386,24 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   element with the handler: find it with `closest`.
 - `Ctrl+K` inside the editor inserts a link; the quick switcher opens from
   the sidebar search button (relevant for browser tests).
+
+**The desktop app**
+- The window runs the web client (`crates/web`, `desktop.rs` knows it's
+  there): fix the web client, not around it. It never loads anything but the
+  app's own files; links go to the default browser (`links.rs`).
+- Treat the window as untrusted (an XSS through a note): every IPC command
+  must be safe under someone else's script. Files only through the system's
+  picker (the window gets a number, never names a path); the server and the
+  Markdown folder change only after a yes in a system dialog. A new command
+  goes into `build.rs` and `capabilities/main.json`, nowhere else.
+- The account secret never crosses IPC: the folder gets the device key and
+  the pinned account key, and unwraps the secret itself
+  (`notekpr_cli::account::adopt`).
+- The window's storage is per server (`paths.rs`): never let one server's
+  session reach another.
+- Running it by hand pops a window up: tests use `tests/e2e/desktop.py`
+  (headless sway). The `auto-launch` crate writes `~/.config/autostart`
+  whatever `XDG_CONFIG_HOME` says: give a test its own `HOME`.
 
 **Builds and tests**
 - `crates/diagram` (merman) is a cargo workspace of its own, with its own

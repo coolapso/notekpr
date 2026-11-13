@@ -188,6 +188,11 @@ pub struct ServerInfo {
     /// server keeps it that long. 0: at once gone (and older servers).
     #[serde(default)]
     pub purge_undo_days: u32,
+    /// Apps can sign in through the system browser and get back to
+    /// themselves over loopback (`redirect_uri` on `/auth/oidc/start`,
+    /// protocol.md §3); absent on older servers.
+    #[serde(default)]
+    pub app_sign_in: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -217,6 +222,11 @@ pub struct DevLoginRequest {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ExchangeRequest {
     pub code: String,
+    /// The PKCE verifier of an app's sign-in (`code_challenge` on
+    /// `/auth/oidc/start`): a code given out for an app is swapped only with
+    /// it. Absent for the web app's own sign-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_verifier: Option<String>,
 }
 
 /// An account's public keys plus their self-signature.

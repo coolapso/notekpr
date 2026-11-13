@@ -1110,14 +1110,22 @@ async fn single_use_login_records() {
     let db = &t.db;
     human(db, "alice").await;
 
-    sessions::insert_login_code(db, b"code", "alice", NOW)
+    sessions::insert_login_code(db, b"code", "alice", NOW, None)
         .await
         .unwrap();
     assert_eq!(
         sessions::take_login_code(db, b"code").await.unwrap(),
-        Some(("alice".to_string(), NOW))
+        Some(("alice".to_string(), NOW, None))
     );
     assert_eq!(sessions::take_login_code(db, b"code").await.unwrap(), None);
+    // An app's code keeps its PKCE challenge.
+    sessions::insert_login_code(db, b"app", "alice", NOW, Some("challenge"))
+        .await
+        .unwrap();
+    assert_eq!(
+        sessions::take_login_code(db, b"app").await.unwrap(),
+        Some(("alice".to_string(), NOW, Some("challenge".to_string())))
+    );
 
     let st = sessions::OidcState {
         pkce_verifier: "v".into(),
@@ -1125,6 +1133,8 @@ async fn single_use_login_records() {
         return_to: "/".into(),
         expires_at: NOW,
         browser_hash: Some(vec![1]),
+        app_redirect: Some("http://127.0.0.1:4321/callback".into()),
+        code_challenge: Some("challenge".into()),
     };
     sessions::insert_oidc_state(db, "state", &st).await.unwrap();
     let got = sessions::take_oidc_state(db, "state")
@@ -1132,6 +1142,11 @@ async fn single_use_login_records() {
         .unwrap()
         .unwrap();
     assert_eq!(got.browser_hash, Some(vec![1]));
+    assert_eq!(
+        got.app_redirect.as_deref(),
+        Some("http://127.0.0.1:4321/callback")
+    );
+    assert_eq!(got.code_challenge.as_deref(), Some("challenge"));
     assert!(
         sessions::take_oidc_state(db, "state")
             .await

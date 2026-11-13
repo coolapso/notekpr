@@ -283,7 +283,10 @@ impl Setup {
         let r = self
             .http
             .post(format!("{}/api/v1/auth/exchange", self.base))
-            .json(&ExchangeRequest { code })
+            .json(&ExchangeRequest {
+                code,
+                code_verifier: None,
+            })
             .send()
             .await
             .unwrap();
@@ -418,6 +421,14 @@ async fn a_sign_in_reaching_the_server_handing_over_finishes_on_the_next_one() {
         .unwrap();
     assert_eq!(refused.status(), 503);
     assert_eq!(refused.headers()["retry-after"], "1");
+    // Starting one is held too: it stores the sign-in's state.
+    let (_, challenge) = pkce(1);
+    for start in [
+        s.http.get(format!("{}/api/v1/auth/oidc/start", s.base)),
+        s.app_start(APP_BACK, &challenge),
+    ] {
+        assert_eq!(start.send().await.unwrap().status(), 503);
+    }
 
     // The next version, at the same address for the provider, finishes it.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -473,4 +484,354 @@ async fn a_full_server_takes_no_new_accounts_but_lets_people_back_in() {
     })
     .await;
     s.exchange(&s.login(true).await).await;
+}
+
+// ------------------------------------------------- apps (protocol.md §3)
+
+/// A PKCE verifier and its S256 challenge.
+fn pkce(seed: u8) -> (String, String) {
+    use sha2::Digest;
+    let verifier = data_encoding::BASE64URL_NOPAD.encode(&[seed; 32]);
+    let challenge =
+        data_encoding::BASE64URL_NOPAD.encode(&sha2::Sha256::digest(verifier.as_bytes()));
+    (verifier, challenge)
+}
+
+const APP_BACK: &str = "http://127.0.0.1:4321/callback/x9-_";
+
+/// The value of the response's `Set-Cookie` that starts with `name`.
+fn first_cookie(r: &reqwest::Response, name: &str) -> String {
+    r.headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .find(|c| c.starts_with(name))
+        .unwrap_or_else(|| panic!("no {name} cookie"))
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+impl Setup {
+    fn app_start(&self, redirect: &str, challenge: &str) -> reqwest::RequestBuilder {
+        self.http
+            .get(format!("{}/api/v1/auth/oidc/start", self.base))
+            .query(&[
+                ("redirect_uri", redirect),
+                ("code_challenge", challenge),
+                ("code_challenge_method", "S256"),
+            ])
+    }
+
+    /// An app's sign-in in the browser, up to the page confirming it: that
+    /// page and the cookie that goes with it.
+    async fn app_to_confirm(&self, challenge: &str) -> (String, String) {
+        let start = self.app_start(APP_BACK, challenge).send().await.unwrap();
+        assert!(start.status().is_redirection(), "{}", start.status());
+        let at_idp = self.http.get(location(&start)).send().await.unwrap();
+        let back = self
+            .http
+            .get(location(&at_idp))
+            .header(header::COOKIE, first_cookie(&start, "notekpr_login="))
+            .send()
+            .await
+            .unwrap();
+        // Not back to the app yet: to the page confirming it.
+        assert_eq!(location(&back), "/api/v1/auth/oidc/app");
+        let cookie = first_cookie(&back, "notekpr_app=");
+        let page = self
+            .http
+            .get(format!("{}/api/v1/auth/oidc/app", self.base))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(page.status(), 200);
+        (page.text().await.unwrap(), cookie)
+    }
+
+    fn app_confirm(&self, cookie: Option<&str>, approve: &str) -> reqwest::RequestBuilder {
+        let mut r = self
+            .http
+            .post(format!("{}/api/v1/auth/oidc/app", self.base))
+            .form(&[("approve", approve)]);
+        if let Some(c) = cookie {
+            r = r.header(header::COOKIE, c);
+        }
+        r
+    }
+
+    /// An app's sign-in in the browser, confirmed: where the browser is
+    /// sent back to.
+    async fn app_login(&self, challenge: &str) -> String {
+        let (_, cookie) = self.app_to_confirm(challenge).await;
+        location(&self.app_confirm(Some(&cookie), "yes").send().await.unwrap())
+    }
+
+    async fn exchange_app(&self, back: &str, verifier: Option<&str>) -> reqwest::Response {
+        let code = back
+            .strip_prefix(&format!("{APP_BACK}?code="))
+            .unwrap_or_else(|| panic!("no code in {back}"))
+            .to_string();
+        self.http
+            .post(format!("{}/api/v1/auth/exchange", self.base))
+            .json(&ExchangeRequest {
+                code,
+                code_verifier: verifier.map(str::to_string),
+            })
+            .send()
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn apps_sign_in_through_the_browser_and_get_back() {
+    let s = setup(vec!["client_secret_basic"], true, true).await;
+    let info: Value = s
+        .http
+        .get(format!("{}/api/v1/info", s.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(info["app_sign_in"], true);
+    let (verifier, challenge) = pkce(1);
+
+    // The browser goes back to the app, with the code in the query.
+    let back = s.app_login(&challenge).await;
+    let r = s.exchange_app(&back, Some(&verifier)).await;
+    assert_eq!(r.status(), 200);
+    let session: SessionResponse = r.json().await.unwrap();
+    assert_eq!(session.user.display_name, "Olivia");
+    let sessions: Value = s
+        .http
+        .get(format!("{}/api/v1/me/sessions", s.base))
+        .bearer_auth(&session.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        sessions.to_string().contains("\"desktop\""),
+        "labelled as the desktop app's: {sessions}"
+    );
+
+    // Without the verifier, or with another one, the code is useless — and
+    // used up: the right verifier afterwards doesn't bring it back.
+    let back = s.app_login(&challenge).await;
+    assert_eq!(s.exchange_app(&back, None).await.status(), 401);
+    assert_eq!(s.exchange_app(&back, Some(&verifier)).await.status(), 401);
+    let back = s.app_login(&challenge).await;
+    let (other, _) = pkce(2);
+    assert_eq!(s.exchange_app(&back, Some(&other)).await.status(), 401);
+    assert_eq!(s.exchange_app(&back, Some("short")).await.status(), 401);
+
+    // The web app's own sign-in is as before (a verifier changes nothing).
+    let done = s.login(true).await;
+    assert!(done.starts_with("/auth/complete#code="), "{done}");
+    s.exchange(&done).await;
+}
+
+#[tokio::test]
+async fn an_apps_address_must_be_its_own_loopback() {
+    let s = setup(vec!["client_secret_basic"], true, true).await;
+    let (_, challenge) = pkce(1);
+    for bad in [
+        "http://localhost:4321/callback",
+        "https://127.0.0.1:4321/callback",
+        "http://127.0.0.1/callback",
+        "http://127.0.0.1:4321/callback?x=1",
+        "http://127.0.0.1:4321/callback#x",
+        "http://127.0.0.2:4321/callback",
+        "http://user@127.0.0.1:4321/callback",
+        "http://notes.example.com:4321/callback",
+        "http://127.0.0.1:4321/a%20b",
+        "http://127.0.0.1:4321/a.b",
+        "//127.0.0.1:4321/callback",
+        "notekpr://callback",
+    ] {
+        let r = s.app_start(bad, &challenge).send().await.unwrap();
+        assert_eq!(r.status(), 400, "{bad}");
+    }
+    let r = s
+        .app_start("http://[::1]:4321/callback", &challenge)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_redirection(), "IPv6 loopback");
+    // The challenge goes with the address, as S256 only.
+    let start = format!("{}/api/v1/auth/oidc/start", s.base);
+    for q in [
+        vec![("redirect_uri", APP_BACK)],
+        vec![
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+        ],
+        vec![
+            ("redirect_uri", APP_BACK),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "plain"),
+        ],
+        vec![
+            ("redirect_uri", APP_BACK),
+            ("code_challenge", "too-short"),
+            ("code_challenge_method", "S256"),
+        ],
+    ] {
+        let r = s.http.get(&start).query(&q).send().await.unwrap();
+        assert_eq!(r.status(), 400, "{q:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_providers_error_goes_back_to_the_app_that_asked() {
+    let s = setup(vec!["client_secret_basic"], true, true).await;
+    let (_, challenge) = pkce(1);
+    let error_for = |send_cookie: bool| {
+        let s = &s;
+        let challenge = challenge.clone();
+        async move {
+            let start = s.app_start(APP_BACK, &challenge).send().await.unwrap();
+            let cookie = start.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_string();
+            let to_idp = url::Url::parse(&location(&start)).unwrap();
+            let state = to_idp
+                .query_pairs()
+                .find(|(k, _)| k == "state")
+                .unwrap()
+                .1
+                .into_owned();
+            let mut cb = s
+                .http
+                .get(format!("{}/api/v1/auth/oidc/callback", s.base))
+                .query(&[("error", "access_denied"), ("state", state.as_str())]);
+            if send_cookie {
+                cb = cb.header(header::COOKIE, cookie);
+            }
+            location(&cb.send().await.unwrap())
+        }
+    };
+    assert_eq!(
+        error_for(true).await,
+        format!("{APP_BACK}?error=access_denied")
+    );
+    // A browser that didn't start it is told on the server's own page.
+    assert_eq!(error_for(false).await, "/auth/complete#error=access_denied");
+}
+
+#[tokio::test]
+async fn only_the_desktop_app_may_call_the_api_from_another_origin() {
+    let s = setup(vec!["client_secret_basic"], true, true).await;
+    let preflight = |origin: &'static str| {
+        s.http
+            .request(reqwest::Method::OPTIONS, format!("{}/api/v1/me", s.base))
+            .header(header::ORIGIN, origin)
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "authorization, notekpr-app",
+            )
+            .send()
+    };
+    for origin in [
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+    ] {
+        let r = preflight(origin).await.unwrap();
+        assert!(r.status().is_success(), "{origin}: {}", r.status());
+        assert_eq!(r.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], origin);
+        let allowed = r.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS]
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase();
+        assert!(allowed.contains("authorization") && allowed.contains("notekpr-app"));
+        assert!(
+            !r.headers()
+                .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+        );
+    }
+    for origin in [
+        "https://evil.example",
+        "null",
+        "tauri://evil",
+        "http://tauri.localhost:8080",
+    ] {
+        let r = preflight(origin).await.unwrap();
+        assert!(
+            !r.headers()
+                .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            "{origin}"
+        );
+    }
+    // Answers say which origin they were for, and show Retry-After.
+    let r = s
+        .http
+        .get(format!("{}/api/v1/info", s.base))
+        .header(header::ORIGIN, "tauri://localhost")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "tauri://localhost"
+    );
+    assert!(
+        r.headers()[header::VARY]
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("origin")
+    );
+    assert!(
+        r.headers()[header::ACCESS_CONTROL_EXPOSE_HEADERS]
+            .to_str()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("retry-after")
+    );
+}
+
+#[tokio::test]
+async fn an_apps_sign_in_waits_for_the_person_to_confirm_its_code() {
+    let s = setup(vec!["client_secret_basic"], true, true).await;
+    let (verifier, challenge) = pkce(1);
+    let code = notekpr_core::keys::app_sign_in_code(&challenge);
+
+    // The page shows the code the app derives from its own challenge.
+    let (page, cookie) = s.app_to_confirm(&challenge).await;
+    assert!(page.contains(&code), "{page}");
+    assert!(page.contains("method=\"post\""));
+    // No other browser (no cookie: another site's form can't send it) can
+    // confirm it.
+    let r = s.app_confirm(None, "yes").send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    // Cancelled: back to the app, without a code — and used up.
+    let r = s.app_confirm(Some(&cookie), "no").send().await.unwrap();
+    assert_eq!(location(&r), format!("{APP_BACK}?error=access_denied"));
+    let r = s.app_confirm(Some(&cookie), "yes").send().await.unwrap();
+    assert_eq!(r.status(), 400, "single use");
+
+    // Continued: back to the app with a code its verifier swaps.
+    let back = s.app_login(&challenge).await;
+    assert_eq!(s.exchange_app(&back, Some(&verifier)).await.status(), 200);
+
+    // A sign-in link someone else made (their loopback address, their
+    // challenge) only gets as far as the page, showing their code — not the
+    // one the person's app shows, if it shows one at all.
+    let (_, attackers) = pkce(9);
+    let (page, _) = s.app_to_confirm(&attackers).await;
+    assert!(page.contains(&notekpr_core::keys::app_sign_in_code(&attackers)));
+    assert!(!page.contains(&code));
 }

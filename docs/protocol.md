@@ -5,11 +5,11 @@ root (§10). Requests and responses are JSON unless noted. Binary values (keys,
 ciphertexts) are **standard base64 with padding**. Timestamps are Unix
 **milliseconds**. The authoritative type definitions are in
 [`crates/core/src/protocol.rs`](../crates/core/src/protocol.rs), shared by the
-server and every Rust client (CLI, agent gateway, browser).
+server and every Rust client (CLI, agent gateway, browser, desktop app).
 
 Authenticated calls send `Authorization: Bearer <token>`. Every app also
 sends `Notekpr-App: <app>/<version>` with each request — `web/0.3.0`,
-`cli/0.3.0`: which app it is and the release it was built as (`dev` for
+`cli/0.3.0`, `desktop/0.3.0`: which app it is and the release it was built as (`dev` for
 builds not made for a release) — so the server can tell an app too old for
 it to update (§11). The server accepts requests without it (older apps,
 scripts). Errors return
@@ -125,10 +125,11 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /info` | server name, `version` (the release it was built as; `dev` for builds not made for a release), `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1), `read_only` (`manual` while the server refuses changes, §9; absent otherwise; older servers also said `storage_full`), `purge_undo_days` (how long deleting something for good can be undone, §6; 0 or absent: not at all) (no auth) |
-| `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `notekpr_login` cookie that binds the login to this browser |
-| `GET /auth/oidc/callback` | provider redirect target; requires the `notekpr_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…` |
-| `POST /auth/exchange {code}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}` |
+| `GET /info` | server name, `version` (the release it was built as; `dev` for builds not made for a release), `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1), `read_only` (`manual` while the server refuses changes, §9; absent otherwise; older servers also said `storage_full`), `purge_undo_days` (how long deleting something for good can be undone, §6; 0 or absent: not at all), `app_sign_in` (apps can sign in through the system browser, below; absent on older servers) (no auth) |
+| `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `notekpr_login` cookie that binds the login to this browser. An app's sign-in adds `redirect_uri`, `code_challenge` and `code_challenge_method` (below) |
+| `GET /auth/oidc/callback` | provider redirect target; requires the `notekpr_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…`, or for an app's sign-in to the page confirming it (below) |
+| `GET /auth/oidc/app`, `POST /auth/oidc/app {approve}` | an app's sign-in, confirmed by the person comparing a code (below) |
+| `POST /auth/exchange {code, code_verifier?}` | one-time code (120 s) → `SessionResponse {token, expires_at, user}`; a code given out for an app needs `code_verifier` (below) |
 | `POST /auth/dev-login {username, display_name?}` | **development mode only** (`--dev-mode`), otherwise 404. The account's e-mail address is `<username>@example.com`: what invites it (§5.6) |
 | `POST /auth/logout` | revoke the current session |
 | `GET /me/sessions`, `DELETE /me/sessions/{id}` | list / revoke own sessions |
@@ -139,6 +140,49 @@ A first login is refused while the server is read-only or at its accounts
 limit (§9): `dev-login` answers `read_only` / `limit_reached`, the OIDC
 callback redirects with `#error=no_new_accounts`. People who have an account
 still sign in.
+
+**Apps signing in through the system browser** (the desktop app,
+[desktop.md](desktop.md)) come back to themselves over loopback (RFC 8252),
+with the one-time code bound to the app that asked by PKCE (RFC 7636):
+
+1. The app listens on `http://127.0.0.1:<port>/<path>` (or `http://[::1]:…`)
+   and opens `GET /auth/oidc/start?redirect_uri=<that address>&code_challenge=<base64url(SHA-256(verifier))>&code_challenge_method=S256`
+   in the default browser. `redirect_uri` must be an IP-literal loopback
+   address, `http`, with a port and a plain path (`[A-Za-z0-9/_-]`, at most
+   128 characters) and nothing else — no name (`localhost`), query, fragment
+   or user. The two go together, S256 only; otherwise `400`. The login
+   cookie is set as for the web app.
+2. After the identity provider, the callback keeps the sign-in waiting (10
+   minutes, table `app_sign_ins`) and sends the browser to `GET
+   /auth/oidc/app` with an HttpOnly, SameSite=Lax `notekpr_app` cookie
+   naming it. That page, the server's own (no script, nothing on it from
+   anyone else), shows the code the app shows meanwhile — both derive it
+   from the challenge, `keys::app_sign_in_code`: 40 bits, `ABCD-EFGH` — and
+   asks the person to continue only if they match: a sign-in link someone
+   else made carries their challenge, so their code. Its form posts to
+   `POST /auth/oidc/app` (`approve=yes|no`, the cookie: no other site's form
+   carries it). Continue sends the browser to `<redirect_uri>?code=…` (a
+   query: no fragment reaches the app's listener), Cancel to
+   `<redirect_uri>?error=access_denied`; either uses the sign-in up, and
+   without its cookie, used up or expired the page says the sign-in is over
+   (`400`). Errors before that (`?error=…`, the web app's codes) go to the
+   app only for the browser that started the sign-in (its login cookie);
+   another browser lands on the server's own `/auth/complete#error=…`. The
+   sign-in's state is used up either way.
+3. The app swaps the code with `POST /auth/exchange {code, code_verifier}`.
+   A code given out for an app is swapped only with the verifier (43–128
+   characters, RFC 7636 §4.1) whose S256 is its challenge — otherwise `401`
+   like an unknown code, and the code is used up. The session is labelled
+   `desktop` (the web app's `browser`).
+
+**The desktop app's page** comes with the app, not from the server: its
+origin is `tauri://localhost` (Linux, macOS) or `http(s)://tauri.localhost`
+(Windows), and it calls `/api/v1` from there. The server answers CORS for
+exactly these origins — methods `GET`, `POST`, `PUT`, `PATCH`, `DELETE`;
+headers `Authorization`, `Content-Type`, `Notekpr-App`; exposes
+`Retry-After`; `Vary: Origin`; no credentials (the API takes bearer tokens,
+never cookies) — and for no other: web pages can't call the API from
+another origin. Its `Notekpr-App` is `desktop/<version>`.
 
 **Native clients** use the RFC 8628 device authorization grant:
 

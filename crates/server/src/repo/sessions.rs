@@ -274,6 +274,10 @@ pub struct OidcState {
     pub return_to: String,
     pub expires_at: i64,
     pub browser_hash: Option<Vec<u8>>,
+    /// An app's sign-in: where the browser goes back to (a loopback
+    /// address), and the PKCE challenge its code is bound to.
+    pub app_redirect: Option<String>,
+    pub code_challenge: Option<String>,
 }
 
 pub async fn insert_oidc_state(
@@ -281,13 +285,15 @@ pub async fn insert_oidc_state(
     state: &str,
     s: &OidcState,
 ) -> AppResult<()> {
-    sqlx::query("INSERT INTO oidc_states (state, pkce_verifier, nonce, return_to, expires_at, browser_hash) VALUES (?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO oidc_states (state, pkce_verifier, nonce, return_to, expires_at, browser_hash, app_redirect, code_challenge) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(state)
         .bind(&s.pkce_verifier)
         .bind(&s.nonce)
         .bind(&s.return_to)
         .bind(s.expires_at)
         .bind(&s.browser_hash)
+        .bind(&s.app_redirect)
+        .bind(&s.code_challenge)
         .execute(db)
         .await?;
     Ok(())
@@ -298,7 +304,7 @@ pub async fn take_oidc_state(
     db: impl SqliteExecutor<'_>,
     state: &str,
 ) -> AppResult<Option<OidcState>> {
-    Ok(sqlx::query("DELETE FROM oidc_states WHERE state = ? RETURNING pkce_verifier, nonce, return_to, expires_at, browser_hash")
+    Ok(sqlx::query("DELETE FROM oidc_states WHERE state = ? RETURNING pkce_verifier, nonce, return_to, expires_at, browser_hash, app_redirect, code_challenge")
         .bind(state)
         .fetch_optional(db)
         .await?
@@ -308,11 +314,85 @@ pub async fn take_oidc_state(
             return_to: row.get("return_to"),
             expires_at: row.get("expires_at"),
             browser_hash: row.get("browser_hash"),
+            app_redirect: row.get("app_redirect"),
+            code_challenge: row.get("code_challenge"),
         }))
 }
 
 pub async fn delete_expired_oidc_states(db: impl SqliteExecutor<'_>, now: i64) -> AppResult<()> {
     sqlx::query("DELETE FROM oidc_states WHERE expires_at < ?")
+        .bind(now)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+// --- Apps' sign-ins waiting for the person's confirmation ---
+
+pub struct AppSignIn {
+    pub user_id: String,
+    pub app_redirect: String,
+    pub code_challenge: String,
+    pub expires_at: i64,
+}
+
+pub async fn insert_app_sign_in(
+    db: impl SqliteExecutor<'_>,
+    token_hash: &[u8],
+    s: &AppSignIn,
+) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO app_sign_ins (token_hash, user_id, app_redirect, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(token_hash)
+    .bind(&s.user_id)
+    .bind(&s.app_redirect)
+    .bind(&s.code_challenge)
+    .bind(s.expires_at)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+fn app_sign_in(row: sqlx::sqlite::SqliteRow) -> AppSignIn {
+    AppSignIn {
+        user_id: row.get("user_id"),
+        app_redirect: row.get("app_redirect"),
+        code_challenge: row.get("code_challenge"),
+        expires_at: row.get("expires_at"),
+    }
+}
+
+/// The sign-in waiting under this cookie, left waiting (its page).
+pub async fn get_app_sign_in(
+    db: impl SqliteExecutor<'_>,
+    token_hash: &[u8],
+) -> AppResult<Option<AppSignIn>> {
+    Ok(sqlx::query(
+        "SELECT user_id, app_redirect, code_challenge, expires_at FROM app_sign_ins WHERE token_hash = ?",
+    )
+    .bind(token_hash)
+    .fetch_optional(db)
+    .await?
+    .map(app_sign_in))
+}
+
+/// Remove and return the sign-in waiting under this cookie (single-use).
+pub async fn take_app_sign_in(
+    db: impl SqliteExecutor<'_>,
+    token_hash: &[u8],
+) -> AppResult<Option<AppSignIn>> {
+    Ok(sqlx::query(
+        "DELETE FROM app_sign_ins WHERE token_hash = ? RETURNING user_id, app_redirect, code_challenge, expires_at",
+    )
+    .bind(token_hash)
+    .fetch_optional(db)
+    .await?
+    .map(app_sign_in))
+}
+
+pub async fn delete_expired_app_sign_ins(db: impl SqliteExecutor<'_>, now: i64) -> AppResult<()> {
+    sqlx::query("DELETE FROM app_sign_ins WHERE expires_at < ?")
         .bind(now)
         .execute(db)
         .await?;
@@ -326,27 +406,32 @@ pub async fn insert_login_code(
     code_hash: &[u8],
     user_id: &str,
     expires_at: i64,
+    code_challenge: Option<&str>,
 ) -> AppResult<()> {
-    sqlx::query("INSERT INTO login_codes (code_hash, user_id, expires_at) VALUES (?, ?, ?)")
-        .bind(code_hash)
-        .bind(user_id)
-        .bind(expires_at)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "INSERT INTO login_codes (code_hash, user_id, expires_at, code_challenge) VALUES (?, ?, ?, ?)",
+    )
+    .bind(code_hash)
+    .bind(user_id)
+    .bind(expires_at)
+    .bind(code_challenge)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
-/// Remove and return `(user id, expiry)` of a login code (single-use).
+/// Remove and return `(user id, expiry, PKCE challenge)` of a login code
+/// (single-use).
 pub async fn take_login_code(
     db: impl SqliteExecutor<'_>,
     code_hash: &[u8],
-) -> AppResult<Option<(String, i64)>> {
-    Ok(
-        sqlx::query_as("DELETE FROM login_codes WHERE code_hash = ? RETURNING user_id, expires_at")
-            .bind(code_hash)
-            .fetch_optional(db)
-            .await?,
+) -> AppResult<Option<(String, i64, Option<String>)>> {
+    Ok(sqlx::query_as(
+        "DELETE FROM login_codes WHERE code_hash = ? RETURNING user_id, expires_at, code_challenge",
     )
+    .bind(code_hash)
+    .fetch_optional(db)
+    .await?)
 }
 
 pub async fn delete_expired_login_codes(db: impl SqliteExecutor<'_>, now: i64) -> AppResult<()> {

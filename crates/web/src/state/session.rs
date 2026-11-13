@@ -122,7 +122,15 @@ pub(super) async fn complete_oidc() {
         return;
     };
     let return_to = fragment_param(&frag, "return_to").unwrap_or_else(|| "/".into());
-    match api::post::<_, SessionResponse>("/auth/exchange", &ExchangeRequest { code }).await {
+    match api::post::<_, SessionResponse>(
+        "/auth/exchange",
+        &ExchangeRequest {
+            code,
+            code_verifier: None,
+        },
+    )
+    .await
+    {
         Ok(s) => {
             storage::set_token(&s.token);
             api::set_token(Some(s.token));

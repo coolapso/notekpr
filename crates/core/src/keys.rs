@@ -312,6 +312,18 @@ pub fn device_verification_code(
     format!("{}-{}-{}", &s[0..4], &s[4..8], &s[8..12])
 }
 
+/// The code an app shows while someone signs it in through the system
+/// browser, which the server's page shows too before the browser goes back
+/// to the app (protocol.md §3, "Apps"): both derive it from the sign-in's
+/// PKCE challenge, so a sign-in someone else started — with their own
+/// challenge — shows a code the person's app isn't showing. 40 bits, as
+/// `ABCD-EFGH`.
+pub fn app_sign_in_code(code_challenge: &str) -> String {
+    let h = crypto::kdf_hash("notekpr v1 app sign-in code", code_challenge.as_bytes());
+    let s = data_encoding::BASE32_NOPAD.encode(&h[..5]);
+    format!("{}-{}", &s[0..4], &s[4..8])
+}
+
 /// High-entropy recovery key. Shown once at setup; wraps the account secret.
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct RecoveryKey(pub Key32);
@@ -665,6 +677,27 @@ pub fn open_local(key: &Key32, context: &str, ciphertext: &[u8]) -> Result<Vec<u
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn app_sign_in_codes() {
+        let c = app_sign_in_code("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+        assert_eq!(c.len(), 9);
+        assert_eq!(&c[4..5], "-");
+        assert!(
+            c.chars()
+                .all(|ch| ch == '-' || ch.is_ascii_uppercase() || ('2'..='7').contains(&ch))
+        );
+        // The same for the same challenge, apart for another.
+        assert_eq!(
+            c,
+            app_sign_in_code("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
+        );
+        assert_ne!(
+            c,
+            app_sign_in_code("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cN")
+        );
+    }
+
     use super::*;
 
     #[test]

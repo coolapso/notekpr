@@ -81,6 +81,10 @@ pub fn router(state: AppState) -> Router {
     let login = Router::new()
         .route("/auth/oidc/start", get(auth::oidc_start))
         .route("/auth/oidc/callback", get(auth::oidc_callback))
+        .route(
+            "/auth/oidc/app",
+            get(auth::app_confirm_page).post(auth::app_confirm),
+        )
         .route("/auth/exchange", post(auth::exchange))
         .route("/auth/dev-login", post(auth::dev_login))
         .route(
@@ -242,7 +246,9 @@ pub fn router(state: AppState) -> Router {
         .layer(SetResponseHeaderLayer::if_not_present(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
-        ));
+        ))
+        // Outermost: preflights are answered before rate limits and guards.
+        .layer(app_cors());
 
     let mut app = Router::new()
         .nest("/api/v1", api)
@@ -312,6 +318,7 @@ pub fn router(state: AppState) -> Router {
 /// added here. Sync pushes over the WebSocket are refused in `sync::push`.
 const WRITABLE_WHEN_READ_ONLY: &[(&str, &str)] = &[
     ("POST", "/auth/exchange"),
+    ("POST", "/auth/oidc/app"),
     ("POST", "/auth/dev-login"),
     ("POST", "/auth/logout"),
     ("POST", "/oauth/device_authorization"),
@@ -365,8 +372,42 @@ async fn writer_guard(
 }
 
 /// `GET` routes that change something a retry needs untouched: the sign-in
-/// callback uses up its login (once only) before it makes the session.
-const CHANGING_GETS: &[&str] = &["/auth/oidc/callback"];
+/// callback uses up its login (once only) before it makes the session, and
+/// starting a sign-in stores its state.
+const CHANGING_GETS: &[&str] = &["/auth/oidc/start", "/auth/oidc/callback"];
+
+/// The desktop app's page origins (Tauri's: `tauri://localhost` on Linux
+/// and macOS, `http(s)://tauri.localhost` on Windows). Its files ship
+/// inside the app, so it calls the API from there; no web page can have
+/// these origins. The API takes bearer tokens, never cookies, so no
+/// credentials are allowed either.
+const APP_ORIGINS: [&str; 3] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
+
+/// CORS for the desktop app ([`APP_ORIGINS`]), nothing for other origins.
+fn app_cors() -> tower_http::cors::CorsLayer {
+    use tower_http::cors::{AllowOrigin, CorsLayer};
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::list(APP_ORIGINS.map(HeaderValue::from_static)))
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::PATCH,
+            axum::http::Method::DELETE,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            HeaderName::from_static(notekpr_core::protocol::APP_HEADER),
+        ])
+        // Read on `503 restarting`.
+        .expose_headers([header::RETRY_AFTER])
+        .max_age(std::time::Duration::from_secs(600))
+}
 
 /// Refuse changes while the server is read-only (`instance.rs`).
 async fn read_only_guard(

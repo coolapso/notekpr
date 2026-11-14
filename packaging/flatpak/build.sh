@@ -7,6 +7,13 @@ set -eu
 # The web client is wasm32: Rust's standard library for it (in
 # rust-std-wasm32, a source of the manifest) beside the extension's own
 # libraries, in a sysroot that only the wasm32 builds use.
+# That library fits one Rust only: the one the extension had when the
+# manifest was written (generate.py). The extension moves on to newer Rusts;
+# then the manifest is written again (task flathub, docs/development.md).
+if [ "$(rustc -vV | sed -n 's/^commit-hash: //p')" != "$(cat rust-std-wasm32/git-commit-hash)" ]; then
+    echo "The Rust SDK extension's $(rustc -V) isn't the Rust the wasm32 standard library is for ($(cat rust-std-wasm32/version)): write the manifest again (task flathub)." >&2
+    exit 1
+fi
 host=$(rustc -vV | sed -n 's/^host: //p')
 mkdir -p wasm-sysroot/lib/rustlib
 ln -sfn "/usr/lib/sdk/rust-stable/lib/rustlib/$host" "wasm-sysroot/lib/rustlib/$host"

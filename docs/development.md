@@ -522,8 +522,11 @@ accepted, Flathub makes a repository for the app (`flathub/md.notekpr.Notekpr`),
 and each release is a pull request there with `task flathub TAG=…`'s files
 (the submodule moved to its commit): Flathub builds and publishes it once
 that is merged. The Rust extension moves on to a new Rust by itself, and
-`generate.py` takes the version installed here: `task flatpak:deps` before
-`task flathub`.
+the wasm32 library fits one Rust only: `task flathub` (and
+`build:flatpak`) first update the extension here (`flatpak:deps`), and
+`generate.py` pins the library for that Rust. A Flathub build after the
+extension has moved on stops at once, saying so (`build.sh`): write the
+files again with `task flathub` and send them in a new pull request.
 
 ## Logo and icon
 

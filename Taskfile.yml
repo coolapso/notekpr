@@ -548,6 +548,7 @@ tasks:
   build:flatpak:
     desc: "Build the desktop app's Flatpak from this checkout as it is, as Flathub does (its flathub-build: store pictures fetched from GitHub's main), into target-release/flatpak (repo/, builddir/), nothing installed — after flatpak:deps"
     cmds:
+      - task: flatpak:deps
       - packaging/flatpak/generate.py target-release/flatpak --local
       - cd target-release/flatpak && flatpak run --command=flathub-build org.flatpak.Builder md.notekpr.Notekpr.yml
 
@@ -568,6 +569,9 @@ tasks:
     requires:
       vars: [TAG]
     cmds:
+      # The Rust extension as Flathub has it now: the manifest pins the wasm32
+      # standard library for its Rust.
+      - task: flatpak:deps
       - packaging/flatpak/generate.py dist/flathub --tag {{.TAG}}
 
   # ------------------------------------------------------------------ docker

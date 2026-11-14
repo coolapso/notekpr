@@ -249,13 +249,11 @@ pub async fn choose_folder(app: AppHandle, state: State<'_, Arc<AppState>>) -> R
     let Some(dir) = dir else {
         return Ok(None);
     };
-    let pinned = crate::folder::Pinned::new(&dir).map_err(chain)?;
-    let cli = notekpr_cli::profile::Dirs::from_env().ok();
-    let check = state.folder.check(&pinned.path, cli.as_ref());
-    let shown = notekpr_cli::setup::shown(&pinned.path);
+    let check = state.folder.check(&dir);
+    let shown = notekpr_cli::setup::shown(&dir);
     let mut picked = state.picked.lock().unwrap();
     let pick = picked.as_ref().map_or(1, |(n, _)| n + 1);
-    *picked = Some((pick, pinned));
+    *picked = Some((pick, dir));
     Ok(Some(Picked { pick, shown, check }))
 }
 
@@ -319,13 +317,11 @@ pub async fn folder_start(
         .server
         .clone()
         .ok_or("choose a server first")?;
-    let pinned = match state.picked.lock().unwrap().take() {
+    let dir = match state.picked.lock().unwrap().take() {
         Some((n, p)) if n == pick => p,
         _ => return Err("choose the folder again".into()),
     };
-    let dir = pinned.path.clone();
-    let cli = notekpr_cli::profile::Dirs::from_env().ok();
-    let check = state.folder.check(&dir, cli.as_ref());
+    let check = state.folder.check(&dir);
     if let Some(why) = check.refused {
         return Err(why);
     }
@@ -358,15 +354,14 @@ pub async fn folder_start(
     {
         return Err("cancelled".into());
     }
-    // As it was when the person was asked: the same folder, still empty.
-    pinned.still().map_err(chain)?;
-    if let Some(why) = state.folder.check(&dir, cli.as_ref()).refused {
+    // Still fine after the person was asked (still empty, say).
+    if let Some(why) = state.folder.check(&dir).refused {
         return Err(why);
     }
     let adopt = adopt_from(server, handoff)?;
     state
         .folder
-        .adopt_and_start(adopt, pinned)
+        .adopt_and_start(adopt, dir)
         .await
         .map_err(chain)
 }

@@ -101,6 +101,74 @@ impl Dirs {
     }
 }
 
+/// Where the desktop app (`notekpr-desktop`, docs/desktop.md) keeps its
+/// settings and its data: `(config, data)`, each holding a folder per app
+/// profile. `NOTEKPR_DESKTOP_CONFIG_DIR` / `NOTEKPR_DESKTOP_DATA_DIR`, or
+/// `notekpr-desktop` in the system's folders for them (XDG on Linux,
+/// `%APPDATA%` / `%LOCALAPPDATA%` on Windows, `~/Library/Application
+/// Support` on macOS). Kept here so the app and the CLI agree: the app keeps
+/// its Markdown folder's CLI profile in `<data>/<app profile>/folder`
+/// ([`desktop_folder_dirs`]), where the CLI looks for the folders it keeps.
+pub fn desktop_roots() -> Result<(PathBuf, PathBuf)> {
+    fn system_dir(xdg: &str, windows: &str, fallback: &[&str]) -> Result<PathBuf> {
+        if let Some(p) = env_path(xdg) {
+            return Ok(p);
+        }
+        if cfg!(windows)
+            && let Some(p) = env_path(windows)
+        {
+            return Ok(p);
+        }
+        let mut p = home()?;
+        if cfg!(target_os = "macos") {
+            p.push("Library");
+            p.push("Application Support");
+        } else {
+            p.extend(fallback);
+        }
+        Ok(p)
+    }
+    const APP_DIR: &str = "notekpr-desktop";
+    let config = match env_path("NOTEKPR_DESKTOP_CONFIG_DIR") {
+        Some(p) => p,
+        None => system_dir("XDG_CONFIG_HOME", "APPDATA", &[".config"])?.join(APP_DIR),
+    };
+    let data = match env_path("NOTEKPR_DESKTOP_DATA_DIR") {
+        Some(p) => p,
+        None => system_dir("XDG_DATA_HOME", "LOCALAPPDATA", &[".local", "share"])?.join(APP_DIR),
+    };
+    Ok((config, data))
+}
+
+/// The desktop app's own CLI profile root for an app profile: where its
+/// Markdown folder's sync keeps its session, keys and local copies.
+pub fn desktop_folder_root(data: &Path, app_profile: &str) -> Dirs {
+    Dirs::under(&data.join(app_profile).join("folder"))
+}
+
+/// The desktop app's Markdown folders' profile roots on this computer, with
+/// the app profile each belongs to.
+pub fn desktop_folder_dirs() -> Vec<(String, Dirs)> {
+    let Ok((_, data)) = desktop_roots() else {
+        return vec![];
+    };
+    let Ok(rd) = std::fs::read_dir(&data) else {
+        return vec![];
+    };
+    let mut v: Vec<(String, Dirs)> = rd
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .filter(|n| valid_profile_name(n))
+        .map(|n| {
+            let d = desktop_folder_root(&data, &n);
+            (n, d)
+        })
+        .filter(|(_, d)| d.profiles_dir().exists())
+        .collect();
+    v.sort_by(|a, b| a.0.cmp(&b.0));
+    v
+}
+
 pub fn valid_profile_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64

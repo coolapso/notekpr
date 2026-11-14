@@ -507,6 +507,13 @@ live connection ends for good (session revoked) or the Markdown mirror stops
 working, `sync` exits with an error instead of carrying on half-dead, so
 `Restart=on-failure` brings it back.
 
+A folder named with `--dir` follows the same rules as `notekpr setup`'s and
+the [desktop app](desktop.md)'s: not the top of the file system, your home
+folder or notekpr's own settings and data, and not a folder — or one in or
+around it — that another profile or the desktop app keeps in sync already
+(two would fight over its files). One synced by a cloud drive gets a
+warning.
+
 ### Modes and their security implications
 
 | Mode | What is on disk | Protects against |

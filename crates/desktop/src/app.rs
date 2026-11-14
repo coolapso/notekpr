@@ -29,7 +29,7 @@ pub struct AppState {
     pub sign_in: Mutex<Option<oneshot::Sender<()>>>,
     /// The folder last picked in the system's dialog, by number
     /// (`choose_folder`, `folder_start`).
-    pub picked: Mutex<Option<(u64, crate::folder::Pinned)>>,
+    pub picked: Mutex<Option<(u64, PathBuf)>>,
 }
 
 /// The window's Content-Security-Policy: the server's own, but the API may

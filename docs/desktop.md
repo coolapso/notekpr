@@ -68,16 +68,13 @@ How changes made at the same time are merged, renames, deletes and
 conflicts: the same as the CLI's folder ([cli.md §4–7](cli.md#4-sync-and-the-markdown-mirror)),
 since it is the same code.
 
-If the folder isn't the one you chose any more when the sync starts —
-moved away and replaced, or turned into a link — the app stops and says
-so instead of writing into it; put it back and *Try again*, or choose it
-again.
-
 *Stop…* stops it: the files stay where they are, and the app forgets its own
-copies for the folder. A folder the CLI already keeps in sync, one inside the
-app's own data, your home folder itself, or one holding other files is
-refused; to bring notes from such a folder in, use *Import notes* in the app
-or [`notekpr setup`](own-editor.md#coming-from-obsidian).
+copies for the folder. The folder follows the same rules as the CLI's: a
+folder the CLI already keeps in sync (or one in or around it), one inside
+notekpr's own data or your home folder itself is refused — and the CLI
+refuses the app's folder in turn. Until the app can bring notes in, the
+folder must be empty, too; to bring notes from a folder in, use *Import
+notes* in the app or [`notekpr setup`](own-editor.md#coming-from-obsidian).
 
 The folder uses this computer's device and the window's sign-in: signing
 out stops it (signing in again resumes it), and *Forget this computer*

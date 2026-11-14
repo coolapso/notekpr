@@ -2559,6 +2559,20 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         restore_missing: a.restore_missing,
         ..Default::default()
     };
+    if let Some(d) = &dir
+        && a.dir.is_some()
+    {
+        // A folder named here follows the same rules as `notekpr setup`'s
+        // and the desktop app's.
+        crate::setup::check_new_folder(d, &ctx.dirs, &ctx.profile)?;
+        if let Some(cloud) = crate::setup::cloud_synced(d) {
+            ui::warn(&format!(
+                "{} is synced by {cloud}: it would upload the decrypted notes, and two tools syncing the \
+                 same files fight over them",
+                d.display()
+            ));
+        }
+    }
     if let Some(d) = &dir {
         // Confirmed once per directory, not once per profile.
         if !profile.sync.plaintext_confirmed(d) && !a.plaintext_ok {

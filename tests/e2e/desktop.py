@@ -75,12 +75,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--server", default="target/debug/notekpr-server")
     ap.add_argument("--app", default="target/debug/notekpr-desktop")
+    ap.add_argument("--cli", default="target/debug/notekpr")
     args = ap.parse_args()
     missing = [t for t in TOOLS if not shutil.which(t)]
     if missing:
         print(f"desktop: skipped, needs {', '.join(missing)}")
         return
     app_bin = os.path.abspath(args.app)
+    a_cli = args.cli
     home = tempfile.mkdtemp(prefix="notekpr-desktop-")
     # A Wayland socket's path must be short: its own folder under /tmp.
     runtime = tempfile.mkdtemp(prefix="nk-", dir="/tmp")
@@ -182,6 +184,17 @@ def main():
         a.click_el(a.find_text(".settings-body button", "Choose a folder", 10))
         wait_for("the folder to sync", lambda: "Keeping" in a.folder_status())
         check("vault" in a.folder_status(), f"the app keeps the Markdown folder in sync ({a.folder_status()})")
+        # The CLI on the same computer sees it, as the app sees the CLI's:
+        # one folder, one keeper.
+        cenv = dict(os.environ, NOTEKPR_CONFIG_DIR=f"{home}/cli/config", NOTEKPR_DATA_DIR=f"{home}/cli/data",
+                    NOTEKPR_DESKTOP_CONFIG_DIR=desk_config, NOTEKPR_DESKTOP_DATA_DIR=desk_data)
+        cli = lambda *args: subprocess.run([os.path.abspath(a_cli), *args], env=cenv, capture_output=True,
+                                           text=True, timeout=60)
+        r = cli("login", "--server", url, "--dev-user", uniq("cleo"), "--device-name", "laptop")
+        check(r.returncode == 0, "a CLI user signs in on the same computer")
+        r = cli("sync", "--dir", notes, "--once", "--plaintext-ok")
+        check(r.returncode != 0 and "the desktop app" in r.stderr,
+              f"the CLI won't sync the folder the app keeps ({r.stderr.strip()[-160:]})")
         welcome = f"{notes}/My notes/Welcome.md"
         wait_for("Welcome.md", lambda: os.path.exists(welcome))
         check(True, "the vault's notes are written into it as Markdown files")
@@ -222,24 +235,6 @@ def main():
             f.write("# Written while it ran\n")
         a.find_text(".tree-item", "From disk", 20)
         check(True, "a new file becomes a note")
-
-        # ---- the folder swapped for a link while the app wasn't running
-        a.quit()
-        decoy = f"{home}/Decoy"
-        os.makedirs(decoy)
-        os.rename(notes, f"{notes}-real")
-        os.symlink(decoy, notes)
-        a = App(app_bin, profile)
-        a.find(".sb-bottom", 20)
-        a.route("/settings/app")
-        wait_for("the swapped folder refused", lambda: "isn't the folder you chose" in a.folder_status())
-        time.sleep(2)
-        check(os.listdir(decoy) == [], "a folder swapped for a link isn't written into: the app stops and says so")
-        os.remove(notes)
-        os.rename(f"{notes}-real", notes)
-        a.click_el(a.find_text(".settings-body button", "Try again", 10))
-        wait_for("the folder back", lambda: "Keeping" in a.folder_status())
-        check(True, "the folder back where it was, it goes on")
 
         # ---- signing out stops it; signing in again resumes it
         a.route("/settings/account")

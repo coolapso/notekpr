@@ -78,10 +78,12 @@ impl Folder {
         self.store().ok()?.load().ok()??.sync.mirror_dir
     }
 
-    /// Whether `dir` can become the Markdown folder. `cli` holds the
-    /// person's own CLI profiles: a folder one of them mirrors is theirs.
-    pub fn check(&self, dir: &Path, cli: Option<&Dirs>) -> Check {
-        match self.refusal(dir, cli) {
+    /// Whether `dir` can become the Markdown folder: the rules the CLI's
+    /// `setup` and `sync --dir` follow too ([`setup::check_new_folder`]),
+    /// and — until the app brings notes in, as `notekpr setup` does —
+    /// empty.
+    pub fn check(&self, dir: &Path) -> Check {
+        match self.refusal(dir) {
             Err(e) => Check {
                 refused: Some(format!("{e:#}")),
                 cloud: None,
@@ -93,36 +95,11 @@ impl Folder {
         }
     }
 
-    fn refusal(&self, dir: &Path, cli: Option<&Dirs>) -> Result<()> {
+    fn refusal(&self, dir: &Path) -> Result<()> {
         if !dir.is_absolute() {
             bail!("choose a folder by its full path");
         }
-        setup::check_folder(dir, &self.dirs)?;
-        if let Some(cli) = cli {
-            setup::check_folder(dir, cli)?;
-            let dir = notekpr_cli::mirror::resolve_lenient(dir);
-            for name in cli.profiles() {
-                let Ok(Some(p)) = ProfileStore::new(cli, &name).and_then(|s| s.load()) else {
-                    continue;
-                };
-                if let Some(theirs) = p.sync.mirror_dir {
-                    let theirs = notekpr_cli::mirror::resolve_lenient(&theirs);
-                    if theirs.starts_with(&dir) || dir.starts_with(&theirs) {
-                        bail!(
-                            "the CLI already keeps {} in sync (profile '{name}'): choose another folder, \
-                             or stop that sync first (`notekpr --profile {name} sync --no-dir`)",
-                            theirs.display()
-                        );
-                    }
-                }
-            }
-        }
-        if holds_links(dir) {
-            bail!(
-                "{} holds links or special files: choose an empty folder",
-                setup::shown(dir)
-            );
-        }
+        setup::check_new_folder(dir, &self.dirs, PROFILE)?;
         let c = setup::inspect(dir)?;
         if c.notes + c.files + c.folders > 0 {
             bail!(
@@ -136,7 +113,7 @@ impl Folder {
 
     /// Hand over the window's device and session (see the module docs),
     /// remember `dir` and start keeping it in sync.
-    pub async fn adopt_and_start(&self, a: Adopt, pinned: Pinned) -> Result<()> {
+    pub async fn adopt_and_start(&self, a: Adopt, dir: PathBuf) -> Result<()> {
         let mut running = self.running.lock().await;
         self.stop_locked(&mut running).await;
         // Another account (or server) than the folder had: start afresh.
@@ -151,22 +128,11 @@ impl Folder {
             account::forget_locally(&self.dirs, PROFILE)?;
         }
         account::adopt(&self.dirs, PROFILE, a).await?;
-        // Still the folder the person was asked about (the hand-off took a
-        // while), and kept as such: every start checks it again.
-        pinned.still()?;
-        pinned.save(&self.pin_file()?)?;
-        let dir = pinned.path.clone();
         self.store()?.update(|p| {
             p.sync.confirm_plaintext(&dir);
             p.sync.mirror_dir = Some(dir.clone());
         })?;
         self.start_locked(&mut running)
-    }
-
-    /// Where the folder's pin is kept: with the folder's keys (forgetting
-    /// them forgets it too).
-    fn pin_file(&self) -> Result<PathBuf> {
-        Ok(self.store()?.data_dir().join("folder-pin.json"))
     }
 
     /// Start keeping the remembered folder in sync (at launch, again after
@@ -188,25 +154,12 @@ impl Folder {
             return Ok(());
         }
         // A remembered folder that is gone is never re-created: every note
-        // in it would look deleted (the CLI's rule). One that isn't the
-        // folder the person chose any more — swapped for another, or for a
-        // link to elsewhere, while the app wasn't running — isn't written
-        // into either.
-        let refused = if dir.symlink_metadata().is_err() {
-            Some(format!(
+        // in it would look deleted (the CLI's rule).
+        if dir.symlink_metadata().is_err() {
+            let error = format!(
                 "{} is gone (moved, renamed or not mounted?). Put it back, or choose the folder again",
                 setup::shown(&dir)
-            ))
-        } else {
-            match self.pin_file().ok().and_then(|f| Pinned::load(&f)) {
-                Some(pin) if pin.path == dir => pin.still().err().map(|e| format!("{e:#}")),
-                _ => Some(format!(
-                    "{} isn't the folder you chose any more: choose it again",
-                    setup::shown(&dir)
-                )),
-            }
-        };
-        if let Some(error) = refused {
+            );
             self.updates.update(|s| {
                 s.folder = FolderStatus::Stopped {
                     dir: setup::shown(&dir),
@@ -340,77 +293,6 @@ impl Folder {
     }
 }
 
-/// Whether `dir` holds anything but plain files and folders (symbolic
-/// links, devices, sockets…) — what could lead the notes elsewhere.
-fn holds_links(dir: &Path) -> bool {
-    walkdir::WalkDir::new(dir)
-        .min_depth(1)
-        .follow_links(false)
-        .into_iter()
-        .any(|e| match e {
-            Ok(e) => !(e.file_type().is_dir() || e.file_type().is_file()),
-            Err(_) => true,
-        })
-}
-
-/// A folder picked in the system's dialog, pinned: its real path (links
-/// resolved) and which folder it is, so a folder swapped for another — or
-/// for a link — while the person was asked, or since, is noticed, not
-/// written into. Kept with the folder's keys and checked before every
-/// start.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Pinned {
-    pub path: PathBuf,
-    id: Option<(u64, u64)>,
-}
-
-impl Pinned {
-    pub fn new(picked: &Path) -> Result<Pinned> {
-        let path = std::fs::canonicalize(picked)
-            .with_context(|| format!("opening {}", setup::shown(picked)))?;
-        let id = Self::id_of(&path)?;
-        Ok(Pinned { path, id })
-    }
-
-    fn id_of(path: &Path) -> Result<Option<(u64, u64)>> {
-        let m = std::fs::symlink_metadata(path)?;
-        if !m.file_type().is_dir() {
-            bail!("{} is no longer a folder", setup::shown(path));
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            Ok(Some((m.dev(), m.ino())))
-        }
-        #[cfg(not(unix))]
-        {
-            Ok(None)
-        }
-    }
-
-    /// Still the same folder, at the same path — no link in it or on the
-    /// way to it.
-    pub fn still(&self) -> Result<()> {
-        let same_path = std::fs::canonicalize(&self.path).is_ok_and(|p| p == self.path);
-        if !same_path || Self::id_of(&self.path)? != self.id {
-            bail!(
-                "{} isn't the folder you chose any more: choose it again",
-                setup::shown(&self.path)
-            );
-        }
-        Ok(())
-    }
-
-    fn save(&self, file: &Path) -> Result<()> {
-        notekpr_cli::fsutil::write_atomic(file, &serde_json::to_vec(self)?, true)
-            .with_context(|| format!("writing {}", file.display()))
-    }
-
-    fn load(file: &Path) -> Option<Pinned> {
-        serde_json::from_slice(&std::fs::read(file).ok()?).ok()
-    }
-}
-
 /// A task that ends with its owner: dropped (an aborted `run`), it is
 /// aborted too, so nothing of the sync outlives a stop.
 struct Owned<T>(JoinHandle<T>);
@@ -519,78 +401,4 @@ async fn finish(hub: &Hub) {
     hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
         .await;
     hub.save_all().await;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_picked_folder_swapped_meanwhile_is_noticed() {
-        let t = tempfile::tempdir().unwrap();
-        let notes = t.path().join("Notes");
-        std::fs::create_dir(&notes).unwrap();
-        let pinned = Pinned::new(&notes).unwrap();
-        pinned.still().unwrap();
-        // Swapped for a link to another folder…
-        std::fs::rename(&notes, t.path().join("Moved")).unwrap();
-        let elsewhere = t.path().join("Elsewhere");
-        std::fs::create_dir(&elsewhere).unwrap();
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&elsewhere, &notes).unwrap();
-            assert!(pinned.still().is_err(), "a link where the folder was");
-            std::fs::remove_file(&notes).unwrap();
-            // …or for another folder of the same name.
-            std::fs::create_dir(&notes).unwrap();
-            assert!(pinned.still().is_err(), "another folder of the same name");
-        }
-        // A link picked is pinned as where it leads.
-        #[cfg(unix)]
-        {
-            let link = t.path().join("Link");
-            std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
-            let p = Pinned::new(&link).unwrap();
-            assert_eq!(p.path, std::fs::canonicalize(&elsewhere).unwrap());
-            p.still().unwrap();
-        }
-    }
-
-    #[test]
-    fn a_pin_is_kept_and_a_link_on_the_way_is_noticed() {
-        let t = tempfile::tempdir().unwrap();
-        let notes = t.path().join("shared").join("Notes");
-        std::fs::create_dir_all(&notes).unwrap();
-        let pinned = Pinned::new(&notes).unwrap();
-        let file = t.path().join("pin.json");
-        pinned.save(&file).unwrap();
-        let kept = Pinned::load(&file).unwrap();
-        assert_eq!(kept, pinned);
-        kept.still().unwrap();
-        // While the app wasn't running, a folder on the way became a link
-        // to a look-alike elsewhere: the same path no longer leads there.
-        #[cfg(unix)]
-        {
-            let elsewhere = t.path().join("elsewhere");
-            std::fs::create_dir_all(elsewhere.join("Notes")).unwrap();
-            std::fs::rename(t.path().join("shared"), t.path().join("old")).unwrap();
-            std::os::unix::fs::symlink(&elsewhere, t.path().join("shared")).unwrap();
-            assert!(kept.still().is_err());
-        }
-        assert!(Pinned::load(&t.path().join("nothing.json")).is_none());
-    }
-
-    #[test]
-    fn links_inside_are_noticed() {
-        let t = tempfile::tempdir().unwrap();
-        assert!(!holds_links(t.path()));
-        std::fs::create_dir_all(t.path().join("a/b")).unwrap();
-        std::fs::write(t.path().join("a/b/note.md"), "x").unwrap();
-        assert!(!holds_links(t.path()));
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink("/etc", t.path().join("a/b/etc")).unwrap();
-            assert!(holds_links(t.path()));
-        }
-    }
 }

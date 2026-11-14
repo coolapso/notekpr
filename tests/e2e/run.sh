@@ -34,5 +34,6 @@ if [ -z "$filter" ] || [[ "desktop" == *"$filter"* ]]; then
   # The desktop app with this web client inside (crates/desktop: its build
   # takes the web client's folder from TAURI_CONFIG).
   TAURI_CONFIG="{\"build\":{\"frontendDist\":\"../../$web\"}}" cargo build -p notekpr-desktop
-  python3 tests/e2e/desktop.py --server target/debug/notekpr-server --app target/debug/notekpr-desktop
+  python3 tests/e2e/desktop.py --server target/debug/notekpr-server --cli target/debug/notekpr \
+    --app target/debug/notekpr-desktop
 fi

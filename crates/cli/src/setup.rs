@@ -23,7 +23,7 @@ use crate::cli::{LoginArgs, SetupArgs};
 use crate::commands::{self, Ctx};
 use crate::hub::VaultSummary;
 use crate::mirror::{self, MirrorOptions};
-use crate::profile::{self, DEFAULT_PROFILE, Dirs, Profile, ProfileLock};
+use crate::profile::{self, DEFAULT_PROFILE, Dirs, Profile, ProfileLock, ProfileStore};
 use crate::{fsutil, manage, ui};
 
 /// The vault notes are brought into, and the first one made, unless named
@@ -435,6 +435,107 @@ pub fn check_folder(dir: &Path, dirs: &Dirs) -> Result<()> {
     Ok(())
 }
 
+/// Who keeps a set of Markdown folders: the CLI's profiles in one
+/// configuration, or the desktop app's folder for one of its profiles.
+#[derive(Clone, Debug)]
+pub enum Keeper {
+    Cli(Dirs),
+    Desktop(String, Dirs),
+}
+
+impl Keeper {
+    fn dirs(&self) -> &Dirs {
+        match self {
+            Keeper::Cli(d) | Keeper::Desktop(_, d) => d,
+        }
+    }
+
+    /// Who, and how to stop it, for a message.
+    fn who(&self, profile: &str) -> String {
+        match self {
+            Keeper::Cli(_) => format!(
+                "the CLI (profile '{profile}'; `notekpr --profile {profile} sync --no-dir` stops that)"
+            ),
+            Keeper::Desktop(app, _) if app == "default" => {
+                "the desktop app (Settings → Desktop app → Stop… stops that)".to_string()
+            }
+            Keeper::Desktop(app, _) => format!(
+                "the desktop app's profile '{app}' (Settings → Desktop app → Stop… stops that)"
+            ),
+        }
+    }
+}
+
+/// Everything that keeps Markdown folders on this computer: the CLI's
+/// profiles (the usual ones, and `mine` when it is another configuration)
+/// and the desktop app's folders.
+pub fn keepers(mine: &Dirs) -> Vec<Keeper> {
+    let mut v = vec![Keeper::Cli(mine.clone())];
+    if let Ok(cli) = Dirs::from_env()
+        && cli.config != mine.config
+    {
+        v.push(Keeper::Cli(cli));
+    }
+    for (app, d) in crate::profile::desktop_folder_dirs() {
+        if d.config != mine.config {
+            v.push(Keeper::Desktop(app, d));
+        }
+    }
+    v
+}
+
+/// The rules for a folder to become a Markdown folder — the same for
+/// `notekpr setup`, `notekpr sync --dir` and the desktop app: not the top of
+/// the file system or the home folder, not notekpr's own settings or data
+/// (the CLI's or the desktop app's), and not a folder — or one in or around
+/// it — that another profile or app keeps in sync already: two would fight
+/// over its files. `profile` in `mine` is whose folder it is to become.
+pub fn check_new_folder(dir: &Path, mine: &Dirs, profile: &str) -> Result<()> {
+    let mut own = vec![mine.clone()];
+    own.extend(Dirs::from_env());
+    if let Ok((config, data)) = crate::profile::desktop_roots() {
+        own.push(Dirs { config, data });
+    }
+    check_new_folder_among(dir, &own, &keepers(mine), mine, profile)
+}
+
+/// [`check_new_folder`], with notekpr's own folders (`own`) and who keeps
+/// which Markdown folders (`keepers`) given.
+pub fn check_new_folder_among(
+    dir: &Path,
+    own: &[Dirs],
+    keepers: &[Keeper],
+    mine: &Dirs,
+    profile: &str,
+) -> Result<()> {
+    for d in own {
+        check_folder(dir, d)?;
+    }
+    let dir = mirror::resolve_lenient(dir);
+    for k in keepers {
+        for name in k.dirs().profiles() {
+            if k.dirs().config == mine.config && name == profile {
+                continue;
+            }
+            let Ok(Some(p)) = ProfileStore::new(k.dirs(), &name).and_then(|s| s.load()) else {
+                continue;
+            };
+            let Some(theirs) = p.sync.mirror_dir else {
+                continue;
+            };
+            let theirs = mirror::resolve_lenient(&theirs);
+            if theirs.starts_with(&dir) || dir.starts_with(&theirs) {
+                bail!(
+                    "{} is kept in sync already, by {}: choose another folder",
+                    shown(&theirs),
+                    k.who(&name)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The cloud storage that syncs `dir` (its files there or in a folder above
 /// it), if any: it would upload the decrypted notes, and two tools syncing
 /// the same files fight over them.
@@ -531,7 +632,7 @@ fn folder_plan(
     dir: &Path,
     remembered: Option<&Path>,
 ) -> Result<Option<Folder>> {
-    check_folder(dir, &ctx.dirs)?;
+    check_new_folder(dir, &ctx.dirs, &ctx.profile)?;
     let folder = |bring: Bring| -> Result<Option<Folder>> {
         Ok(Some(Folder {
             root: dir.to_path_buf(),
@@ -1165,6 +1266,46 @@ mod tests {
         assert!(check_folder(&t.path().join("clients"), &dirs).is_err());
         assert!(check_folder(&dirs.data.join("notes"), &dirs).is_err());
         assert!(check_folder(&t.path().join("Notes"), &dirs).is_ok());
+    }
+
+    #[test]
+    fn a_folder_kept_by_another_profile_or_the_desktop_app_is_refused() {
+        let t = tempfile::tempdir().unwrap();
+        let mine = Dirs::under(&t.path().join("cli"));
+        let keep = |dirs: &Dirs, profile: &str, dir: &Path| {
+            let store = ProfileStore::new(dirs, profile).unwrap();
+            let mut p = Profile::new("https://n.example.com", PrincipalKind::Human, false);
+            p.sync.mirror_dir = Some(dir.to_path_buf());
+            store.save(&p).unwrap();
+        };
+        let home = t.path().join("home");
+        let notes = home.join("Notes");
+        keep(&mine, "bob", &notes);
+        let desktop = Dirs::under(&t.path().join("desktop/default/folder"));
+        let desk = home.join("Desk");
+        keep(&desktop, "folder", &desk);
+        let keepers = [
+            Keeper::Cli(mine.clone()),
+            Keeper::Desktop("default".into(), desktop.clone()),
+        ];
+        let check = |dir: &Path, profile: &str| {
+            check_new_folder_among(dir, std::slice::from_ref(&mine), &keepers, &mine, profile)
+        };
+        // Another profile's folder, one in it or around it.
+        for d in [notes.clone(), notes.join("Family")] {
+            let e = format!("{:#}", check(&d, "alice").unwrap_err());
+            assert!(e.contains("profile 'bob'"), "{e}");
+        }
+        // Around both: refused, naming one of them.
+        assert!(check(&home, "alice").is_err());
+        // Its own folder is the profile's to keep.
+        assert!(check(&notes, "bob").is_ok());
+        assert!(check(&home.join("Other"), "alice").is_ok());
+        // The desktop app's.
+        let e = format!("{:#}", check(&desk, "alice").unwrap_err());
+        assert!(e.contains("the desktop app"), "{e}");
+        // notekpr's own data.
+        assert!(check(&mine.data.join("notes"), "alice").is_err());
     }
 
     #[test]

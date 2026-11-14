@@ -15,10 +15,8 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use notekpr_cli::profile::Dirs;
-
-const APP_DIR: &str = "notekpr-desktop";
 
 #[derive(Clone, Debug)]
 pub struct Paths {
@@ -26,52 +24,21 @@ pub struct Paths {
     pub config: PathBuf,
     /// This profile's data folder.
     pub data: PathBuf,
-}
-
-fn env_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os(name)
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-}
-
-fn home() -> Result<PathBuf> {
-    env_path("HOME")
-        .or_else(|| env_path("USERPROFILE"))
-        .ok_or_else(|| anyhow!("cannot determine the home directory"))
-}
-
-fn base(xdg: &str, windows: &str, fallback: &[&str]) -> Result<PathBuf> {
-    if let Some(p) = env_path(xdg) {
-        return Ok(p);
-    }
-    if cfg!(windows)
-        && let Some(p) = env_path(windows)
-    {
-        return Ok(p);
-    }
-    let mut p = home()?;
-    if cfg!(target_os = "macos") {
-        p.push("Library");
-        p.push("Application Support");
-    } else {
-        p.extend(fallback);
-    }
-    Ok(p)
+    /// The app profile's name.
+    pub profile: String,
+    data_root: PathBuf,
 }
 
 impl Paths {
+    /// The roots are the CLI library's ([`notekpr_cli::profile::desktop_roots`]):
+    /// the CLI looks there for the Markdown folder the app keeps.
     pub fn for_profile(profile: &str) -> Result<Paths> {
-        let config = match env_path("NOTEKPR_DESKTOP_CONFIG_DIR") {
-            Some(p) => p,
-            None => base("XDG_CONFIG_HOME", "APPDATA", &[".config"])?.join(APP_DIR),
-        };
-        let data = match env_path("NOTEKPR_DESKTOP_DATA_DIR") {
-            Some(p) => p,
-            None => base("XDG_DATA_HOME", "LOCALAPPDATA", &[".local", "share"])?.join(APP_DIR),
-        };
+        let (config, data) = notekpr_cli::profile::desktop_roots()?;
         Ok(Paths {
             config: config.join(profile),
             data: data.join(profile),
+            profile: profile.to_string(),
+            data_root: data,
         })
     }
 
@@ -110,7 +77,7 @@ impl Paths {
 
     /// The Markdown folder's CLI profile lives under this root.
     pub fn folder(&self) -> Dirs {
-        Dirs::under(&self.data.join("folder"))
+        notekpr_cli::profile::desktop_folder_root(&self.data_root, &self.profile)
     }
 }
 
@@ -128,6 +95,8 @@ mod tests {
         let p = Paths {
             config: "/c".into(),
             data: "/d".into(),
+            profile: "default".into(),
+            data_root: "/".into(),
         };
         let a = p.webview(Some("https://notes.example.com"));
         let b = p.webview(Some("https://notes.example.com/other"));

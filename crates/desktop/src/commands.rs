@@ -216,19 +216,18 @@ pub async fn set_autostart(app: AppHandle, state: State<'_, Arc<AppState>>, on: 
         let a = app.autolaunch();
         return if on { a.enable() } else { a.disable() }.map_err(text);
     }
-    let line = state.autostart_line.clone();
-    let granted =
-        tauri::async_runtime::spawn_blocking(move || crate::flatpak::request_autostart(on, line))
-            .await
-            .map_err(text)?
-            .map_err(chain)?;
+    // When the system changed nothing, the setting stays as it was.
+    let now = crate::flatpak::request_autostart(on, state.autostart_line.clone())
+        .await
+        .map_err(chain)?;
     let mut s = state.settings.lock().unwrap();
-    s.autostart = on && granted;
+    s.autostart = now;
     s.save(&state.paths.settings_file()).map_err(chain)?;
-    if on && !granted {
-        return Err("The system didn't allow notekpr to start when you log in.".into());
+    match (on, now) {
+        (true, false) => Err("The system didn't allow notekpr to start when you log in.".into()),
+        (false, true) => Err("The system didn't stop notekpr starting when you log in.".into()),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Open a web or mail address in the default browser or mail program;

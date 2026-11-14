@@ -104,6 +104,11 @@ tasks:
           else
             echo "✗ the desktop app (crates/desktop, built by task test and task lint) needs WebKitGTK 4.1 and GTK 3 with their headers (Arch: webkit2gtk-4.1; Debian, Ubuntu: libwebkit2gtk-4.1-dev)"; ok=0
           fi
+          if command -v dbus-daemon >/dev/null; then
+            echo "✓ dbus-daemon (the desktop app's tests)"
+          else
+            echo "✗ the desktop app's tests (task test) need dbus-daemon, for a private message bus (Arch, Debian, Ubuntu: dbus)"; ok=0
+          fi
           pkg-config --exists ayatana-appindicator3-0.1 2>/dev/null && echo "✓ libayatana-appindicator (the desktop app's tray)" || echo "· for the desktop app's tray icon when it runs: libayatana-appindicator (Arch: libayatana-appindicator; Debian, Ubuntu: libayatana-appindicator3-1)"
           if command -v sway >/dev/null && command -v WebKitWebDriver >/dev/null && command -v dbus-run-session >/dev/null; then
             echo "✓ sway + WebKitWebDriver (the desktop app's browser test)"

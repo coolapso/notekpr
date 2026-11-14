@@ -43,6 +43,7 @@ zeroize = "1.9"
 # window's app id (app.rs).
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+futures-lite = "2"
 glib = "0.18"
 
 [dev-dependencies]

@@ -44,6 +44,7 @@ get it.
 | cargo-deny | supply-chain checks (`task audit`) | `cargo-deny` | `cargo install cargo-deny --locked` |
 | Docker + Compose | container image, Docker dev stack, local Dex for OIDC, the load test (`task load`), the S3 file store's test (`task test:s3`, with Garage) | `docker`, `docker-compose`, `docker-buildx` | Docker docs |
 | WebKitGTK 4.1, GTK 3 (with headers) | the desktop app (`crates/desktop`, built by `task test` and `task lint`) | `webkit2gtk-4.1` | Debian, Ubuntu: `libwebkit2gtk-4.1-dev librsvg2-dev` |
+| dbus-daemon | the desktop app's tests (`task test`: a private message bus, where the system's Flatpak services are played) | `dbus` | Debian, Ubuntu: `dbus` |
 | libayatana-appindicator | the desktop app's tray, when it runs | `libayatana-appindicator` | Debian, Ubuntu: `libayatana-appindicator3-dev` |
 | sway, WebKitWebDriver, dbus-run-session | the desktop app's browser test (`tests/e2e/desktop.py`; skipped without them) | `sway`, `webkit2gtk-4.1`, `dbus` | Debian, Ubuntu: `sway webkit2gtk-driver dbus` |
 | Hugo ≥ 0.168 (the standard edition is enough) | the docs site (`task docs:serve`, `task docs:check`, `task ci`) | `hugo` | a single binary from Hugo's GitHub releases |

@@ -187,9 +187,11 @@ docs/site       the docs as a website (docs.notekpr.md): Hugo with the Dockleaf 
 packaging/      the CLI's and the desktop app's release builds (GoReleaser,
                 .goreleaser.yaml): Dockerfile (the image it runs in: Ubuntu 22.04, the
                 oldest the app is for) · run.sh (a command in that image) · completions.sh
-                · systemd/ (the sync user unit) · desktop/ (the app's desktop entry) ·
-                rpm/ (COPR's source RPMs: the specs, srpm.sh); Linux only for now:
-                .tar.gz, .deb, .rpm, AUR, COPR
+                · systemd/ (the sync user unit) · desktop/ (the app's desktop entry and
+                AppStream page) · rpm/ (COPR's source RPMs: the specs, srpm.sh) ·
+                flatpak/ (the app's Flatpak: manifest template, build.sh, generate.py) ·
+                screenshots/ (app stores' pictures); Linux only for now: .tar.gz,
+                .deb, .rpm, AUR, COPR, Flathub
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade

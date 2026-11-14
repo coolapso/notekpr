@@ -469,6 +469,57 @@ apps are then told to update instead of misbehaving
 ([protocol.md §11](protocol.md#11-older-apps)). Development builds are never
 refused.
 
+### The Flatpak
+
+The desktop app is also a Flatpak, `md.notekpr.Notekpr`, which Flathub
+builds from source and publishes. `packaging/flatpak` holds its manifest (a
+template), `build.sh` (the app's build inside it) and `generate.py`, which
+fills the template in and writes `cargo-sources.json`: the build has no
+network, so that lists every crate the `Cargo.lock`s pin (the workspace's,
+`crates/diagram`'s and the wasm-bindgen CLI's) for flatpak-builder to fetch
+first. It builds with GNOME's runtime (WebKitGTK 4.1, GTK 3) and Flathub's
+Rust SDK extension, which has no standard library for wasm32, what the web
+client is built for: the manifest brings Rust's official one of the same
+version (`generate.py` checks it is the extension's very build), and
+`build.sh` puts it beside the extension's own for the web client's build.
+The tray's library is Flathub's shared module (`shared-modules`, at the
+commit `generate.py` names). Its page in app stores is
+`packaging/desktop/md.notekpr.Notekpr.metainfo.xml` (AppStream), with the
+pictures in `packaging/screenshots` (`task docs:shots -- --only
+store-note,store-drawing,store-graph` takes them again).
+
+```sh
+task flatpak:deps          # once, and to update: GNOME's runtime and SDK, the Rust extension, org.flatpak.Builder (for your user)
+task build:flatpak         # this checkout as it is, as Flathub builds (flathub-build), into target-release/flatpak
+task test:flatpak          # Flathub's linter on the manifest and the build, then the app's --version
+task flathub TAG=v0.17.0   # dist/flathub: what the app's Flathub repository holds, for that release
+```
+
+`build:flatpak` runs Flathub's own build (`flathub-build`, in
+org.flatpak.Builder), which also fetches the store pictures from their
+addresses (GitHub's `main`): until new ones are pushed, the linter says
+they are missing. Nothing gets installed; to try it, install it for your
+user, `flatpak install --user target-release/flatpak/repo md.notekpr.Notekpr`,
+then `flatpak run md.notekpr.Notekpr` (`flatpak uninstall --user
+md.notekpr.Notekpr` takes it away again).
+
+**Flathub.** The first time, the app is submitted for review: a pull
+request to [flathub/flathub](https://github.com/flathub/flathub), on a branch
+made from its `new-pr` branch and against it, holding `dist/flathub`'s
+manifest and `cargo-sources.json`, with Flathub's shared modules as a git
+submodule (`git submodule add https://github.com/flathub/shared-modules.git`,
+checked out at the commit `generate.py` names). Its reviewers may ask why it
+reads the home folder: the Markdown folder, wherever one picks it. The id
+names notekpr.md, so Flathub has the domain verified: a token from
+Flathub's developer pages, served at
+`https://notekpr.md/.well-known/org.flathub.VerifiedApps.txt`. Once
+accepted, Flathub makes a repository for the app (`flathub/md.notekpr.Notekpr`),
+and each release is a pull request there with `task flathub TAG=…`'s files
+(the submodule moved to its commit): Flathub builds and publishes it once
+that is merged. The Rust extension moves on to a new Rust by itself, and
+`generate.py` takes the version installed here: `task flatpak:deps` before
+`task flathub`.
+
 ## Logo and icon
 
 `docs/assets/` holds the logo and the icon, as SVG and PNG with transparent

@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The desktop app's page in app stores (Flathub, GNOME Software, KDE
+     Discover): AppStream. The Flatpak's build fills in the release
+     (@VERSION@, @DATE@: packaging/flatpak). Its pictures are
+     packaging/screenshots (scripts/guide-shots.py takes them). -->
+<component type="desktop-application">
+  <id>md.notekpr.Notekpr</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+
+  <name>notekpr</name>
+  <summary>End-to-end encrypted Markdown notes</summary>
+  <developer id="md.notekpr">
+    <name>coolapso</name>
+  </developer>
+
+  <description>
+    <p>
+      notekpr keeps your notes on a server of your own, or one someone runs
+      for you, and encrypts them on your computer before anything leaves it:
+      the server never sees what you write.
+    </p>
+    <p>The desktop app is notekpr in a window of its own:</p>
+    <ul>
+      <li>Markdown with a live preview: tables, checklists, code, math, diagrams and drawings</li>
+      <li>Vaults you share with the people you choose, with comments and version history</li>
+      <li>It stays in the tray, syncs in the background and can start when you log in</li>
+      <li>It can keep your notes as a folder of ordinary Markdown files too, for any other editor</li>
+    </ul>
+    <p>
+      You need a notekpr server to sign in to: your own (notekpr is free and
+      open source), or one you have been invited to.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">md.notekpr.Notekpr.desktop</launchable>
+  <provides>
+    <binary>notekpr-desktop</binary>
+  </provides>
+
+  <url type="homepage">https://notekpr.md</url>
+  <url type="help">https://docs.notekpr.md/tools/desktop/</url>
+  <url type="bugtracker">https://github.com/coolapso/notekpr/issues</url>
+  <url type="vcs-browser">https://github.com/coolapso/notekpr</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>A note, with the vault's notes beside it</caption>
+      <image>https://raw.githubusercontent.com/coolapso/notekpr/main/packaging/screenshots/note.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>A drawing in a vault</caption>
+      <image>https://raw.githubusercontent.com/coolapso/notekpr/main/packaging/screenshots/drawing.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>How your notes link to each other</caption>
+      <image>https://raw.githubusercontent.com/coolapso/notekpr/main/packaging/screenshots/graph.png</image>
+    </screenshot>
+  </screenshots>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#ececfb</color>
+    <color type="primary" scheme_preference="dark">#2c2c4a</color>
+  </branding>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
+  <content_rating type="oars-1.1"/>
+
+  <keywords>
+    <keyword>notes</keyword>
+    <keyword>markdown</keyword>
+    <keyword>encrypted</keyword>
+    <keyword>sync</keyword>
+  </keywords>
+
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

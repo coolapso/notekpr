@@ -6,6 +6,7 @@
 
 mod app;
 mod commands;
+pub mod flatpak;
 pub mod folder;
 pub mod links;
 pub mod paths;

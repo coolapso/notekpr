@@ -30,6 +30,8 @@ pub struct AppState {
     /// The folder last picked in the system's dialog, by number
     /// (`choose_folder`, `folder_start`).
     pub picked: Mutex<Option<(u64, PathBuf)>>,
+    /// What starts this profile at login (the autostart entry's command).
+    pub autostart_line: Vec<String>,
 }
 
 /// The window's Content-Security-Policy: the server's own, but the API may
@@ -120,8 +122,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         ],
     )?;
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
-    TrayIconBuilder::with_id("main")
-        .icon(icon)
+    let mut tray = TrayIconBuilder::with_id("main");
+    if let Some(dir) = crate::flatpak::tray_icon_dir() {
+        tray = tray.temp_dir_path(dir);
+    }
+    tray.icon(icon)
         .tooltip("notekpr")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -226,6 +231,9 @@ pub fn run(args: Args) -> Result<()> {
         folder,
         sign_in: Mutex::new(None),
         picked: Mutex::new(None),
+        autostart_line: std::iter::once("notekpr-desktop".to_string())
+            .chain(autostart_args.iter().cloned())
+            .collect(),
     });
 
     let hidden = args.hidden;

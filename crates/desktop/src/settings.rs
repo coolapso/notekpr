@@ -1,7 +1,9 @@
 //! The app's settings: a JSON file in the profile's settings folder
 //! ([`crate::paths`]). Nothing secret goes here. Whether the app starts at
-//! login is the system's (its autostart entry), not a setting of ours; the
-//! Markdown folder's own state is its CLI profile's ([`crate::folder`]).
+//! login is the system's (its autostart entry), not a setting of ours — but
+//! in the Flatpak, where only the portal reaches that entry, which can't be
+//! asked about it ([`crate::flatpak`]). The Markdown folder's own state is
+//! its CLI profile's ([`crate::folder`]).
 
 use std::path::Path;
 
@@ -17,6 +19,10 @@ pub struct Settings {
     /// Closing the window hides it in the tray instead of quitting.
     #[serde(default = "yes")]
     pub close_to_tray: bool,
+    /// Starting at login, as the Background portal last confirmed it: only
+    /// in the Flatpak ([`crate::flatpak::request_autostart`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub autostart: bool,
 }
 
 fn yes() -> bool {
@@ -28,6 +34,7 @@ impl Default for Settings {
         Settings {
             server: None,
             close_to_tray: true,
+            autostart: false,
         }
     }
 }
@@ -69,9 +76,17 @@ mod tests {
         let s = Settings {
             server: Some("https://notes.example.com".into()),
             close_to_tray: false,
+            autostart: true,
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), s);
+        // Outside the Flatpak it is never set, and never written.
+        Settings::default().save(&path).unwrap();
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("autostart")
+        );
         // Settings added later keep their defaults in older files.
         std::fs::write(&path, br#"{"server":"https://n.example.com"}"#).unwrap();
         assert!(Settings::load(&path).unwrap().close_to_tray);

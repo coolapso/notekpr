@@ -7,7 +7,8 @@ the CLI), signs in as alice in headless Chromium and takes each picture: a part 
 dialog or the lines of a note, some with numbered markers that the guide explains. Chromium does
 the cropping, the markers and the WebP encoding, so this needs only the standard library (and
 chromium + chromedriver, as the browser tests do). Pictures are twice their CSS size, to stay
-sharp.
+sharp. The same demo gives the app stores' pictures too (packaging/screenshots: whole windows,
+no markers, PNG, which app stores take), which the desktop app's AppStream file shows.
 
     python3 scripts/guide-shots.py --web target/guide-web [--only gs-app,wr-math] [--keep]
 
@@ -32,6 +33,7 @@ import wd  # noqa: E402  (the browser tests' stdlib WebDriver client)
 from wd import KEYS  # noqa: E402
 
 OUT = ROOT / "docs" / "assets" / "guide"
+STORE_OUT = ROOT / "packaging" / "screenshots"
 WIDTH, HEIGHT, SCALE = 1280, 820, 2
 
 
@@ -183,7 +185,7 @@ def note(text):
 # and encodes the result as WebP.
 # (Chromium decodes the PNGs itself: no URL to load, so the app's Content-Security-Policy agrees.)
 ENCODE = """
-const [parts, gap, captions, column, bg, done] = arguments;
+const [parts, gap, captions, column, bg, type, done] = arguments;
 (async () => {
   const s = devicePixelRatio;
   const shots = [];
@@ -209,7 +211,7 @@ const [parts, gap, captions, column, bg, done] = arguments;
     g.drawImage(bmp, r.x * s, r.y * s, r.w * s, r.h * s, x * s, (y + cap) * s, r.w * s, r.h * s);
     if (column) y += r.h + cap + gap; else x += r.w + gap;
   });
-  done(c.toDataURL('image/webp', 0.86).split(',')[1]);
+  done(c.toDataURL(type, 0.86).split(',')[1]);
 })().catch(e => done('ERROR ' + e));
 """
 
@@ -290,11 +292,13 @@ class Shots:
     def wanted(self, name):
         return not self.only or name in self.only
 
-    def grab(self):
+    def grab(self, invitations=True):
         """The viewport as a PNG (base64), without what only the demo shows: its development-mode
-        badge, and the banner of its vault that is full on purpose."""
-        self.b.js("""for (const e of document.querySelectorAll('.devstrip, .vault-full-banner'))
-            e.style.display = 'none';""")
+        badge, and the banner of its vault that is full on purpose (and without the invitations
+        waiting for alice, for pictures that aren't about them)."""
+        hide = ".devstrip, .vault-full-banner" + ("" if invitations else ", .invitation-banner")
+        self.b.js("""for (const e of document.querySelectorAll(arguments[0]))
+            e.style.display = 'none';""", hide)
         time.sleep(0.4)
         return wd.req("GET", self.b.p("/screenshot"))
 
@@ -317,14 +321,18 @@ class Shots:
         self.b.js("""for (let e = document.querySelector('.ed'); e; e = e.parentElement) e.scrollTop = 0;""")
         time.sleep(0.3)
 
-    def save(self, name, parts, gap=16, captions=None, column=False):
+    def save(self, name, parts, gap=16, captions=None, column=False, store=False):
+        """The picture `name`: the guide's (WebP), or with `store` an app store's (PNG; its name
+        without the `store-`)."""
         bg = self.b.js("return getComputedStyle(document.body).backgroundColor") or "#fff"
+        kind = "image/png" if store else "image/webp"
         out = wd.req("POST", self.b.p("/execute/async"),
-                     {"script": ENCODE, "args": [parts, gap, captions, column, bg]})
+                     {"script": ENCODE, "args": [parts, gap, captions, column, bg, kind]})
         if not out or out.startswith("ERROR"):
             raise RuntimeError(f"{name}: {out}")
-        OUT.mkdir(parents=True, exist_ok=True)
-        path = OUT / f"{name}.webp"
+        folder = STORE_OUT if store else OUT
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / (f"{name.removeprefix('store-')}.png" if store else f"{name}.webp")
         path.write_bytes(base64.b64decode(out))
         self.taken.append(name)
         print(f"  {path.relative_to(ROOT)} ({path.stat().st_size // 1024} KB)", flush=True)
@@ -635,6 +643,29 @@ def drawings(s):
         s.window(HEIGHT)
 
 
+def store(s):
+    """The app stores' pictures: whole windows, nothing pointed at."""
+    b = s.b
+    if s.wanted("store-note"):
+        s.open("Tomatoes", "Home")
+        s.rest_caret()
+        s.top()
+        s.save("store-note", [{"png": s.grab(invitations=False), "rect": s.view()}], store=True)
+    if s.wanted("store-drawing"):
+        s.open("Tomatoes", "Home")
+        b.click_el(b.find_text(".sb-link", "Drawings", 5))
+        b.click_el(b.find_text(".drawing-card", "Garden beds", 15))
+        b.find(".drawing-canvas", 20)
+        time.sleep(2)
+        s.save("store-drawing", [{"png": s.grab(invitations=False), "rect": s.view()}], store=True)
+    if s.wanted("store-graph"):
+        s.open("Tomatoes", "Home")
+        s.escape()
+        b.chord(KEYS["ctrl"], "g")
+        time.sleep(4)
+        s.save("store-graph", [{"png": s.grab(invitations=False), "rect": s.view()}], store=True)
+
+
 # ------------------------------------------------------------------ running it
 
 def main():
@@ -698,6 +729,7 @@ def main():
         getting_started(s)
         writing(s)
         drawings(s)
+        store(s)
         missing = only - set(s.taken)
         if missing:
             s.problems.append(f"no such pictures: {', '.join(sorted(missing))}")

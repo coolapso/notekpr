@@ -471,10 +471,13 @@ impl Keeper {
 /// and the desktop app's folders.
 pub fn keepers(mine: &Dirs) -> Vec<Keeper> {
     let mut v = vec![Keeper::Cli(mine.clone())];
-    if let Ok(cli) = Dirs::from_env()
-        && cli.config != mine.config
+    for cli in Dirs::from_env()
+        .into_iter()
+        .chain(crate::profile::cli_dirs_outside_sandbox())
     {
-        v.push(Keeper::Cli(cli));
+        if cli.config != mine.config {
+            v.push(Keeper::Cli(cli));
+        }
     }
     for (app, d) in crate::profile::desktop_folder_dirs() {
         if d.config != mine.config {
@@ -493,7 +496,8 @@ pub fn keepers(mine: &Dirs) -> Vec<Keeper> {
 pub fn check_new_folder(dir: &Path, mine: &Dirs, profile: &str) -> Result<()> {
     let mut own = vec![mine.clone()];
     own.extend(Dirs::from_env());
-    if let Ok((config, data)) = crate::profile::desktop_roots() {
+    own.extend(crate::profile::cli_dirs_outside_sandbox());
+    for (config, data) in crate::profile::desktop_roots_all() {
         own.push(Dirs { config, data });
     }
     check_new_folder_among(dir, &own, &keepers(mine), mine, profile)

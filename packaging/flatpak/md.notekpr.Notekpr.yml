@@ -1,0 +1,69 @@
+# notekpr's desktop app as a Flatpak (md.notekpr.Notekpr), built from source
+# with no network. This is the template: packaging/flatpak/generate.py fills
+# in what {{…}} names and writes cargo-sources.json (every crate the
+# Cargo.locks pin) beside it. `task build:flatpak` builds this checkout's
+# last commit; `task flathub` writes what Flathub builds a release from
+# (docs/development.md, "The Flatpak").
+id: md.notekpr.Notekpr
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: notekpr-desktop
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Its server, and the sign-in coming back to it over a loopback address.
+  - --share=network
+  # The tray (a StatusNotifierItem).
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # The Markdown folder, wherever one picks it, kept in sync both ways while
+  # the app runs; exports and attachments saved into Downloads.
+  - --filesystem=home
+
+modules:
+  # The tray's library (the app loads it when it shows a tray).
+  - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
+
+  # The wasm-bindgen CLI the web client's crates pin: for the build only.
+  - name: wasm-bindgen-cli
+    buildsystem: simple
+    cleanup: ['*']
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/wasm-bindgen-cli/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo install --offline --locked --path . --root /app/tools
+    sources:
+      - type: archive
+        archive-type: tar-gzip
+        url: https://static.crates.io/crates/wasm-bindgen-cli/wasm-bindgen-cli-{{WASM_BINDGEN_VERSION}}.crate
+        sha256: {{WASM_BINDGEN_SHA256}}
+      - cargo-sources.json
+
+  - name: notekpr-desktop
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/app/tools/bin
+      env:
+        CARGO_HOME: /run/build/notekpr-desktop/cargo
+        CARGO_NET_OFFLINE: 'true'
+        NOTEKPR_VERSION: '{{VERSION}}'
+        NOTEKPR_RELEASE_DATE: '{{DATE}}'
+    build-commands:
+      - packaging/flatpak/build.sh
+    sources:
+      - {{SOURCE}}
+      - cargo-sources.json
+      # Rust's standard library for wasm32, which the web client is built
+      # for (the extension has none): the official one of the extension's
+      # Rust (generate.py checks they are the same build).
+      - type: archive
+        url: {{RUST_STD_URL}}
+        sha256: {{RUST_STD_SHA256}}
+        dest: rust-std-wasm32

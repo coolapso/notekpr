@@ -51,6 +51,10 @@ vars:
     && ldconfig -p | grep -q libayatana-appindicator3.so.1
     && test -f /usr/share/applications/md.notekpr.Notekpr.desktop
     && test -f /usr/share/icons/hicolor/scalable/apps/md.notekpr.Notekpr.svg
+  # The desktop app's Flatpak is built with GNOME's runtime (packaging/flatpak's
+  # runtime-version) and the Rust extension of the freedesktop SDK under it.
+  FLATPAK_GNOME: "51"
+  FLATPAK_FREEDESKTOP: "26.08"
 
 tasks:
   default:
@@ -522,6 +526,44 @@ tasks:
         --follow-fedora-branching on --enable-net on
         --description "notekpr's command-line client and desktop app: end-to-end encrypted, local-first Markdown notes. https://github.com/coolapso/notekpr"
         --instructions "sudo dnf copr enable {{.COPR_PROJECT}} && sudo dnf install notekpr-desktop (the app) or notekpr-cli (the command line)"
+
+  # ------------------------------------------------------------------ the desktop app's Flatpak
+  # flatpak-builder with Flathub's GNOME runtime and Rust extension, installed
+  # for your user (packaging/flatpak, docs/development.md "The Flatpak").
+
+  flatpak:deps:
+    desc: "Install or update, for your user, what the desktop app's Flatpak is built with: the GNOME {{.FLATPAK_GNOME}} runtime and SDK, the Rust extension and Flathub's own builder (its linter); a few GB"
+    cmds:
+      - flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - >-
+        flatpak install --user -y --noninteractive --or-update flathub
+        org.gnome.Sdk//{{.FLATPAK_GNOME}} org.gnome.Platform//{{.FLATPAK_GNOME}}
+        org.freedesktop.Sdk.Extension.rust-stable//{{.FLATPAK_FREEDESKTOP}} org.flatpak.Builder
+
+  build:flatpak:
+    desc: "Build the desktop app's Flatpak from this checkout as it is, as Flathub does (its flathub-build: store pictures fetched from GitHub's main), into target-release/flatpak (repo/, builddir/), nothing installed — after flatpak:deps"
+    cmds:
+      - packaging/flatpak/generate.py target-release/flatpak --local
+      - cd target-release/flatpak && flatpak run --command=flathub-build org.flatpak.Builder md.notekpr.Notekpr.yml
+
+  test:flatpak:
+    desc: "Check the desktop app's Flatpak as Flathub does (its linter, on the manifest and the build: its store pictures must be on GitHub's main), run it and check what it holds — after build:flatpak"
+    dir: target-release/flatpak
+    cmds:
+      - flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest md.notekpr.Notekpr.yml
+      - flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo
+      # The app runs, with the tray's library beside it and nothing of the build's own left.
+      - flatpak build builddir notekpr-desktop --version
+      - >-
+        flatpak build builddir sh -c 'test -e /app/lib/libayatana-appindicator3.so.1
+        && test -e /app/share/metainfo/md.notekpr.Notekpr.metainfo.xml && ! test -e /app/tools'
+
+  flathub:
+    desc: "Write what Flathub builds the desktop app's release from into dist/flathub (TAG=v0.17.0, a tag that exists): its manifest, cargo-sources.json and Flathub's shared-modules — its Flathub repository's files"
+    requires:
+      vars: [TAG]
+    cmds:
+      - packaging/flatpak/generate.py dist/flathub --tag {{.TAG}}
 
   # ------------------------------------------------------------------ docker
 

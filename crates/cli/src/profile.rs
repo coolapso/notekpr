@@ -140,6 +140,67 @@ pub fn desktop_roots() -> Result<(PathBuf, PathBuf)> {
     Ok((config, data))
 }
 
+/// The desktop app's id as a Flatpak (and its identifier everywhere).
+pub const DESKTOP_APP_ID: &str = "md.notekpr.Notekpr";
+
+/// Whether this runs in a Flatpak's sandbox (the desktop app from Flathub):
+/// its folders are then its own (`~/.var/app/<id>`), not the system's usual ones.
+pub fn inside_flatpak() -> bool {
+    Path::new("/.flatpak-info").exists()
+}
+
+/// The folders the desktop app keeps its settings and data in when installed
+/// the other way: from outside a Flatpak, the Flatpak's own (`~/.var/app/…`);
+/// from inside one, the system's usual ones (`~/.config`, `~/.local/share`).
+/// The CLI and the app look there too, so that each sees the folders the
+/// other keeps, however the app was installed. Linux only.
+pub fn other_install_homes(home: &Path, inside_flatpak: bool) -> (PathBuf, PathBuf) {
+    if inside_flatpak {
+        (home.join(".config"), home.join(".local").join("share"))
+    } else {
+        let app = home.join(".var").join("app").join(DESKTOP_APP_ID);
+        (app.join("config"), app.join("data"))
+    }
+}
+
+/// [`other_install_homes`] here: none where folders were chosen through
+/// `NOTEKPR_*_DIR` (tests, several people side by side) or off Linux.
+fn other_install() -> Option<(PathBuf, PathBuf)> {
+    let chosen = [
+        "NOTEKPR_CONFIG_DIR",
+        "NOTEKPR_DATA_DIR",
+        "NOTEKPR_DESKTOP_CONFIG_DIR",
+        "NOTEKPR_DESKTOP_DATA_DIR",
+    ];
+    if !cfg!(target_os = "linux") || chosen.iter().any(|v| env_path(v).is_some()) {
+        return None;
+    }
+    Some(other_install_homes(&home().ok()?, inside_flatpak()))
+}
+
+/// Every place the desktop app may keep its settings and data on this
+/// computer: [`desktop_roots`], and the other install's.
+pub fn desktop_roots_all() -> Vec<(PathBuf, PathBuf)> {
+    let mut v: Vec<_> = desktop_roots().into_iter().collect();
+    if let Some((config, data)) = other_install() {
+        v.push((config.join("notekpr-desktop"), data.join("notekpr-desktop")));
+    }
+    v
+}
+
+/// The CLI's folders as the system has them, seen from inside the desktop
+/// app's Flatpak (whose own `~/.config` is elsewhere): None outside one.
+pub fn cli_dirs_outside_sandbox() -> Option<Dirs> {
+    if !inside_flatpak() {
+        return None;
+    }
+    let (config, data) = other_install()?;
+    Some(Dirs {
+        config: config.join("notekpr"),
+        data: data.join("notekpr"),
+    })
+}
+
 /// The desktop app's own CLI profile root for an app profile: where its
 /// Markdown folder's sync keeps its session, keys and local copies.
 pub fn desktop_folder_root(data: &Path, app_profile: &str) -> Dirs {
@@ -147,24 +208,25 @@ pub fn desktop_folder_root(data: &Path, app_profile: &str) -> Dirs {
 }
 
 /// The desktop app's Markdown folders' profile roots on this computer, with
-/// the app profile each belongs to.
+/// the app profile each belongs to — however the app was installed
+/// ([`desktop_roots_all`]).
 pub fn desktop_folder_dirs() -> Vec<(String, Dirs)> {
-    let Ok((_, data)) = desktop_roots() else {
-        return vec![];
-    };
-    let Ok(rd) = std::fs::read_dir(&data) else {
-        return vec![];
-    };
-    let mut v: Vec<(String, Dirs)> = rd
-        .filter_map(|e| e.ok())
-        .filter_map(|e| e.file_name().to_str().map(str::to_string))
-        .filter(|n| valid_profile_name(n))
-        .map(|n| {
-            let d = desktop_folder_root(&data, &n);
-            (n, d)
-        })
-        .filter(|(_, d)| d.profiles_dir().exists())
-        .collect();
+    let mut v: Vec<(String, Dirs)> = vec![];
+    for (_, data) in desktop_roots_all() {
+        let Ok(rd) = std::fs::read_dir(&data) else {
+            continue;
+        };
+        v.extend(
+            rd.filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().to_str().map(str::to_string))
+                .filter(|n| valid_profile_name(n))
+                .map(|n| {
+                    let d = desktop_folder_root(&data, &n);
+                    (n, d)
+                })
+                .filter(|(_, d)| d.profiles_dir().exists()),
+        );
+    }
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
 }
@@ -651,5 +713,26 @@ mod tests {
         assert!(s.plaintext_confirmed(a) && s.plaintext_confirmed(b));
         s.confirm_plaintext(b);
         assert_eq!(s.plaintext_dirs.len(), 2);
+    }
+
+    #[test]
+    fn the_app_installed_the_other_way_is_looked_for_where_it_keeps_things() {
+        let home = Path::new("/home/ana");
+        // From outside a Flatpak: the Flatpak's own folders.
+        assert_eq!(
+            other_install_homes(home, false),
+            (
+                PathBuf::from("/home/ana/.var/app/md.notekpr.Notekpr/config"),
+                PathBuf::from("/home/ana/.var/app/md.notekpr.Notekpr/data")
+            )
+        );
+        // From inside it: the system's usual ones.
+        assert_eq!(
+            other_install_homes(home, true),
+            (
+                PathBuf::from("/home/ana/.config"),
+                PathBuf::from("/home/ana/.local/share")
+            )
+        );
     }
 }

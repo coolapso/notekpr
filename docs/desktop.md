@@ -37,15 +37,17 @@ screen.
 
 From the release after 0.16.1 on, each release on
 [GitHub](https://github.com/coolapso/notekpr/releases) carries the app for
-Linux (amd64), as packages for systems with glibc 2.35 and WebKitGTK 4.1 or
-newer:
+Linux (amd64 and arm64), as packages for systems with glibc 2.35 and
+WebKitGTK 4.1 or newer; and it comes as a Flatpak from Flathub, for any
+Linux:
 
 | System | Install |
 |---|---|
+| Any Linux | the Flatpak, from Flathub: `flatpak install flathub md.notekpr.Notekpr` (once Flathub has reviewed it; [below](#the-flatpak)) |
 | Arch | from the AUR: `notekpr-desktop-bin` |
-| Debian 12+, Ubuntu 22.04+, Mint 21+ | the release's `.deb`: `sudo apt install ./notekpr-desktop_<version>_amd64.deb` |
-| Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-desktop` (amd64 and arm64); or the release's `.rpm`: `sudo dnf install ./notekpr-desktop-<version>-1.x86_64.rpm` |
-| Other Linux | the release's `notekpr-desktop_<version>_linux_amd64.tar.gz` (the app, its desktop entry and icons; it needs WebKitGTK 4.1 and libayatana-appindicator installed), or [build it from source](#build-it) |
+| Debian 12+, Ubuntu 22.04+, Mint 21+ | the release's `.deb`: `sudo apt install ./notekpr-desktop_<version>_amd64.deb` (`arm64` on ARM) |
+| Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-desktop`; or the release's `.rpm`: `sudo dnf install ./notekpr-desktop-<version>-1.x86_64.rpm` (`aarch64` on ARM) |
+| Other Linux | the release's `notekpr-desktop_<version>_linux_<arch>.tar.gz` (the app, its desktop entry and icons; it needs WebKitGTK 4.1 and libayatana-appindicator installed), or [build it from source](#build-it) |
 
 It shows in your applications as *notekpr*. COPR's package updates with the
 rest of Fedora; the release's `.deb` doesn't update itself (no package
@@ -139,6 +141,20 @@ What is protected how: [security.md](security.md#local-storage).
 **Several people side by side** (development, testing):
 `notekpr-desktop --profile bob` keeps its own settings, sign-in, data and
 folder, like the CLI's `--profile`.
+
+### The Flatpak
+
+The Flatpak keeps the same things under `~/.var/app/md.notekpr.Notekpr/`
+(`config/notekpr-desktop/…`, `data/notekpr-desktop/…`), and works the same,
+with these differences:
+
+* It may read and write your home folder, so that the Markdown folder can be
+  anywhere in it you choose (and downloads land in Downloads); not the rest
+  of the system.
+* *Start notekpr when you log in* asks your system, which may ask you once
+  whether notekpr may run in the background.
+* The CLI and the app still refuse each other's Markdown folders, whichever
+  way each is installed: each looks for the other in both places.
 
 ## Build it
 

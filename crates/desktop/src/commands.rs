@@ -97,7 +97,11 @@ pub fn desktop_info(app: AppHandle, state: State<'_, Arc<AppState>>) -> Res<Info
         server: s.server,
         close_to_tray: s.close_to_tray,
         tray: crate::app::tray_available(),
-        autostart: app.autolaunch().is_enabled().unwrap_or(false),
+        autostart: if crate::flatpak::inside() {
+            s.autostart
+        } else {
+            app.autolaunch().is_enabled().unwrap_or(false)
+        },
         status_version,
         status,
     })
@@ -204,10 +208,27 @@ pub fn set_close_to_tray(state: State<'_, Arc<AppState>>, on: bool) -> Res<()> {
     s.save(&state.paths.settings_file()).map_err(chain)
 }
 
+/// Start at login, or no longer: an autostart entry of the system's — in
+/// the Flatpak through the Background portal, which may ask the person.
 #[tauri::command]
-pub fn set_autostart(app: AppHandle, on: bool) -> Res<()> {
-    let a = app.autolaunch();
-    if on { a.enable() } else { a.disable() }.map_err(text)
+pub async fn set_autostart(app: AppHandle, state: State<'_, Arc<AppState>>, on: bool) -> Res<()> {
+    if !crate::flatpak::inside() {
+        let a = app.autolaunch();
+        return if on { a.enable() } else { a.disable() }.map_err(text);
+    }
+    let line = state.autostart_line.clone();
+    let granted =
+        tauri::async_runtime::spawn_blocking(move || crate::flatpak::request_autostart(on, line))
+            .await
+            .map_err(text)?
+            .map_err(chain)?;
+    let mut s = state.settings.lock().unwrap();
+    s.autostart = on && granted;
+    s.save(&state.paths.settings_file()).map_err(chain)?;
+    if on && !granted {
+        return Err("The system didn't allow notekpr to start when you log in.".into());
+    }
+    Ok(())
 }
 
 /// Open a web or mail address in the default browser or mail program;

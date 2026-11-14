@@ -4040,6 +4040,7 @@ dependencies = [
  "axum",
  "clap",
  "data-encoding",
+ "glib",
  "notekpr-cli",
  "notekpr-core",
  "reqwest",
@@ -4057,6 +4058,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "zbus",
  "zeroize",
 ]
 

@@ -155,6 +155,18 @@ def main():
         a.find(".ed .ln", 20)
         check(True, "signed in through the server's API from the app's own page (CORS), keys made")
 
+        # ---- the window names itself as its desktop entry is named
+        # (packaging/desktop): how a desktop finds its name and icon.
+        sock = next(os.path.join(runtime, n) for n in os.listdir(runtime) if n.startswith("sway-ipc."))
+        tree = json.loads(subprocess.run(["swaymsg", "-s", sock, "-t", "get_tree"],
+                                         capture_output=True, text=True).stdout)
+        ids, nodes = [], [tree]
+        while nodes:
+            n = nodes.pop()
+            ids += [n["app_id"]] if n.get("app_id") else []
+            nodes += n.get("nodes", []) + n.get("floating_nodes", [])
+        check(ids == ["md.notekpr.Notekpr"], f"the window's app id is md.notekpr.Notekpr ({ids})")
+
         # ---- what a script in the window can ask of the app
         def invoke(cmd, args):
             return a.js("return window.__TAURI_INTERNALS__.invoke(arguments[0], arguments[1])"

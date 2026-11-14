@@ -85,20 +85,12 @@ fn quit(app: &AppHandle) {
 pub fn tray_available() -> bool {
     #[cfg(target_os = "linux")]
     {
-        std::process::Command::new("dbus-send")
-            .args([
-                "--session",
-                "--print-reply",
-                "--dest=org.freedesktop.DBus",
-                "/org/freedesktop/DBus",
-                "org.freedesktop.DBus.NameHasOwner",
-                "string:org.kde.StatusNotifierWatcher",
-            ])
-            .output()
-            .map(|o| {
-                o.status.success() && String::from_utf8_lossy(&o.stdout).contains("boolean true")
-            })
-            .unwrap_or(false)
+        let has_host = || -> zbus::Result<bool> {
+            let bus = zbus::blocking::Connection::session()?;
+            let dbus = zbus::blocking::fdo::DBusProxy::new(&bus)?;
+            Ok(dbus.name_has_owner("org.kde.StatusNotifierWatcher".try_into()?)?)
+        };
+        has_host().unwrap_or(false)
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -201,6 +193,11 @@ pub fn run(args: Args) -> Result<()> {
 
     let mut context = tauri::generate_context!();
     context.config_mut().app.security.csp = Some(Csp::Policy(csp(settings.server.as_deref())));
+    // The window's app id (Wayland) and class (X11) come from the program's
+    // name: make it the app's identifier, which its desktop entry and icons
+    // are named after (packaging/desktop), so desktops find them.
+    #[cfg(target_os = "linux")]
+    glib::set_prgname(Some(context.config().identifier.as_str()));
     let default_profile = args.profile == "default";
 
     let mut single = tauri_plugin_single_instance::Builder::new().callback(|app, argv, _cwd| {

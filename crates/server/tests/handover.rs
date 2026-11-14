@@ -5,13 +5,11 @@
 //! containers sharing a volume.
 #![cfg(unix)]
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use common::*;
+use crate::common::*;
 use notekpr_core::doc::NoteDoc;
 use notekpr_core::protocol::*;
 

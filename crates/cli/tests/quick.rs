@@ -2,10 +2,8 @@
 //! flat, never shared, holds a limited number of notes and deletes for good;
 //! notes leave it by moving to a vault (`--move`, `mv --to-vault`).
 
-mod common;
-
+use crate::common::*;
 use clap::Parser;
-use common::*;
 use notekpr_cli::cli::Cli;
 use notekpr_cli::commands;
 use notekpr_cli::hub::Hub;

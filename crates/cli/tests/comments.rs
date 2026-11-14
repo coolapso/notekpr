@@ -1,8 +1,6 @@
 //! Comments on notes from the command line (docs/comments.md).
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_cli::vault::CommentAct;
 use notekpr_cli::{manage, ops};
 use notekpr_core::protocol::Role;

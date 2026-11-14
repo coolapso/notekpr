@@ -1,10 +1,8 @@
 //! Export / import round trips (directory and zip).
 
-mod common;
-
 use std::collections::BTreeMap;
 
-use common::*;
+use crate::common::*;
 use notekpr_cli::hub::Hub;
 use notekpr_cli::{manage, ops, transfer};
 use notekpr_core::doc::{EntryKind, Picture};

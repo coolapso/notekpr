@@ -2,9 +2,7 @@
 //! never added, vault keys the owner never made, a rolled-back log, and the
 //! checkpoint that starts the log of an older vault.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_cli::account::{self, LoginOptions};
 use notekpr_cli::{manage, note_shares, ops, prefs};
 use notekpr_core::doc::EntryKind;

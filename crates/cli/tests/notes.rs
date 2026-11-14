@@ -1,8 +1,6 @@
 //! Sharing single notes: owner side, recipient side, stale clients, revocation.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::protocol::Role;
 

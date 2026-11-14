@@ -2,12 +2,10 @@
 //! folder moved or copied into a vault, a first vault, and nothing changed
 //! that it wasn't told to change.
 
-mod common;
-
 use std::path::Path;
 
+use crate::common::*;
 use clap::Parser;
-use common::*;
 use notekpr_cli::cli::Cli;
 use notekpr_cli::profile::ProfileStore;
 use notekpr_cli::{commands, manage, ops};

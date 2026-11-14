@@ -1,12 +1,10 @@
 //! The plaintext file mirror: two-way sync with a directory, external edits
 //! racing remote edits, deletes and renames.
 
-mod common;
-
 use std::path::Path;
 use std::time::Duration;
 
-use common::*;
+use crate::common::*;
 use notekpr_cli::mirror::Mirror;
 use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::protocol::Role;

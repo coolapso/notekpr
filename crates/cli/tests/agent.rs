@@ -1,11 +1,9 @@
 //! Agent identity + local HTTP gateway: scoped to shared vaults, read-only
 //! mode, audit log, and changes visible to the owner.
 
-mod common;
-
 use std::sync::Arc;
 
-use common::*;
+use crate::common::*;
 use notekpr_cli::account::{self, AgentSetupOptions};
 use notekpr_cli::audit::AuditLog;
 use notekpr_cli::gateway::{self, Gateway};

@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+# Its tests are one program: tests/main.rs.
+autotests = false
 
 [lib]
 name = "notekpr_cli"
@@ -13,6 +15,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "notekpr"
 path = "src/main.rs"
+
+[[test]]
+name = "cli"
+path = "tests/main.rs"
 
 [dependencies]
 notekpr-core = { path = "../core" }

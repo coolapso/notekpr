@@ -1,8 +1,6 @@
 //! End-to-end tests of the server API with real client-side cryptography.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_core::crypto::Purpose;
 use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};
 use notekpr_core::engine::VaultMeta;

@@ -3,10 +3,8 @@
 //! and the files elsewhere its notes link to, then the originals to the
 //! trash; a drawing, replacing its original. Single notes: `quick.rs`.
 
-mod common;
-
+use crate::common::*;
 use clap::Parser;
-use common::*;
 use notekpr_cli::cli::Cli;
 use notekpr_cli::commands;
 use notekpr_cli::hub::Hub;

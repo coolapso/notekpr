@@ -1,12 +1,10 @@
 //! Attachments outside the database (`--file-store`, `blobs.rs`): in a
 //! folder here (the default); S3-compatible storage in `s3.rs`.
 
-mod common;
-
 use std::path::{Path, PathBuf};
 
+use crate::common::*;
 use axum::body::Bytes;
-use common::*;
 use notekpr_core::protocol::InstanceSettingsUpdate;
 use notekpr_server::config::Config;
 use notekpr_server::error::AppError;

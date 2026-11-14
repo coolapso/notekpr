@@ -1,9 +1,7 @@
 //! `@today`, `@tomorrow` and `@yesterday` become dates when the CLI or the
 //! gateway writes a note (the Markdown folder leaves them: tests/mirror.rs).
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::protocol::Role;
 

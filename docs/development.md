@@ -232,6 +232,11 @@ changes that). It runs `/usr/bin/chromium`; for another browser set
 contains NAME; the browser ↔ CLI tests are `cross_client` and `drawings`
 (drawing in the browser, checked with the CLI), the desktop app's `desktop`.
 
+The CLI's and the server's tests are one test program each, `cli` and
+`server` (`tests/main.rs` lists their files, and a test fails if one is
+left out): linked once, not once per file. One file's tests:
+`cargo test -p notekpr-cli --test cli mirror::`.
+
 The desktop app's test (`tests/e2e/desktop.py`) runs the real app — a debug
 build with the web client inside — in a headless sway on a private D-Bus,
 with a home folder of its own, driven by WebKitGTK's own WebDriver

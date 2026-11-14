@@ -2,9 +2,7 @@
 //! test:s3` (scripts/test-s3.sh) runs this against a local Garage in
 //! Docker, with the usual `AWS_*` variables set, as for a server.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use futures::TryStreamExt;
 use notekpr_core::protocol::InstanceSettingsUpdate;
 use object_store::aws::AmazonS3Builder;

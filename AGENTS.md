@@ -412,6 +412,10 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   on serde_json features (`preserve_order`) that would change every other
   crate's JSON in a `--workspace` build. The Taskfile's fmt, lint, test and
   audit cover it with `--manifest-path`.
+- The CLI's and the server's tests are one test program each, `cli` and
+  `server`, linked once instead of once per file: a new file in their
+  `tests/` goes into `tests/main.rs` as a `mod` (a test fails if it
+  doesn't). One file's tests: `cargo test -p notekpr-cli --test cli mirror::`.
 - Build the web crate with `CARGO_TARGET_DIR=target-web` (the Taskfile and
   `tests/e2e/run.sh` do) so native and wasm builds don't keep invalidating
   each other.

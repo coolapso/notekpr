@@ -1,8 +1,6 @@
 //! Instance settings (limits, read-only mode) and admin clients.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_core::doc::NoteDoc;
 use notekpr_core::protocol::*;
 use notekpr_core::random_id;

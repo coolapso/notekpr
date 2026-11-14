@@ -1,9 +1,7 @@
 //! Encrypted exports and offline recovery: GET /me/export and
 //! `notekpr-server export-user`, decrypted with only the person's keys.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_core::comments::{self, Action, Record, Signed};
 use notekpr_core::crypto::Purpose;
 use notekpr_core::doc::{EntryKind, IndexDoc, NoteDoc};

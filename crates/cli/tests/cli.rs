@@ -1,10 +1,8 @@
 //! The `notekpr` command line itself: confirmations, profile settings
 //! and refusals that protect data.
 
-mod common;
-
+use crate::common::*;
 use clap::Parser;
-use common::*;
 use notekpr_cli::cli::Cli;
 use notekpr_cli::commands;
 use notekpr_cli::profile::ProfileStore;

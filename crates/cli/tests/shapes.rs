@@ -2,10 +2,8 @@
 //! person's Personal storage (their quick notes' index) and synced between
 //! their devices.
 
-mod common;
-
+use crate::common::*;
 use clap::Parser;
-use common::*;
 use notekpr_cli::account::{self, LoginOptions};
 use notekpr_cli::cli::Cli;
 use notekpr_cli::commands;

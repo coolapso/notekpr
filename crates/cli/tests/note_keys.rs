@@ -1,8 +1,6 @@
 //! Every note has its own key: new notes, sharing a note, removing a member.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_cli::{manage, note_shares, ops};
 use notekpr_core::crypto::sym_epoch;
 use notekpr_core::keys::{FIRST_DOC_EPOCH, is_doc_epoch};

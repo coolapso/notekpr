@@ -1,8 +1,6 @@
 //! Offline recovery: the encrypted export decrypts into plain files.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_cli::{manage, ops, recover};
 
 #[tokio::test]

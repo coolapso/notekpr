@@ -1,8 +1,6 @@
 //! Live sync, offline reconciliation and crash-safe pending queues.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_cli::{manage, ops};
 use notekpr_core::engine::PinStatus;
 use notekpr_core::protocol::{InstanceSettingsUpdate, Role};

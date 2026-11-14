@@ -1,11 +1,9 @@
 //! Signing in: first-device setup and device removal.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use common::*;
+use crate::common::*;
 use notekpr_cli::account::{self, LoginOptions};
 use notekpr_cli::session::Session;
 

@@ -47,4 +47,6 @@ port=$(docker port "$NAME" 3900/tcp | head -1 | sed 's/.*://')
 export AWS_ENDPOINT="http://127.0.0.1:$port" AWS_ALLOW_HTTP=true AWS_REGION=garage
 export AWS_ACCESS_KEY_ID="$key" AWS_SECRET_ACCESS_KEY="$secret"
 export NOTEKPR_TEST_S3_BUCKET="$BUCKET"
-cargo test --locked -p notekpr-server --test s3 -- --ignored "$@"
+# The S3 tests (tests/s3.rs) are the server's only ignored ones; arguments
+# narrow them down (a test's name).
+cargo test --locked -p notekpr-server --test server -- --ignored "${@:-s3::}"

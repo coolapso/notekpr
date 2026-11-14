@@ -3,9 +3,7 @@
 //! checked against the account key the device was approved for, with the
 //! account secret unwrapped from the device's own envelope.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use notekpr_cli::account::{self, Adopt};
 use notekpr_cli::api::{Api, Credentials};
 use notekpr_cli::secrets::SecretStore;

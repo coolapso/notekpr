@@ -297,7 +297,31 @@ def main():
                 p.wait(5)
             except subprocess.TimeoutExpired:
                 os.killpg(p.pid, signal.SIGKILL)
+        # What the private D-Bus session started for it (portals, gvfs) runs in
+        # groups of its own, and would outlive the test with its mounts.
+        for pid in _ours(runtime):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        time.sleep(1)
+        with open("/proc/self/mounts") as f:
+            for m in [line.split()[1] for line in f if line.split()[1].startswith(runtime + "/")]:
+                subprocess.run(["fusermount3", "-u", "-z", m], stderr=subprocess.DEVNULL)
         shutil.rmtree(runtime, ignore_errors=True)
+
+
+def _ours(runtime):
+    """Our processes that run with the test's runtime folder."""
+    mark = f"XDG_RUNTIME_DIR={runtime}".encode()
+    for p in os.listdir("/proc"):
+        if p.isdigit():
+            try:
+                with open(f"/proc/{p}/environ", "rb") as f:
+                    if mark in f.read().split(b"\0"):
+                        yield int(p)
+            except OSError:
+                pass
 
 
 def _open(port):

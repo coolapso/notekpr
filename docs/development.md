@@ -386,7 +386,7 @@ task test:packages      # then: install the CLI's .deb in Debian and .rpm in Alm
                         # amd64, and arm64 where Docker can emulate it (qemu-user, binfmt)
 task test:srpm          # and: build both source RPMs in Fedora, as COPR does, install them, check them
 task ci:clients         # all three, as CI runs them
-task release:clients    # publish for the release tag at HEAD (task release does it)
+task release:clients    # publish for the release tag at HEAD (task release does it), the Flatpak file too
 task release:copr       # only the COPR builds, again (release:clients does it)
 task copr:project       # once: create the COPR project
 ```
@@ -399,6 +399,7 @@ A release adds to the GitHub Release semrel made (its notes stay):
 | `notekpr-cli_<v>_{amd64,arm64}.deb`, `notekpr-cli-<v>-1.{x86_64,aarch64}.rpm` | the same as packages, installed from the file (no package repository yet) |
 | `notekpr-desktop_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr-desktop` (glibc 2.35, WebKitGTK 4.1), its desktop entry and icons: what the AUR package installs |
 | `notekpr-desktop_<v>_{amd64,arm64}.deb`, `notekpr-desktop-<v>-1.{x86_64,aarch64}.rpm` | the app as packages, which depend on the system's WebKitGTK, the tray's library and xdg-utils |
+| `notekpr-desktop_<v>_x86_64.flatpak` | the app's Flatpak as one file, the same as Flathub's (`task release:flatpak`, below) |
 | `notekpr-<v>.tar.gz` | the source, which COPR's source RPMs are made from |
 | `notekpr_<v>_checksums.txt` | SHA-256 of all of them |
 
@@ -496,7 +497,20 @@ task flatpak:deps          # once, and to update: GNOME's runtime and SDK, the R
 task build:flatpak         # this checkout as it is, as Flathub builds (flathub-build), into target-release/flatpak
 task test:flatpak          # Flathub's linter on the manifest and the build, then the app's --version
 task flathub TAG=v0.17.0   # dist/flathub: what the app's Flathub repository holds, for that release
+task release:flatpak       # the Flatpak as one file for the release tagged at HEAD (release:clients does it)
 ```
+
+**On the GitHub Release.** `release:clients` first builds the Flatpak as
+Flathub will, from the release's tag on GitHub (`generate.py --tag`, then
+`flathub-build`), on Flathub's branch (`stable`), and packs it into one
+file, `notekpr-desktop_<v>_<arch>.flatpak` (`flatpak build-bundle`, which
+names Flathub for GNOME's runtime); GoReleaser then attaches it to the
+release and lists it in the checksums. Not GoReleaser's own Flatpaks: they
+hold the binary only, without the tray's library, the desktop entry, the
+icons or the store page. It is made for the machine's architecture
+(x86_64): arm64's would be built under emulation for hours, so arm64
+takes Flathub's (Flathub builds both) or the packages. The file doesn't
+update itself: Flathub's does.
 
 `build:flatpak` runs Flathub's own build (`flathub-build`, in
 org.flatpak.Builder), which also fetches the store pictures from their

@@ -574,6 +574,29 @@ tasks:
       - task: flatpak:deps
       - packaging/flatpak/generate.py dist/flathub --tag {{.TAG}}
 
+  release:flatpak:
+    desc: "The desktop app's Flatpak as one file, for the release tagged at HEAD (release:clients makes it, and GoReleaser attaches it): built as Flathub builds it, from that tag on GitHub, into target-release/flatpak-release/notekpr-desktop_<version>_<arch>.flatpak"
+    vars:
+      TAG:
+        sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD 2>/dev/null || true
+    preconditions:
+      - sh: test -n "{{.TAG}}"
+        msg: "HEAD has no release tag: the Flatpak file is made for a release (task release)"
+    cmds:
+      - task: flatpak:deps
+      - packaging/flatpak/generate.py target-release/flatpak-release --tag {{.TAG}}
+      - |
+        set -eu
+        cd target-release/flatpak-release
+        flatpak run --command=flathub-build org.flatpak.Builder md.notekpr.Notekpr.yml
+        # On Flathub's branch, so that it is the same app as Flathub's.
+        arch=$(flatpak --default-arch)
+        flatpak build-commit-from --src-ref="app/md.notekpr.Notekpr/$arch/master" repo "app/md.notekpr.Notekpr/$arch/stable"
+        rm -f notekpr-desktop_*.flatpak
+        # Installing it fetches GNOME's runtime from Flathub.
+        flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+          repo "notekpr-desktop_{{trimPrefix "v" .TAG}}_$arch.flatpak" md.notekpr.Notekpr stable
+
   # ------------------------------------------------------------------ docker
 
   docker:login:
@@ -693,6 +716,8 @@ tasks:
         msg: "The release plugins are missing: task release:plugins"
       - sh: 'test -n "${SEMREL_PLUGIN_TOKEN:-${GITHUB_TOKEN:-}}" || gh auth status >/dev/null 2>&1'
         msg: Set SEMREL_PLUGIN_TOKEN or GITHUB_TOKEN, or sign in with gh auth login before releasing.
+      - sh: command -v flatpak
+        msg: "flatpak is missing, which builds the desktop app's Flatpak for the release (Arch: sudo pacman -S flatpak; then task flatpak:deps)"
       - sh: command -v copr-cli
         msg: "copr-cli is missing, which publishes the CLI to Fedora's COPR (Arch: sudo pacman -S copr-cli; or task tools:copr)"
       - sh: 'test -n "${COPR_CONFIG:-}${CI:-}" || test -f ~/.config/copr'
@@ -749,13 +774,15 @@ tasks:
           FLAGS: ""
 
   release:clients:
-    desc: "Publish the CLI and the desktop app for the release tagged at HEAD (task release does, after the images; run it again if it failed there): their files and packages on the GitHub Release, the AUR packages, then the COPR builds (release:copr)"
+    desc: "Publish the CLI and the desktop app for the release tagged at HEAD (task release does, after the images; run it again if it failed there): their files and packages on the GitHub Release (the app's Flatpak too: release:flatpak), the AUR packages, then the COPR builds (release:copr)"
     preconditions:
       - sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD
         msg: "HEAD has no release tag: the CLI is published for a release (task release)"
       - sh: 'test -n "${GITHUB_TOKEN:-}" || gh auth status >/dev/null 2>&1'
         msg: Set GITHUB_TOKEN, or sign in with gh auth login.
     cmds:
+      # The Flatpak as a file, which GoReleaser attaches to the release.
+      - task: release:flatpak
       # The AUR's SSH key, its contents in AUR_KEY: in CI the `aur` secret
       # from Infisical; elsewhere the key your ssh uses for the AUR (the first
       # of `ssh -G aur.archlinux.org`'s identity files there is), or the file

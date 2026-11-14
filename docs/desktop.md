@@ -43,7 +43,7 @@ Linux:
 
 | System | Install |
 |---|---|
-| Any Linux | the Flatpak, from Flathub: `flatpak install flathub md.notekpr.Notekpr` (once Flathub has reviewed it; [below](#the-flatpak)) |
+| Any Linux | the Flatpak, from Flathub: `flatpak install flathub md.notekpr.Notekpr` (once Flathub has reviewed it; [below](#the-flatpak)); or the release's `notekpr-desktop_<version>_x86_64.flatpak`: `flatpak install --user ./notekpr-desktop_<version>_x86_64.flatpak` (it brings GNOME's runtime from Flathub; it doesn't update itself: install a newer release's the same way) |
 | Arch | from the AUR: `notekpr-desktop-bin` |
 | Debian 12+, Ubuntu 22.04+, Mint 21+ | the release's `.deb`: `sudo apt install ./notekpr-desktop_<version>_amd64.deb` (`arm64` on ARM) |
 | Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-desktop`; or the release's `.rpm`: `sudo dnf install ./notekpr-desktop-<version>-1.x86_64.rpm` (`aarch64` on ARM) |

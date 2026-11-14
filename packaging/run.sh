@@ -19,8 +19,9 @@ docker build -q -t "$image" --build-arg WASM_BINDGEN_VERSION="$wasm_bindgen" \
 
 # Builds made in another image (an older one, before a change to the
 # Dockerfile) were compiled against its system and may not link or run in
-# this one; Cargo can't tell. Start them again then.
-id=$(docker image inspect -f '{{.Id}}' "$image")
+# this one; Cargo can't tell. Start them again then. The image is known by
+# what makes it: Docker gives every build a new id, even from its cache.
+id=$(printf '%s\n' "$wasm_bindgen" | cat packaging/Dockerfile - | sha256sum | cut -d' ' -f1)
 if [ "$(cat target-release/image 2>/dev/null)" != "$id" ]; then
   rm -rf target-release/target target-release/native target-release/desktop-web
   mkdir -p target-release

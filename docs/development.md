@@ -499,7 +499,9 @@ task flathub TAG=v0.17.0   # dist/flathub: what the app's Flathub repository hol
 org.flatpak.Builder), which also fetches the store pictures from their
 addresses (GitHub's `main`): until new ones are pushed, the linter says
 they are missing. Nothing gets installed; to try it, install it for your
-user, `flatpak install --user target-release/flatpak/repo md.notekpr.Notekpr`,
+user from the repository's folder, `flatpak install --user
+./target-release/flatpak/repo md.notekpr.Notekpr` (the `./` makes it a
+folder: without it, flatpak looks for an app of that name on Flathub),
 then `flatpak run md.notekpr.Notekpr` (`flatpak uninstall --user
 md.notekpr.Notekpr` takes it away again).
 

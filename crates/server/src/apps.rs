@@ -6,7 +6,7 @@ use axum::extract::{MatchedPath, Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use notekpr_core::protocol::APP_HEADER;
-use notekpr_core::version::Version;
+use notekpr_core::version::{Build, Version};
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -26,13 +26,36 @@ use crate::state::AppState;
 /// one owner only.)
 pub const OLDEST_APP_VERSION: Version = Version(0, 17, 0);
 
-/// Refuse an app older than `oldest`. Development builds, and requests that
-/// don't say which app they are (scripts, apps from before the header), are
-/// never refused.
+/// Refuse an app older than `oldest` (docs/protocol.md §11).
 pub fn check(app: Option<&str>, oldest: Version) -> AppResult<()> {
-    match app.and_then(Version::of_app) {
-        Some(v) if v < oldest => Err(AppError::UpdateRequired(oldest)),
+    match app.and_then(Build::of_app) {
+        Some(app) if refused(Build::of(notekpr_core::VERSION), app, oldest) => {
+            Err(AppError::UpdateRequired(oldest))
+        }
         _ => Ok(()),
+    }
+}
+
+/// Whether a server built as `server` refuses an app built as `app`.
+/// Development builds are never refused, nor are requests that don't say
+/// which app they are (scripts, apps from before the header). A build a few
+/// commits after a release counts as that release, except on a server that
+/// isn't a release either and was built after the same release or an
+/// earlier one (or is a development build): the version it needs is then
+/// one still to come, which both are on their way to. So a server built
+/// from main between two releases takes the apps built beside it.
+fn refused(server: Build, app: Build, oldest: Version) -> bool {
+    match app {
+        Build::Dev => false,
+        Build::Release(v) => v < oldest,
+        Build::After(v) => {
+            v < oldest
+                && match server {
+                    Build::Release(_) => true,
+                    Build::After(s) => s > v,
+                    Build::Dev => false,
+                }
+        }
     }
 }
 
@@ -61,17 +84,34 @@ mod tests {
     #[test]
     fn only_released_apps_older_than_the_oldest_are_refused() {
         let oldest = Version(0, 6, 0);
-        assert!(check(Some("cli/0.5.9"), oldest).is_err());
-        assert!(check(Some("web/0.5.0-3-gabc1234"), oldest).is_err());
-        for fine in [
-            Some("cli/0.6.0"),
-            Some("cli/0.6.0-1-gabc1234-dev"),
-            Some("web/1.0.0"),
-            Some("cli/dev"),
-            Some("cli/abc1234"),
-            Some("something else"),
-            None,
+        let released = Build::Release(Version(0, 6, 0));
+        let refused_by = |server, app: &str| refused(server, Build::of(app), oldest);
+        for server in [released, Build::After(Version(0, 5, 0)), Build::Dev] {
+            assert!(refused_by(server, "0.5.9"), "{server:?}");
+            assert!(refused_by(server, "0.1.0"), "{server:?}");
+            for fine in ["0.6.0", "0.6.0-1-gabc1234-dev", "1.0.0", "dev", "abc1234"] {
+                assert!(!refused_by(server, fine), "{server:?} {fine}");
+            }
+        }
+        // A build after a release counts as that release on a released
+        // server, and on one built after a later release…
+        assert!(refused_by(released, "0.5.0-3-gabc1234"));
+        assert!(refused_by(
+            Build::After(Version(0, 5, 1)),
+            "0.5.0-3-gabc1234"
+        ));
+        // …but not on a server that needs a release still to come: one built
+        // after the same release, or an earlier one, or a development build.
+        for server in [
+            Build::After(Version(0, 5, 0)),
+            Build::After(Version(0, 4, 2)),
+            Build::Dev,
         ] {
+            assert!(!refused_by(server, "0.5.0-3-gabc1234"), "{server:?}");
+            assert!(!refused_by(server, "0.5.0-dev"), "{server:?}");
+        }
+        // Requests that don't say which app they are.
+        for fine in [Some("something else"), None] {
             assert!(check(fine, oldest).is_ok(), "{fine:?}");
         }
     }

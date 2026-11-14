@@ -30,12 +30,33 @@ impl Version {
         let s = s.strip_prefix('v').unwrap_or(s);
         Version::parse(s.split('-').next().unwrap_or(s))
     }
+}
 
-    /// The release of an app, from what it sends in
-    /// [`APP_HEADER`](crate::protocol::APP_HEADER) (`cli/0.5.0`); `None` for
-    /// development builds and anything else.
-    pub fn of_app(app: &str) -> Option<Version> {
-        Version::of_build(app.split_once('/')?.1)
+/// What a build is, from its version ([`crate::VERSION`]): a release, a
+/// build made after one (`0.5.0-3-gabc1234`, or `0.5.0-dev` with uncommitted
+/// changes), or a development build (`dev`, a bare commit hash).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Build {
+    Release(Version),
+    After(Version),
+    Dev,
+}
+
+impl Build {
+    pub fn of(s: &str) -> Build {
+        let s = s.strip_prefix('v').unwrap_or(s);
+        match (Version::parse(s), Version::of_build(s)) {
+            (Some(v), _) => Build::Release(v),
+            (None, Some(v)) => Build::After(v),
+            (None, None) => Build::Dev,
+        }
+    }
+
+    /// An app's build, from what it sends in
+    /// [`APP_HEADER`](crate::protocol::APP_HEADER) (`cli/0.5.0`); `None`
+    /// when that doesn't say.
+    pub fn of_app(app: &str) -> Option<Build> {
+        Some(Build::of(app.split_once('/')?.1))
     }
 }
 
@@ -70,11 +91,31 @@ mod tests {
         );
         assert_eq!(Version::of_build("dev"), None);
         assert_eq!(Version::of_build("abc1234"), None);
-        assert_eq!(Version::of_app("cli/0.5.0"), Some(Version(0, 5, 0)));
-        assert_eq!(Version::of_app("web/dev"), None);
-        assert_eq!(Version::of_app("0.5.0"), None);
         assert!(Version(0, 10, 0) > Version(0, 9, 9));
         assert!(Version(1, 0, 0) > Version(0, 99, 99));
         assert_eq!(Version(0, 6, 1).to_string(), "0.6.1");
+    }
+
+    #[test]
+    fn what_a_build_is() {
+        assert_eq!(Build::of("0.5.0"), Build::Release(Version(0, 5, 0)));
+        assert_eq!(Build::of("v0.5.0"), Build::Release(Version(0, 5, 0)));
+        assert_eq!(
+            Build::of("0.5.0-3-gabc1234"),
+            Build::After(Version(0, 5, 0))
+        );
+        assert_eq!(
+            Build::of("0.5.0-3-gabc1234-dev"),
+            Build::After(Version(0, 5, 0))
+        );
+        assert_eq!(Build::of("0.5.0-dev"), Build::After(Version(0, 5, 0)));
+        assert_eq!(Build::of("dev"), Build::Dev);
+        assert_eq!(Build::of("abc1234"), Build::Dev);
+        assert_eq!(
+            Build::of_app("desktop/0.5.0"),
+            Some(Build::Release(Version(0, 5, 0)))
+        );
+        assert_eq!(Build::of_app("web/dev"), Some(Build::Dev));
+        assert_eq!(Build::of_app("0.5.0"), None);
     }
 }

@@ -984,7 +984,11 @@ with `426 update_required` and the version it needs (`oldest_version`) —
 on the WebSocket, an `error` with that code, then the socket closes.
 Development builds (`dev`, a bare commit hash) and requests without the
 header aren't refused; a build a few commits after a release
-(`0.6.0-3-gabc1234`) counts as that release. Apps say so plainly and keep
+(`0.6.0-3-gabc1234`) counts as that release — except on a server that isn't
+a release either and was built after the same release or an earlier one (or
+is a development build): the version it needs is then one still to come,
+which both are on their way to, so a server built from `main` takes the
+apps built beside it. Apps say so plainly and keep
 their unsent changes: the CLI stops syncing (its local copies keep them),
 the web app stops syncing, stores them in the browser and asks for a
 reload, after which it sends them.

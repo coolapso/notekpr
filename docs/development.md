@@ -467,7 +467,9 @@ what they must understand — raises `OLDEST_APP_VERSION` in
 `crates/server/src/apps.rs` to the first version that works with it: older
 apps are then told to update instead of misbehaving
 ([protocol.md §11](protocol.md#11-older-apps)). Development builds are never
-refused.
+refused, and a server built from `main` takes apps built from `main` too
+(say `0.16.1-27-gabc1234` while it needs 0.17.0): packages and images made
+between releases work with each other.
 
 ### The Flatpak
 

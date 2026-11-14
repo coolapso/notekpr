@@ -143,7 +143,7 @@ pub fn desktop_roots() -> Result<(PathBuf, PathBuf)> {
 /// The desktop app's id as a Flatpak (and its identifier everywhere).
 pub const DESKTOP_APP_ID: &str = "md.notekpr.Notekpr";
 
-/// Whether this runs in a Flatpak's sandbox (the desktop app from Flathub):
+/// Whether this runs in a Flatpak's sandbox (the desktop app's Flatpak):
 /// its folders are then its own (`~/.var/app/<id>`), not the system's usual ones.
 pub fn inside_flatpak() -> bool {
     Path::new("/.flatpak-info").exists()

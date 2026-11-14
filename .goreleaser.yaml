@@ -114,7 +114,7 @@ checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
   extra_files: &flatpak
     # The desktop app's Flatpak, which task release:flatpak builds before
-    # (as Flathub does: not GoReleaser's own Flatpaks, which hold the binary
+    # (as Flathub builds apps: not GoReleaser's own Flatpaks, which hold the binary
     # only). The wildcard lets builds without it go on: only this version's.
     - glob: "target-release/flatpak-release/notekpr-desktop_{{ .Version }}_*.flatpak"
 

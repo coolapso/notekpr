@@ -564,16 +564,6 @@ tasks:
         flatpak build builddir sh -c 'test -e /app/lib/libayatana-appindicator3.so.1
         && test -e /app/share/metainfo/md.notekpr.Notekpr.metainfo.xml && ! test -e /app/tools'
 
-  flathub:
-    desc: "Write what Flathub builds the desktop app's release from into dist/flathub (TAG=v0.17.0, a tag that exists): its manifest, cargo-sources.json and Flathub's shared-modules — its Flathub repository's files"
-    requires:
-      vars: [TAG]
-    cmds:
-      # The Rust extension as Flathub has it now: the manifest pins the wasm32
-      # standard library for its Rust.
-      - task: flatpak:deps
-      - packaging/flatpak/generate.py dist/flathub --tag {{.TAG}}
-
   release:flatpak:
     desc: "The desktop app's Flatpak as one file, for the release tagged at HEAD (release:clients makes it, and GoReleaser attaches it): built as Flathub builds it, from that tag on GitHub, into target-release/flatpak-release/notekpr-desktop_<version>_<arch>.flatpak"
     vars:
@@ -589,7 +579,7 @@ tasks:
         set -eu
         cd target-release/flatpak-release
         flatpak run --command=flathub-build org.flatpak.Builder md.notekpr.Notekpr.yml
-        # On Flathub's branch, so that it is the same app as Flathub's.
+        # On the branch apps are installed from (stable), not the build's own (master).
         arch=$(flatpak --default-arch)
         flatpak build-commit-from --src-ref="app/md.notekpr.Notekpr/$arch/master" repo "app/md.notekpr.Notekpr/$arch/stable"
         rm -f notekpr-desktop_*.flatpak

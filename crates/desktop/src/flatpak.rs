@@ -1,5 +1,5 @@
-//! Running as a Flatpak (md.notekpr.Notekpr, from Flathub;
-//! packaging/flatpak): what its sandbox changes. The app runs the same,
+//! Running as a Flatpak (md.notekpr.Notekpr, packaging/flatpak): what its
+//! sandbox changes. The app runs the same,
 //! but for three things:
 //! * the tray's icon is written where the desktop outside can read it
 //!   ([`tray_icon_dir`]);

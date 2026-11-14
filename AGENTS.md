@@ -191,7 +191,7 @@ packaging/      the CLI's and the desktop app's release builds (GoReleaser,
                 AppStream page) · rpm/ (COPR's source RPMs: the specs, srpm.sh) ·
                 flatpak/ (the app's Flatpak: manifest template, build.sh, generate.py) ·
                 screenshots/ (app stores' pictures); Linux only for now: .tar.gz,
-                .deb, .rpm, AUR, COPR, Flathub, a .flatpak on the release
+                .deb, .rpm, AUR, COPR, a .flatpak on the release
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade

@@ -2,8 +2,8 @@
 # with no network. This is the template: packaging/flatpak/generate.py fills
 # in what {{…}} names and writes cargo-sources.json (every crate the
 # Cargo.locks pin) beside it. `task build:flatpak` builds this checkout's
-# last commit; `task flathub` writes what Flathub builds a release from
-# (docs/development.md, "The Flatpak").
+# last commit, `task release:flatpak` a release's tag (docs/development.md,
+# "The Flatpak").
 id: md.notekpr.Notekpr
 runtime: org.gnome.Platform
 runtime-version: '51'

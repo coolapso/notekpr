@@ -141,7 +141,7 @@ provider setup, reverse proxies, Kubernetes, backups, upgrades and monitoring.
 | Client | |
 |---|---|
 | Browser | served by the server; works on desktop and phones |
-| Desktop app (`notekpr-desktop`) | the app in a window of its own, in the tray, with a Markdown folder; Linux: Flathub, AUR, `.deb`, Fedora's COPR — [docs/desktop.md](docs/desktop.md) |
+| Desktop app (`notekpr-desktop`) | the app in a window of its own, in the tray, with a Markdown folder; Linux: AUR, `.deb`, Fedora's COPR, a Flatpak — [docs/desktop.md](docs/desktop.md) |
 | CLI (`notekpr`) | offline replica, live sync, optional Markdown mirror, export/import — [docs/cli.md](docs/cli.md) |
 | Agents | CLI, Markdown folder or local HTTP gateway — [docs/agents.md](docs/agents.md) |
 

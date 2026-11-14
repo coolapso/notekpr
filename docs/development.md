@@ -399,7 +399,7 @@ A release adds to the GitHub Release semrel made (its notes stay):
 | `notekpr-cli_<v>_{amd64,arm64}.deb`, `notekpr-cli-<v>-1.{x86_64,aarch64}.rpm` | the same as packages, installed from the file (no package repository yet) |
 | `notekpr-desktop_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr-desktop` (glibc 2.35, WebKitGTK 4.1), its desktop entry and icons: what the AUR package installs |
 | `notekpr-desktop_<v>_{amd64,arm64}.deb`, `notekpr-desktop-<v>-1.{x86_64,aarch64}.rpm` | the app as packages, which depend on the system's WebKitGTK, the tray's library and xdg-utils |
-| `notekpr-desktop_<v>_x86_64.flatpak` | the app's Flatpak as one file, the same as Flathub's (`task release:flatpak`, below) |
+| `notekpr-desktop_<v>_x86_64.flatpak` | the app's Flatpak as one file (`task release:flatpak`, below) |
 | `notekpr-<v>.tar.gz` | the source, which COPR's source RPMs are made from |
 | `notekpr_<v>_checksums.txt` | SHA-256 of all of them |
 
@@ -475,9 +475,13 @@ between releases work with each other.
 
 ### The Flatpak
 
-The desktop app is also a Flatpak, `md.notekpr.Notekpr`, which Flathub
-builds from source and publishes. `packaging/flatpak` holds its manifest (a
-template), `build.sh` (the app's build inside it) and `generate.py`, which
+The desktop app is also a Flatpak, `md.notekpr.Notekpr`, built from source
+the way Flathub builds apps (with its builder and linter, and GNOME's
+runtime from Flathub), but not published there: each release carries it as
+one file, and a Flatpak repository of our own, with updates, is planned
+([#62](https://github.com/coolapso/notekpr/issues/62)). `packaging/flatpak`
+holds its manifest (a template), `build.sh` (the app's build inside it)
+and `generate.py`, which
 fills the template in and writes `cargo-sources.json`: the build has no
 network, so that lists every crate the `Cargo.lock`s pin (the workspace's,
 `crates/diagram`'s and the wasm-bindgen CLI's) for flatpak-builder to fetch
@@ -496,21 +500,19 @@ store-note,store-drawing,store-graph` takes them again).
 task flatpak:deps          # once, and to update: GNOME's runtime and SDK, the Rust extension, org.flatpak.Builder (for your user)
 task build:flatpak         # this checkout as it is, as Flathub builds (flathub-build), into target-release/flatpak
 task test:flatpak          # Flathub's linter on the manifest and the build, then the app's --version
-task flathub TAG=v0.17.0   # dist/flathub: what the app's Flathub repository holds, for that release
 task release:flatpak       # the Flatpak as one file for the release tagged at HEAD (release:clients does it)
 ```
 
-**On the GitHub Release.** `release:clients` first builds the Flatpak as
-Flathub will, from the release's tag on GitHub (`generate.py --tag`, then
-`flathub-build`), on Flathub's branch (`stable`), and packs it into one
+**On the GitHub Release.** `release:clients` first builds the Flatpak from
+the release's tag on GitHub (`generate.py --tag`, then `flathub-build`),
+on the branch apps are installed from (`stable`), and packs it into one
 file, `notekpr-desktop_<v>_<arch>.flatpak` (`flatpak build-bundle`, which
 names Flathub for GNOME's runtime); GoReleaser then attaches it to the
 release and lists it in the checksums. Not GoReleaser's own Flatpaks: they
 hold the binary only, without the tray's library, the desktop entry, the
 icons or the store page. It is made for the machine's architecture
 (x86_64): arm64's would be built under emulation for hours, so arm64
-takes Flathub's (Flathub builds both) or the packages. The file doesn't
-update itself: Flathub's does.
+takes the packages. The file doesn't update itself.
 
 `build:flatpak` runs Flathub's own build (`flathub-build`, in
 org.flatpak.Builder), which also fetches the store pictures from their
@@ -522,25 +524,11 @@ folder: without it, flatpak looks for an app of that name on Flathub),
 then `flatpak run md.notekpr.Notekpr` (`flatpak uninstall --user
 md.notekpr.Notekpr` takes it away again).
 
-**Flathub.** The first time, the app is submitted for review: a pull
-request to [flathub/flathub](https://github.com/flathub/flathub), on a branch
-made from its `new-pr` branch and against it, holding `dist/flathub`'s
-manifest and `cargo-sources.json`, with Flathub's shared modules as a git
-submodule (`git submodule add https://github.com/flathub/shared-modules.git`,
-checked out at the commit `generate.py` names). Its reviewers may ask why it
-reads the home folder: the Markdown folder, wherever one picks it. The id
-names notekpr.md, so Flathub has the domain verified: a token from
-Flathub's developer pages, served at
-`https://notekpr.md/.well-known/org.flathub.VerifiedApps.txt`. Once
-accepted, Flathub makes a repository for the app (`flathub/md.notekpr.Notekpr`),
-and each release is a pull request there with `task flathub TAG=…`'s files
-(the submodule moved to its commit): Flathub builds and publishes it once
-that is merged. The Rust extension moves on to a new Rust by itself, and
-the wasm32 library fits one Rust only: `task flathub` (and
-`build:flatpak`) first update the extension here (`flatpak:deps`), and
-`generate.py` pins the library for that Rust. A Flathub build after the
-extension has moved on stops at once, saying so (`build.sh`): write the
-files again with `task flathub` and send them in a new pull request.
+**Rust.** The Rust extension moves on to a new Rust by itself, and the
+wasm32 library fits one Rust only: `build:flatpak` and `release:flatpak`
+first update the extension here (`flatpak:deps`), then `generate.py` pins
+the library for that Rust. A build with another Rust stops at once, saying
+so (`build.sh`).
 
 ## Logo and icon
 

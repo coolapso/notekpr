@@ -35,15 +35,14 @@ screen.
 
 ## Install it
 
-From the release after 0.16.1 on, each release on
+From 0.17.0 on, each release on
 [GitHub](https://github.com/coolapso/notekpr/releases) carries the app for
-Linux (amd64 and arm64), as packages for systems with glibc 2.35 and
-WebKitGTK 4.1 or newer; and it comes as a Flatpak from Flathub, for any
-Linux:
+Linux: as packages (amd64 and arm64) for systems with glibc 2.35 and
+WebKitGTK 4.1 or newer, and as a Flatpak (x86_64) for any Linux:
 
 | System | Install |
 |---|---|
-| Any Linux | the Flatpak, from Flathub: `flatpak install flathub md.notekpr.Notekpr` (once Flathub has reviewed it; [below](#the-flatpak)); or the release's `notekpr-desktop_<version>_x86_64.flatpak`: `flatpak install --user ./notekpr-desktop_<version>_x86_64.flatpak` (it brings GNOME's runtime from Flathub; it doesn't update itself: install a newer release's the same way) |
+| Any Linux | the release's Flatpak, `notekpr-desktop_<version>_x86_64.flatpak`: `flatpak install --user ./notekpr-desktop_<version>_x86_64.flatpak` (it brings GNOME's runtime from Flathub; it doesn't update itself yet: install a newer release's the same way; [below](#the-flatpak)) |
 | Arch | from the AUR: `notekpr-desktop-bin` |
 | Debian 12+, Ubuntu 22.04+, Mint 21+ | the release's `.deb`: `sudo apt install ./notekpr-desktop_<version>_amd64.deb` (`arm64` on ARM) |
 | Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-desktop`; or the release's `.rpm`: `sudo dnf install ./notekpr-desktop-<version>-1.x86_64.rpm` (`aarch64` on ARM) |

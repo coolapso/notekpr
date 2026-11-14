@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- The desktop app's page in app stores (Flathub, GNOME Software, KDE
+<!-- The desktop app's page in app stores (GNOME Software, KDE
      Discover): AppStream. The Flatpak's build fills in the release
      (@VERSION@, @DATE@: packaging/flatpak). Its pictures are
      packaging/screenshots (scripts/guide-shots.py takes them). -->

@@ -296,7 +296,7 @@ notes](writing.md) and [Drawings](drawings.md).
   through your browser, that keeps running in the tray (closing the window
   hides it there), can start when you log in, and keeps your vaults as a
   two-way folder of Markdown files itself — no CLI needed for that;
-  a Flatpak (Flathub) and packages for Arch (AUR), Debian and Ubuntu
+  a Flatpak and packages for Arch (AUR), Debian and Ubuntu
   (`.deb`) and Fedora (COPR)
   ([desktop app](desktop.md)).
 * A command-line client (CLI) with a local encrypted copy, live sync, and a

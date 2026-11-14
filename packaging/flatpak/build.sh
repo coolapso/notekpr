@@ -9,9 +9,10 @@ set -eu
 # libraries, in a sysroot that only the wasm32 builds use.
 # That library fits one Rust only: the one the extension had when the
 # manifest was written (generate.py). The extension moves on to newer Rusts;
-# then the manifest is written again (task flathub, docs/development.md).
+# then the manifest is written again (generate.py, which build:flatpak and
+# release:flatpak run after updating the extension: docs/development.md).
 if [ "$(rustc -vV | sed -n 's/^commit-hash: //p')" != "$(cat rust-std-wasm32/git-commit-hash)" ]; then
-    echo "The Rust SDK extension's $(rustc -V) isn't the Rust the wasm32 standard library is for ($(cat rust-std-wasm32/version)): write the manifest again (task flathub)." >&2
+    echo "The Rust SDK extension's $(rustc -V) isn't the Rust the wasm32 standard library is for ($(cat rust-std-wasm32/version)): write the manifest again (packaging/flatpak/generate.py, after task flatpak:deps)." >&2
     exit 1
 fi
 host=$(rustc -vV | sed -n 's/^host: //p')

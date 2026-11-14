@@ -2,7 +2,7 @@
 """Write the desktop app's Flatpak manifest, and what it builds from, into OUT.
 
     packaging/flatpak/generate.py OUT --local        # this checkout as it is (task build:flatpak)
-    packaging/flatpak/generate.py OUT --tag v0.17.0  # a release, for Flathub (task flathub)
+    packaging/flatpak/generate.py OUT --tag v0.17.0  # a release's tag on GitHub (task release:flatpak)
 
 OUT gets md.notekpr.Notekpr.yml (the template beside this script, filled in),
 cargo-sources.json and shared-modules/ (Flathub's, at the commit below). The
@@ -12,8 +12,8 @@ of the wasm-bindgen CLI the web client's crates pin.
 
 The web client is wasm32, which the Rust SDK extension has no standard library
 for: the manifest brings Rust's official one, of the extension's version — the
-one installed here, which must be Flathub's current one (`task flatpak:deps`
-updates it). This checks the extension's rustc is that very build.
+one installed here (`task flatpak:deps` updates it). This checks the
+extension's rustc is that very build.
 
 Only the standard library: it runs where Python 3.11 and flatpak do.
 """
@@ -125,7 +125,7 @@ def main():
     ap.add_argument("out", type=Path)
     which = ap.add_mutually_exclusive_group(required=True)
     which.add_argument("--local", action="store_true", help="this checkout's last commit")
-    which.add_argument("--tag", help="a release's tag (v0.17.0), for Flathub")
+    which.add_argument("--tag", help="a release's tag (v0.17.0), on GitHub")
     args = ap.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)

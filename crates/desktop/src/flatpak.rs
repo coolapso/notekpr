@@ -38,6 +38,17 @@ pub fn request_autostart(on: bool, commandline: Vec<String>) -> anyhow::Result<b
 
     const PORTAL: &str = "org.freedesktop.portal.Desktop";
     let bus = Connection::session().context("no session bus")?;
+    let background = Proxy::new(
+        &bus,
+        PORTAL,
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Background",
+    )?;
+    // Not every desktop has it (Hyprland's portals, say): said plainly, not
+    // as the bus's error.
+    if background.get_property::<u32>("version").is_err() {
+        anyhow::bail!("This desktop can't start notekpr's Flatpak when you log in.");
+    }
     // The portal answers on a request object named after us and a token of
     // ours: listened to before asking, so the answer can't come first.
     let token = format!("notekpr_{}", std::process::id());
@@ -56,12 +67,6 @@ pub fn request_autostart(on: bool, commandline: Vec<String>) -> anyhow::Result<b
     )?;
     let mut answers = request.receive_signal("Response")?;
 
-    let background = Proxy::new(
-        &bus,
-        PORTAL,
-        "/org/freedesktop/portal/desktop",
-        "org.freedesktop.portal.Background",
-    )?;
     let mut options: HashMap<&str, Value> = HashMap::new();
     options.insert("handle_token", Value::from(token.as_str()));
     options.insert(

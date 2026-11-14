@@ -152,7 +152,8 @@ with these differences:
   anywhere in it you choose (and downloads land in Downloads); not the rest
   of the system.
 * *Start notekpr when you log in* asks your system, which may ask you once
-  whether notekpr may run in the background.
+  whether notekpr may run in the background. Not every desktop can (GNOME
+  and KDE can; Hyprland, for one, can't): the app then says so.
 * The CLI and the app still refuse each other's Markdown folders, whichever
   way each is installed: each looks for the other in both places.
 

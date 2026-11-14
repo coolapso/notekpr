@@ -202,7 +202,7 @@ fn QuickStorage(vault: String) -> impl IntoView {
                 <div class="meter" class:full=is_full>
                     <div class="meter-fill" style=format!("width: {pct:.1}%")></div></div>
                 {is_full.then(|| view! {
-                    <p class="muted small storage-help">"It is full: edits wait in this browser until there's room. Deleting quick notes or saved shapes makes room, or ask your server's administrator for more."</p>
+                    <p class="muted small storage-help">{format!("It is full: edits wait {} until there's room. Deleting quick notes or saved shapes makes room, or ask your server's administrator for more.", crate::desktop::in_here())}</p>
                 })}
             </div>
         })

@@ -428,9 +428,10 @@ fn DesktopApp() -> impl IntoView {
     }
 }
 
-/// "Keep this browser usable offline" (see `state::offline`).
+/// "Keep this browser (computer) usable offline" (see `state::offline`).
 #[component]
 fn OfflineSetting() -> impl IntoView {
+    let (here, in_here) = (crate::desktop::here(), crate::desktop::in_here());
     let on = RwSignal::new(step(|c| state::offline_enabled(c)));
     let busy = RwSignal::new(false);
     let supported = state::offline_supported();
@@ -438,8 +439,8 @@ fn OfflineSetting() -> impl IntoView {
         busy.set(true);
         leptos::task::spawn_local(async move {
             if want
-                && !ask::confirm("Keep what's needed to decrypt your notes in this browser?")
-                    .text("Anyone with a copy of this browser's data could then read your notes without the server, even after you remove this device. Only do this on your own computer with disk encryption.")
+                && !ask::confirm(format!("Keep what's needed to decrypt your notes {in_here}?"))
+                    .text(format!("Anyone with a copy of {here}'s data could then read your notes without the server, even after you remove this device. Only do this on your own computer with disk encryption."))
                     .button("Turn on offline use")
                     .await
             {
@@ -449,7 +450,10 @@ fn OfflineSetting() -> impl IntoView {
             }
             if want {
                 match state::enable_offline().await {
-                    Ok(()) => state::success("This browser now works without the server."),
+                    Ok(()) => state::success(format!(
+                        "{} now works without the server.",
+                        util::capitalize(here)
+                    )),
                     Err(e) => {
                         on.set(false);
                         state::error(format!("Could not turn on offline use: {e}"));
@@ -457,7 +461,7 @@ fn OfflineSetting() -> impl IntoView {
                 }
             } else {
                 state::disable_offline().await;
-                state::info("The offline data was removed from this browser.");
+                state::info(format!("The offline data was removed from {here}."));
             }
             busy.set(false);
         });
@@ -467,11 +471,11 @@ fn OfflineSetting() -> impl IntoView {
         <label class="check">
             <input type="checkbox" class="offline-toggle" prop:checked=move || on.get() disabled=move || busy.get() || !supported
                 on:change=move |ev| { let want = event_target_checked(&ev); on.set(want); toggle(want); }/>
-            " Keep this browser usable offline"
+            {format!(" Keep {here} usable offline")}
         </label>
         <p class="muted small">
-            "Opens and edits your notes from this browser's copy when the server can't be reached; changes sync when it is back. "
-            "This keeps the keys to your notes in this browser: anyone with a copy of its data could read them, even after you remove this device. Use it only on your own computer, with disk encryption."
+            {format!("Opens and edits your notes from {here}'s copy when the server can't be reached; changes sync when it is back. ")}
+            {format!("This keeps the keys to your notes {in_here}: anyone with a copy of its data could read them, even after you remove this device. Use it only on your own computer, with disk encryption.")}
         </p>
         {(!supported).then(|| view! { <p class="muted small">"Needs the app to be served over HTTPS."</p> })}
     }
@@ -750,7 +754,7 @@ fn NoteWidthPrefs() -> impl IntoView {
         <label class="check">
             <input type="checkbox" class="width-shared" prop:checked=move || shared.get()
                 on:change=move |ev| { let on = event_target_checked(&ev); step(|c| state::share_default_width(c, on)); }/>
-            " The same on all my devices"<span class="muted small">" — otherwise just this browser. A note's ⋯ menu gives it its own width, only for you."</span>
+            " The same on all my devices"<span class="muted small">{format!(" — otherwise just {}. A note's ⋯ menu gives it its own width, only for you.", crate::desktop::here())}</span>
         </label>
     }
 }

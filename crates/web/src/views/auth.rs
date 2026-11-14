@@ -342,11 +342,11 @@ pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl 
     let has_pending = pending.is_some();
     view! {
         <Card>
-            <h1>"Add this browser"</h1>
+            <h1>{format!("Add {}", crate::desktop::here())}</h1>
             {error.map(|e| view! { <div class="alert error">{e}</div> })}
             {match pending {
                 Some((_, code)) => view! {
-                    <p>"Open notekpr on a device that is already set up: a bar at the top of the page asks you to approve this browser (it is also in Settings → Devices). Check that it shows this code:"</p>
+                    <p>{format!("Open notekpr on a device that is already set up: a bar at the top of the page asks you to approve {} (it is also in Settings → Devices). Check that it shows this code:", crate::desktop::here())}</p>
                     <div class="verify-code">{code}</div>
                     <p class="muted small"><span class="spinner inline"></span>" Waiting for approval…"</p>
                 }.into_any(),

@@ -112,7 +112,12 @@ pub async fn enable() -> Result<(), String> {
         return Err("This needs the app to be served over HTTPS.".into());
     }
     let (uid, device) = step(|c| (c.user_id.clone(), c.device_id.clone()));
-    let device = device.ok_or("This browser is not set up as a device yet.")?;
+    let device = device.ok_or_else(|| {
+        format!(
+            "{} is not set up as a device yet.",
+            util::capitalize(crate::desktop::here())
+        )
+    })?;
     let token = storage::token().ok_or("Not signed in.")?;
     let me: MeResponse = api::get("/me").await.map_err(|e| e.message)?;
     let env: DeviceEnvelope = api::get(&format!("/devices/{device}/envelope"))
@@ -244,15 +249,19 @@ pub(super) async fn start(b: Bundle) {
         c.offline_start = true;
     });
     let Some(rec) = storage::device(&uid).filter(|r| r.device_id == b.device_id) else {
-        return fail("Cannot reach the server, and this browser has no usable offline keys.");
+        return fail(&format!(
+            "Cannot reach the server, and {} has no usable offline keys.",
+            crate::desktop::here()
+        ));
     };
     match unlock_with_device(&uid, &rec, &b.envelope) {
         Unlock::Unlocked => {}
-        Unlock::WrongAccount => return fail(WRONG_ACCOUNT),
+        Unlock::WrongAccount => return fail(&wrong_account()),
         Unlock::Unreadable => {
-            return fail(
-                "Cannot reach the server, and this browser's offline keys can't be opened.",
-            );
+            return fail(&format!(
+                "Cannot reach the server, and {}'s offline keys can't be opened.",
+                crate::desktop::here()
+            ));
         }
     }
     if let Some(p) = &b.prefs {
@@ -268,9 +277,10 @@ pub(super) async fn start(b: Bundle) {
     connect_socket();
     ui.phase.set(Phase::Ready);
     go_to_last_location();
-    info(
-        "The server can't be reached: working from this browser's copy. Changes are kept here and sync when it is back.",
-    );
+    info(format!(
+        "The server can't be reached: working from {}'s copy. Changes are kept here and sync when it is back.",
+        crate::desktop::here()
+    ));
 }
 
 /// The server is reachable again after an offline start: check the session
@@ -297,7 +307,7 @@ pub(super) async fn finish_online() {
         Ok(env) => match unlock_with_device(&uid, &rec, &env.account_envelope) {
             Unlock::Unlocked => {}
             Unlock::WrongAccount => {
-                ui().phase.set(Phase::Fatal(WRONG_ACCOUNT.into()));
+                ui().phase.set(Phase::Fatal(wrong_account()));
                 return;
             }
             Unlock::Unreadable => {

@@ -264,3 +264,12 @@ pub fn here() -> &'static str {
         "this browser"
     }
 }
+
+/// "in this browser", or in the desktop app "on this computer".
+pub fn in_here() -> &'static str {
+    if is_desktop() {
+        "on this computer"
+    } else {
+        "in this browser"
+    }
+}

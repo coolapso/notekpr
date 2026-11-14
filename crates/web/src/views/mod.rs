@@ -253,7 +253,7 @@ fn Banners() -> impl IntoView {
                 <span>{match why {
                     ReadOnly::Manual | ReadOnly::Other => "The server is read-only for now.",
                     ReadOnly::StorageFull => "The server's storage is full.",
-                }}" Your edits are kept in this browser and sent as soon as it accepts changes again."</span></div>
+                }}{format!(" Your edits are kept {} and sent as soon as it accepts changes again.", crate::desktop::in_here())}</span></div>
         })}
         <VaultFullBanner/>
         {move || ui.warning.get().map(|w| view! {
@@ -290,17 +290,28 @@ fn VaultFullBanner() -> impl IntoView {
                 .map(|v| (v.clone(), (!c.is_quick_notes(v)).then(|| c.vault_name(v))))
                 .collect()
         });
+        let kept = crate::desktop::in_here();
         let text = match ours.as_slice() {
             [] if full.is_empty() => return None,
-            _ if ui.server_full.get() => "The server's storage is full: your edits are kept in this browser and sent once there's room. Deleting things for good makes room, or ask an administrator for more.".to_string(),
-            [] => "The vault of a note shared with you is full: your edits of it are kept in this browser and sent once it has room.".to_string(),
-            [(_, None)] => "Your personal storage is full: your quick notes and saved shapes are kept in this browser and sent once there's room. Deleting quick notes or saved shapes makes room, or ask an administrator for more.".to_string(),
-            [(_, Some(name))] => format!("“{name}” is full: your edits there are kept in this browser and sent once it has room."),
+            _ if ui.server_full.get() => format!(
+                "The server's storage is full: your edits are kept {kept} and sent once there's room. Deleting things for good makes room, or ask an administrator for more."
+            ),
+            [] => format!(
+                "The vault of a note shared with you is full: your edits of it are kept {kept} and sent once it has room."
+            ),
+            [(_, None)] => format!(
+                "Your personal storage is full: your quick notes and saved shapes are kept {kept} and sent once there's room. Deleting quick notes or saved shapes makes room, or ask an administrator for more."
+            ),
+            [(_, Some(name))] => format!(
+                "“{name}” is full: your edits there are kept {kept} and sent once it has room."
+            ),
             many => format!(
-                "{} vaults are full ({}): your edits there are kept in this browser and sent once they have room.",
+                "{} vaults are full ({}): your edits there are kept {kept} and sent once they have room.",
                 many.len(),
                 many.iter()
-                    .map(|(_, n)| n.as_ref().map_or("your personal storage".into(), |n| format!("“{n}”")))
+                    .map(|(_, n)| n
+                        .as_ref()
+                        .map_or("your personal storage".into(), |n| format!("“{n}”")))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),

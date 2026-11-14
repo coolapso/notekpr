@@ -275,7 +275,7 @@ pub async fn after_login() {
                     return;
                 }
                 Unlock::WrongAccount => {
-                    ui.phase.set(Phase::Fatal(WRONG_ACCOUNT.into()));
+                    ui.phase.set(Phase::Fatal(wrong_account()));
                     return;
                 }
                 Unlock::Unreadable => storage::clear_device(&uid),
@@ -328,7 +328,12 @@ pub(super) enum Unlock {
     WrongAccount,
 }
 
-pub(super) const WRONG_ACCOUNT: &str = "The server sent this browser keys of a different account than the one it was approved for. This can mean the server was tampered with. Nothing was decrypted with them; check your devices from another device before signing in here again.";
+pub(super) fn wrong_account() -> String {
+    format!(
+        "The server sent {} keys of a different account than the one it was approved for. This can mean the server was tampered with. Nothing was decrypted with them; check your devices from another device before signing in here again.",
+        crate::desktop::here()
+    )
+}
 
 /// The account key the server publishes for us, checked.
 pub(super) fn published_account(c: &Core, uid: &str) -> Option<AccountPublic> {
@@ -425,10 +430,13 @@ pub(super) fn poll_approval(uid: String, rec: DeviceRecord) {
                 Ok(env) => {
                     match unlock_with_device(&uid, &rec, &env.account_envelope) {
                         Unlock::Unlocked => {
-                            success("This browser was approved.");
+                            success(format!(
+                                "{} was approved.",
+                                util::capitalize(crate::desktop::here())
+                            ));
                             enter_ready().await;
                         }
-                        Unlock::WrongAccount => ui.phase.set(Phase::Fatal(WRONG_ACCOUNT.into())),
+                        Unlock::WrongAccount => ui.phase.set(Phase::Fatal(wrong_account())),
                         Unlock::Unreadable => ui.phase.set(Phase::Enroll {
                             pending: None,
                             error: Some("Approval data was invalid.".into()),
@@ -618,7 +626,10 @@ pub async fn recover(input: String) {
         c.account = Some(account);
         c.device_id = Some(rec.device_id.clone());
     });
-    success("Recovered. This browser is now one of your devices.");
+    success(format!(
+        "Recovered. {} is now one of your devices.",
+        util::capitalize(crate::desktop::here())
+    ));
     enter_ready().await;
 }
 

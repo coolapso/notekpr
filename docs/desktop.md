@@ -23,6 +23,12 @@ notes are encrypted on your computer before anything leaves it.
 * **A Markdown folder.** Your vaults as a folder of ordinary Markdown files,
   synced both ways while the app runs, for Obsidian, VS Code, Neovim or any
   other editor (more in [Your own editor](own-editor.md)).
+* **Without the server.** Like a browser, it keeps an encrypted copy of
+  your vaults so it opens at once, but it asks the server for the keys each
+  time it starts. *Settings → Devices → Keep this computer usable offline*
+  keeps the keys too, so it opens and edits your notes when the server
+  can't be reached ([what that means](security.md#local-storage)). The
+  Markdown folder works offline either way.
 
 You don't need the [CLI](cli.md) for any of that. It is still the tool for
 [AI agents](agents.md) (its gateway), scripts, and computers without a

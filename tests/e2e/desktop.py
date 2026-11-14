@@ -167,6 +167,11 @@ def main():
         r = invoke("plugin:dialog|open", {"options": {}})
         check("err" in r, f"none of the plugins' own commands ({r})")
 
+        # ---- the app speaks of this computer, not a browser
+        a.route("/settings/devices")
+        a.find_text(".settings-body label", "Keep this computer usable offline", 10)
+        check(True, "Devices offers to keep this computer usable offline")
+
         # ---- its own settings
         a.route("/settings/app")
         a.find_text(".settings-body h3", "In the background", 10)

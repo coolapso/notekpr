@@ -571,7 +571,7 @@ pub(super) fn on_synced(vault_id: &str, head: i64) {
     }
     if rolled_back {
         ui().warning.set(Some(
-            "The server's copy of a vault is older than what this browser saw before (restored backup or a server problem). Your local changes are being re-sent.".into(),
+            format!("The server's copy of a vault is older than what {} saw before (restored backup or a server problem). Your local changes are being re-sent.", crate::desktop::here()),
         ));
     }
 }
@@ -1352,9 +1352,11 @@ pub(super) fn storage_full(c: &mut Core) {
     if std::mem::replace(&mut c.storage_warned_at, now) > now - 60_000 {
         return;
     }
-    error(
-        "This browser's storage is full, so changes that are not synced yet would be lost if you close or reload this tab. Stay online until they are synced.",
-    );
+    error(if crate::desktop::is_desktop() {
+        "This computer's storage is full, so changes that are not synced yet would be lost if you quit notekpr. Stay online until they are synced."
+    } else {
+        "This browser's storage is full, so changes that are not synced yet would be lost if you close or reload this tab. Stay online until they are synced."
+    });
 }
 
 /// Replace a note's text through its CRDT (diffing against the current

@@ -96,6 +96,12 @@ task clean                    # remove build outputs (keeps the dev database)
 task clean:worktrees          # remove git worktrees whose work is all on main, with their build outputs
 ```
 
+Cargo never deletes a build it no longer needs: every change to a crate's
+dependencies or features, and every Rust update, builds new copies beside
+the old ones, so `target/` grows by tens of GB over weeks. `task clean`
+every few weeks, or after a Rust update, keeps it in check (the next build
+starts from scratch).
+
 ## A demo with data
 
 ```sh

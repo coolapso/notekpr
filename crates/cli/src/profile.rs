@@ -151,31 +151,56 @@ pub fn inside_flatpak() -> bool {
 
 /// The folders the desktop app keeps its settings and data in when installed
 /// the other way: from outside a Flatpak, the Flatpak's own (`~/.var/app/…`);
-/// from inside one, the system's usual ones (`~/.config`, `~/.local/share`).
-/// The CLI and the app look there too, so that each sees the folders the
-/// other keeps, however the app was installed. Linux only.
-pub fn other_install_homes(home: &Path, inside_flatpak: bool) -> (PathBuf, PathBuf) {
+/// from inside one, the system's (`~/.config`, `~/.local/share`, or what
+/// `XDG_CONFIG_HOME` and `XDG_DATA_HOME` say outside, which the sandbox
+/// passes in as `HOST_XDG_…`). The CLI and the app look there too, so that
+/// each sees the folders the other keeps, however the app was installed.
+/// `env` looks the environment up.
+pub fn other_install_homes(
+    home: &Path,
+    inside_flatpak: bool,
+    env: &dyn Fn(&str) -> Option<PathBuf>,
+) -> (PathBuf, PathBuf) {
     if inside_flatpak {
-        (home.join(".config"), home.join(".local").join("share"))
+        // Relative ones are to be ignored (the XDG base directory spec).
+        let host = |var: &str, usual: &[&str]| {
+            env(var)
+                .filter(|p| p.is_absolute())
+                .unwrap_or_else(|| usual.iter().fold(home.to_path_buf(), |p, d| p.join(d)))
+        };
+        (
+            host("HOST_XDG_CONFIG_HOME", &[".config"]),
+            host("HOST_XDG_DATA_HOME", &[".local", "share"]),
+        )
     } else {
         let app = home.join(".var").join("app").join(DESKTOP_APP_ID);
         (app.join("config"), app.join("data"))
     }
 }
 
-/// [`other_install_homes`] here: none where folders were chosen through
-/// `NOTEKPR_*_DIR` (tests, several people side by side) or off Linux.
+/// [`other_install_homes`] here, on Linux.
 fn other_install() -> Option<(PathBuf, PathBuf)> {
-    let chosen = [
-        "NOTEKPR_CONFIG_DIR",
-        "NOTEKPR_DATA_DIR",
-        "NOTEKPR_DESKTOP_CONFIG_DIR",
-        "NOTEKPR_DESKTOP_DATA_DIR",
-    ];
-    if !cfg!(target_os = "linux") || chosen.iter().any(|v| env_path(v).is_some()) {
+    if !cfg!(target_os = "linux") {
         return None;
     }
-    Some(other_install_homes(&home().ok()?, inside_flatpak()))
+    other_install_from(&env_path, inside_flatpak())
+}
+
+/// [`other_install`], with the environment looked up through `env`. None
+/// where the desktop app's folders were chosen
+/// (`NOTEKPR_DESKTOP_CONFIG_DIR`, `NOTEKPR_DESKTOP_DATA_DIR`: tests, several
+/// people side by side): the app here isn't an installed one then. The CLI's
+/// own (`NOTEKPR_CONFIG_DIR`, `NOTEKPR_DATA_DIR`) move only its folders: the
+/// app's installs are where they are, and looked for.
+fn other_install_from(
+    env: &dyn Fn(&str) -> Option<PathBuf>,
+    inside_flatpak: bool,
+) -> Option<(PathBuf, PathBuf)> {
+    let app_chosen = ["NOTEKPR_DESKTOP_CONFIG_DIR", "NOTEKPR_DESKTOP_DATA_DIR"];
+    if app_chosen.iter().any(|v| env(v).is_some()) {
+        return None;
+    }
+    Some(other_install_homes(&env("HOME")?, inside_flatpak, env))
 }
 
 /// Every place the desktop app may keep its settings and data on this
@@ -717,22 +742,54 @@ mod tests {
 
     #[test]
     fn the_app_installed_the_other_way_is_looked_for_where_it_keeps_things() {
-        let home = Path::new("/home/ana");
+        fn vars<'a>(v: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<PathBuf> + 'a {
+            move |name| {
+                v.iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, p)| PathBuf::from(p))
+            }
+        }
+        let pair = |c: &str, d: &str| Some((PathBuf::from(c), PathBuf::from(d)));
+        let home = [("HOME", "/home/ana")];
         // From outside a Flatpak: the Flatpak's own folders.
         assert_eq!(
-            other_install_homes(home, false),
-            (
-                PathBuf::from("/home/ana/.var/app/md.notekpr.Notekpr/config"),
-                PathBuf::from("/home/ana/.var/app/md.notekpr.Notekpr/data")
+            other_install_from(&vars(&home), false),
+            pair(
+                "/home/ana/.var/app/md.notekpr.Notekpr/config",
+                "/home/ana/.var/app/md.notekpr.Notekpr/data"
             )
         );
-        // From inside it: the system's usual ones.
+        // From inside it: the system's usual ones…
         assert_eq!(
-            other_install_homes(home, true),
-            (
-                PathBuf::from("/home/ana/.config"),
-                PathBuf::from("/home/ana/.local/share")
-            )
+            other_install_from(&vars(&home), true),
+            pair("/home/ana/.config", "/home/ana/.local/share")
         );
+        // …or those XDG_CONFIG_HOME and XDG_DATA_HOME say outside (relative
+        // ones don't count).
+        let moved = [
+            ("HOME", "/home/ana"),
+            ("HOST_XDG_CONFIG_HOME", "/home/ana/settings"),
+            ("HOST_XDG_DATA_HOME", "data"),
+        ];
+        assert_eq!(
+            other_install_from(&vars(&moved), true),
+            pair("/home/ana/settings", "/home/ana/.local/share")
+        );
+        // The CLI's folders chosen (even where they usually are): the app's
+        // installs are still looked for.
+        let cli = [
+            ("HOME", "/home/ana"),
+            ("NOTEKPR_DATA_DIR", "/home/ana/.local/share/notekpr"),
+        ];
+        assert_eq!(
+            other_install_from(&vars(&cli), false),
+            other_install_from(&vars(&home), false)
+        );
+        // The app's chosen (tests, several people side by side): only those.
+        let app = [
+            ("HOME", "/home/ana"),
+            ("NOTEKPR_DESKTOP_DATA_DIR", "/tmp/t"),
+        ];
+        assert_eq!(other_install_from(&vars(&app), false), None);
     }
 }

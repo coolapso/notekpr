@@ -33,7 +33,7 @@ vars:
   # At least v0.27.0: older ones ignore .semrel.yaml's rules for build and
   # refactor commits (they release only for feat, fix, perf and revert).
   SEMREL_VERSION: v0.28.2
-  # Fedora's COPR project the CLI is built in (`task release:copr`), and the
+  # Fedora's COPR project the CLI and the desktop app are built in (`task release:copr`), and the
   # copr-cli `task tools:copr` installs.
   COPR_PROJECT: coolapso/notekpr
   COPR_CLI_VERSION: "2.6"
@@ -43,6 +43,14 @@ vars:
     notekpr --version && notekpr completions zsh > /dev/null
     && test -f /usr/share/bash-completion/completions/notekpr
     && test -f /usr/lib/systemd/user/notekpr-sync@.service
+  # And of the desktop app: every library it links found, the tray's (which
+  # it loads when it shows a tray) there, its desktop entry and icon.
+  DESKTOP_PACKAGE_CHECK: >-
+    notekpr-desktop --version
+    && ! ldd /usr/bin/notekpr-desktop | grep "not found"
+    && ldconfig -p | grep -q libayatana-appindicator3.so.1
+    && test -f /usr/share/applications/md.notekpr.Notekpr.desktop
+    && test -f /usr/share/icons/hicolor/scalable/apps/md.notekpr.Notekpr.svg
 
 tasks:
   default:
@@ -440,24 +448,24 @@ tasks:
       - task: docker:test:demo
 
   ci:clients:
-    desc: "The CLI's release files and packages, without publishing (build:clients), its .deb and .rpm installed and run (test:packages), and its source RPM built in Fedora the way COPR does (test:srpm)"
+    desc: "The CLI's and the desktop app's release files and packages, without publishing (build:clients), their .deb and .rpm installed and run (test:packages), and their source RPMs built in Fedora the way COPR does (test:srpm)"
     cmds:
       - task: build:clients
       - task: test:packages
       - task: test:srpm
 
-  # ------------------------------------------------------------------ CLI packages
-  # GoReleaser (.goreleaser.yaml) in the CLI's build image (packaging/Dockerfile,
+  # ------------------------------------------------------------------ CLI and desktop app packages
+  # GoReleaser (.goreleaser.yaml) in the clients' build image (packaging/Dockerfile,
   # run by packaging/run.sh): Docker is all these need.
 
   build:clients:
-    desc: "Build the CLI's release files into dist/clients without publishing: Linux (amd64, arm64) as .tar.gz, .deb and .rpm, AUR's PKGBUILD and COPR's source RPM (in Docker)"
+    desc: "Build the CLI's and the desktop app's release files into dist/clients without publishing: Linux as .tar.gz, .deb and .rpm (the CLI for amd64 and arm64, the app for amd64), AUR's PKGBUILDs and COPR's source RPMs (in Docker)"
     cmds:
       - packaging/run.sh goreleaser release --snapshot --clean
       - packaging/run.sh packaging/rpm/srpm.sh dist/clients
 
   test:packages:
-    desc: "Install the CLI's .deb in Debian and its .rpm in AlmaLinux 8 (glibc 2.28, the oldest the builds run on), for this machine's architecture, and run it — after build:clients"
+    desc: "Install the CLI's .deb in Debian and its .rpm in AlmaLinux 8 (glibc 2.28, the oldest the builds run on), for this machine's architecture, and run it; the desktop app's .deb in Ubuntu 22.04 (the oldest it is for) and Debian, its .rpm in Fedora (amd64) — after build:clients"
     preconditions:
       - sh: ls dist/clients/*.deb dist/clients/*.rpm > /dev/null 2>&1
         msg: "No packages in dist/clients: task build:clients first"
@@ -468,9 +476,23 @@ tasks:
       - >-
         docker run --rm -v "$PWD/dist/clients:/p:ro" almalinux:8
         sh -c 'rpm -i /p/notekpr-cli-*.$(uname -m).rpm && {{.PACKAGE_CHECK}}'
+      # The desktop app's, with what they depend on from each system's own
+      # packages (amd64 only: build:clients makes no others).
+      - for: [ubuntu:22.04, debian:stable-slim]
+        cmd: >-
+          [ "$(uname -m)" != x86_64 ] ||
+          docker run --rm -v "$PWD/dist/clients:/p:ro" {{.ITEM}}
+          sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends
+          /p/notekpr-desktop_*_amd64.deb desktop-file-utils > /dev/null
+          && {{.DESKTOP_PACKAGE_CHECK}}
+          && desktop-file-validate /usr/share/applications/md.notekpr.Notekpr.desktop'
+      - >-
+        [ "$(uname -m)" != x86_64 ] ||
+        docker run --rm -v "$PWD/dist/clients:/p:ro" fedora:latest
+        sh -c 'dnf -y -q install /p/notekpr-desktop-*.x86_64.rpm > /dev/null && {{.DESKTOP_PACKAGE_CHECK}}'
 
   test:srpm:
-    desc: "Build the CLI from dist/clients' source RPM in Fedora (FEDORA=latest), as COPR does, install it and run it — after build:clients (its source is the last commit, as GoReleaser's source archive is)"
+    desc: "Build the CLI and the desktop app from dist/clients' source RPMs in Fedora (FEDORA=latest), as COPR does, install them and run them — after build:clients (their source is the last commit, as GoReleaser's source archive is)"
     vars:
       FEDORA: '{{.FEDORA | default "latest"}}'
     preconditions:
@@ -483,7 +505,7 @@ tasks:
         && dnf -y -q builddep /srpm/*.src.rpm > /dev/null
         && rpmbuild --rebuild --quiet /srpm/*.src.rpm
         && dnf -y -q install ~/rpmbuild/RPMS/*/*.rpm > /dev/null
-        && {{.PACKAGE_CHECK}}'
+        && {{.PACKAGE_CHECK}} && {{.DESKTOP_PACKAGE_CHECK}}'
 
   tools:copr:
     desc: "Install copr-cli {{.COPR_CLI_VERSION}}, which task release publishes to Fedora's COPR with, by pipx (or your distribution's copr-cli)"
@@ -491,7 +513,7 @@ tasks:
       - pipx install "copr-cli=={{.COPR_CLI_VERSION}}"
 
   copr:project:
-    desc: "Create the COPR project the CLI is built in ({{.COPR_PROJECT}}), once, with copr-cli's configuration in ~/.config/copr: every Fedora release and rawhide, amd64 and arm64, new releases as Fedora branches them, internet access during builds (cargo fetches the crates)"
+    desc: "Create the COPR project the CLI and the desktop app are built in ({{.COPR_PROJECT}}), once, with copr-cli's configuration in ~/.config/copr: every Fedora release and rawhide, amd64 and arm64, new releases as Fedora branches them, internet access during builds (cargo fetches the crates)"
     preconditions:
       - sh: command -v copr-cli
         msg: "copr-cli is missing (Arch: sudo pacman -S copr-cli; or task tools:copr)"
@@ -500,8 +522,8 @@ tasks:
         copr-cli create {{.COPR_PROJECT}}
         $(copr-cli list-chroots | awk '$1 ~ /^fedora-([0-9]+|rawhide)-(x86_64|aarch64)$/ { printf " --chroot %s", $1 }')
         --follow-fedora-branching on --enable-net on
-        --description "The notekpr command-line client: end-to-end encrypted, local-first Markdown notes. https://github.com/coolapso/notekpr"
-        --instructions "sudo dnf copr enable {{.COPR_PROJECT}} && sudo dnf install notekpr-cli"
+        --description "notekpr's command-line client and desktop app: end-to-end encrypted, local-first Markdown notes. https://github.com/coolapso/notekpr"
+        --instructions "sudo dnf copr enable {{.COPR_PROJECT}} && sudo dnf install notekpr-desktop (the app) or notekpr-cli (the command line)"
 
   # ------------------------------------------------------------------ docker
 
@@ -678,7 +700,7 @@ tasks:
           FLAGS: ""
 
   release:clients:
-    desc: "Publish the CLI for the release tagged at HEAD (task release does, after the images; run it again if it failed there): its files and packages on the GitHub Release, the AUR package, then the COPR build (release:copr)"
+    desc: "Publish the CLI and the desktop app for the release tagged at HEAD (task release does, after the images; run it again if it failed there): their files and packages on the GitHub Release, the AUR packages, then the COPR builds (release:copr)"
     preconditions:
       - sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD
         msg: "HEAD has no release tag: the CLI is published for a release (task release)"
@@ -720,7 +742,7 @@ tasks:
       - task: release:copr
 
   release:copr:
-    desc: "Have COPR ({{.COPR_PROJECT}}) build the CLI from dist/clients' source RPM and wait for it — release:clients does, after GoReleaser"
+    desc: "Have COPR ({{.COPR_PROJECT}}) build the CLI and the desktop app from dist/clients' source RPMs and wait for them — release:clients does, after GoReleaser"
     preconditions:
       - sh: command -v copr-cli
         msg: "copr-cli is missing (Arch: sudo pacman -S copr-cli; or task tools:copr)"

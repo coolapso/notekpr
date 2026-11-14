@@ -348,7 +348,8 @@ task release            # the same, then the release
 `task release` tags the next version (`v0.2.0`), pushes the tag, creates
 the GitHub Release with the notes, then pushes both images for amd64 and
 arm64, `ghcr.io/coolapso/notekpr` and `ghcr.io/coolapso/notekpr-demo`,
-tagged `0.2.0` and `latest`, and publishes the CLI (below). Last, once all
+tagged `0.2.0` and `latest`, and publishes the CLI and the desktop app
+(below). Last, once all
 that is out, it publishes the docs site (`task docs:deploy`, see "The docs
 site"); it checks that wrangler is there and signed in before it releases
 anything, and if publishing the site fails, `task docs:deploy` again is
@@ -356,24 +357,32 @@ all it takes. Without commits that make a release it does nothing. It doesn't pu
 usual. The working tree must be clean, untracked files included: GoReleaser
 refuses to publish otherwise.
 
-### The CLI's packages
+### The CLI's and the desktop app's packages
 
-The server is released as images only; the CLI as files and packages,
-made by [GoReleaser](https://goreleaser.com) (the free one) from
-`.goreleaser.yaml`. GoReleaser runs in a build image
-(`packaging/Dockerfile`: Rust with the Linux targets, zig and cargo-zigbuild
-to build both architectures for an old enough glibc, rpmbuild for COPR's
-source RPM), so Docker is all a machine needs — no rustup, no cross
-compilers. `packaging/run.sh` runs a command in it, as your user, with the
-checkout at `/src`.
+The server is released as images only; the CLI and the desktop app as
+files and packages, made by [GoReleaser](https://goreleaser.com) (the free
+one) from `.goreleaser.yaml`. GoReleaser runs in a build image
+(`packaging/Dockerfile`), so Docker is all a machine needs — no rustup, no
+cross compilers, no WebKitGTK. It is Ubuntu 22.04, the oldest system the
+desktop app's packages are for: the app links against the system's
+WebKitGTK and GTK, so it is built against the oldest it runs with (glibc
+2.35, WebKitGTK 4.1), with plain cargo, and only for amd64 (the machine's
+own). The CLI links nothing but glibc: zig and cargo-zigbuild build it for
+both architectures and glibc 2.28, whatever the image's system. Also in it:
+Rust with the wasm32 target and the wasm-bindgen CLI the crates pin (the
+app has the web client inside, built before it), and rpmbuild for COPR's
+source RPMs. `packaging/run.sh` runs a command in it, as your user, with
+the checkout at `/src`; its builds stay in `target-release/`, and start
+again from scratch when the image changed.
 
 ```sh
 task build:clients      # everything into dist/clients, nothing published (a snapshot)
-task test:packages      # then: install the .deb in Debian and the .rpm in AlmaLinux 8, run them
-task test:srpm          # and: build the source RPM in Fedora, as COPR does, install it, run it
+task test:packages      # then: install the CLI's .deb in Debian and .rpm in AlmaLinux 8, the app's
+                        # .deb in Ubuntu 22.04 and Debian and .rpm in Fedora, and check them
+task test:srpm          # and: build both source RPMs in Fedora, as COPR does, install them, check them
 task ci:clients         # all three, as CI runs them
 task release:clients    # publish for the release tag at HEAD (task release does it)
-task release:copr       # only the COPR build, again (release:clients does it)
+task release:copr       # only the COPR builds, again (release:clients does it)
 task copr:project       # once: create the COPR project
 ```
 
@@ -383,23 +392,31 @@ A release adds to the GitHub Release semrel made (its notes stay):
 |---|---|
 | `notekpr-cli_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr` (glibc 2.28 or newer), completions, the systemd user unit |
 | `notekpr-cli_<v>_{amd64,arm64}.deb`, `notekpr-cli-<v>-1.{x86_64,aarch64}.rpm` | the same as packages, installed from the file (no package repository yet) |
-| `notekpr-cli-<v>.tar.gz` | the source, which COPR's source RPM is made from |
-| `notekpr-cli_<v>_checksums.txt` | SHA-256 of all of them |
+| `notekpr-desktop_<v>_linux_amd64.tar.gz` | `notekpr-desktop` (glibc 2.35, WebKitGTK 4.1), its desktop entry and icons: what the AUR package installs |
+| `notekpr-desktop_<v>_amd64.deb`, `notekpr-desktop-<v>-1.x86_64.rpm` | the app as packages, which depend on the system's WebKitGTK, the tray's library and xdg-utils |
+| `notekpr-<v>.tar.gz` | the source, which COPR's source RPMs are made from |
+| `notekpr_<v>_checksums.txt` | SHA-256 of all of them |
 
-and publishes the AUR package `notekpr-cli-bin`. It is pushed with the
+and publishes the AUR packages `notekpr-cli-bin` and `notekpr-desktop-bin`.
+The desktop app's desktop entry is `packaging/desktop/md.notekpr.Notekpr.desktop`,
+named after the app's identifier, which is the window's app id too (desktops
+match them); its icons are `crates/desktop/icons` and the favicon. It is pushed with the
 SSH key your own ssh uses for `aur.archlinux.org` (`AUR_KEY_FILE` to choose
 another), in CI (`$CI` set) with the `aur` secret in Infisical; the key's
 contents in `AUR_KEY` take precedence over both. The key must have no
 passphrase.
 
-Last, COPR builds the CLI for Fedora in `coolapso/notekpr`, and the release
-waits for its builds (Ctrl+C stops waiting, not the builds). GoReleaser has
-no pipe for COPR: `packaging/rpm/srpm.sh` makes a source RPM
-(`notekpr-cli-<v>-1.src.rpm` in `dist/clients`, from the spec
-`packaging/rpm/notekpr-cli.spec.in` and the release's source) and
-`copr-cli` uploads it. COPR builds it with each Fedora release's own Rust
-(at least `Cargo.toml`'s `rust-version`); cargo fetches the crates
-`Cargo.lock` pins, so the builds have internet access. `copr-cli` runs on
+Last, COPR builds the CLI and the desktop app for Fedora in
+`coolapso/notekpr` (both architectures), and the release waits for its
+builds (Ctrl+C stops waiting, not the builds). GoReleaser has no pipe for
+COPR: `packaging/rpm/srpm.sh` makes a source RPM for each spec in
+`packaging/rpm` (`notekpr-cli-<v>-1.src.rpm` and `notekpr-desktop-<v>-1.src.rpm`
+in `dist/clients`, with the release's source) and `copr-cli` uploads them.
+COPR builds them with each Fedora release's own Rust (at least
+`Cargo.toml`'s `rust-version`; the desktop app's web client needs
+`crates/diagram`'s); cargo fetches the crates `Cargo.lock` pins and the
+app's build installs the wasm-bindgen CLI, so the builds have internet
+access. `copr-cli` runs on
 the machine releasing (Arch: `copr-cli`; elsewhere `task tools:copr`
 installs it with pipx, as CI does) with its configuration from
 https://copr.fedorainfracloud.org/api/ (signed in with a Fedora account;
@@ -414,7 +431,8 @@ it.
 If publishing fails halfway, fix it and run
 `task release:clients` again on the tagged commit (the working tree clean):
 it builds again and replaces the files already on the release. Linux only
-for now. Snapshots are named like the images' versions
+for now (the desktop app for Windows and macOS, and its Flatpak, are steps
+of #37 still to come). Snapshots are named like the images' versions
 (`0.2.0-3-gabc1234`).
 
 Between releases, `task docker:push` and `task docker:push:demo` push an
@@ -434,7 +452,7 @@ The version is also baked into what the image holds: the server
 `/admin/stats`), the CLI (`--version`, its requests) and the web app
 (Settings → Account, its requests). The Dockerfile hands its `VERSION`
 build argument to the builds as `NOTEKPR_VERSION` (GoReleaser sets it for
-the CLI's builds), which `crates/core` reads at compile time
+the CLI's and the desktop app's builds, and the app's web client), which `crates/core` reads at compile time
 (`notekpr_core::VERSION`; Cargo rebuilds when it changes). Without it — `task dev`, `cargo build`, `task docker:build` —
 everything says `dev`. The crates' own versions in `Cargo.toml` aren't
 used for this and stay `0.1.0`.

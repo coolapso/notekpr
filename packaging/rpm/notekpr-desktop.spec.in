@@ -1,0 +1,69 @@
+# The spec of the source RPM Fedora's COPR builds the desktop app from, as
+# notekpr-cli.spec.in the CLI: packaging/rpm/srpm.sh fills in the versions
+# and packs it with GoReleaser's source archive; `task test:srpm` builds it
+# the way COPR does. It builds the web client the app has inside too, with
+# the wasm-bindgen CLI the crates pin, which cargo installs: COPR builds it
+# with internet access, as the CLI.
+
+# Release builds keep no debug info (Cargo.toml's release profile).
+%global debug_package %{nil}
+
+Name:           notekpr-desktop
+Version:        @RPM_VERSION@
+Release:        1%{?dist}
+Summary:        notekpr, the desktop app for end-to-end encrypted Markdown notes
+License:        AGPL-3.0-or-later
+URL:            https://notekpr.md
+Source0:        notekpr-@VERSION@.tar.gz
+
+# @WEB_RUST_VERSION@: what the web client needs (crates/diagram/Cargo.toml's
+# rust-version).
+BuildRequires:  rust >= @WEB_RUST_VERSION@
+BuildRequires:  cargo
+BuildRequires:  gcc
+BuildRequires:  rust-std-static-wasm32-unknown-unknown
+BuildRequires:  binaryen
+BuildRequires:  pkgconfig(webkit2gtk-4.1)
+BuildRequires:  desktop-file-utils
+# The tray's library is loaded when the tray shows, not linked: rpm can't
+# see it. xdg-open opens links.
+Requires:       libayatana-appindicator3.so.1()(64bit)
+Requires:       xdg-utils
+Requires:       hicolor-icon-theme
+
+%description
+notekpr, the desktop app: end-to-end encrypted, local-first Markdown notes
+in a window of its own. It stays in the tray, syncs in the background and
+keeps your notes as a folder of Markdown files too.
+
+%prep
+%autosetup -n notekpr-@VERSION@
+
+%build
+export NOTEKPR_VERSION=@VERSION@
+cargo install wasm-bindgen-cli --version @WASM_BINDGEN_VERSION@ --locked --root "$PWD/tools"
+# Fedora's RUSTFLAGS are for native code (the wasm linker refuses their
+# -specs=… link argument): the web client is built without them.
+RUSTFLAGS= PATH="$PWD/tools/bin:$PATH" OUT=target/desktop-web scripts/build-web.sh > /dev/null
+TAURI_CONFIG='{"build":{"frontendDist":"../../target/desktop-web"}}' \
+    cargo build --release --locked -p notekpr-desktop
+
+%install
+install -Dm755 target/release/notekpr-desktop %{buildroot}%{_bindir}/notekpr-desktop
+desktop-file-install --dir=%{buildroot}%{_datadir}/applications packaging/desktop/md.notekpr.Notekpr.desktop
+icons=%{buildroot}%{_datadir}/icons/hicolor
+install -Dm644 crates/desktop/icons/32x32.png $icons/32x32/apps/md.notekpr.Notekpr.png
+install -Dm644 crates/desktop/icons/128x128.png $icons/128x128/apps/md.notekpr.Notekpr.png
+install -Dm644 crates/desktop/icons/128x128@2x.png $icons/256x256/apps/md.notekpr.Notekpr.png
+install -Dm644 crates/desktop/icons/icon.png $icons/512x512/apps/md.notekpr.Notekpr.png
+install -Dm644 crates/web/static/favicon.svg $icons/scalable/apps/md.notekpr.Notekpr.svg
+
+%check
+desktop-file-validate %{buildroot}%{_datadir}/applications/md.notekpr.Notekpr.desktop
+
+%files
+%license LICENSE
+%doc docs/desktop.md
+%{_bindir}/notekpr-desktop
+%{_datadir}/applications/md.notekpr.Notekpr.desktop
+%{_datadir}/icons/hicolor/*/apps/md.notekpr.Notekpr.*

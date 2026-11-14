@@ -295,7 +295,8 @@ notes](writing.md) and [Drawings](drawings.md).
 * The desktop app (Linux): notekpr in a window of its own, signed in
   through your browser, that keeps running in the tray (closing the window
   hides it there), can start when you log in, and keeps your vaults as a
-  two-way folder of Markdown files itself — no CLI needed for that
+  two-way folder of Markdown files itself — no CLI needed for that;
+  packages for Arch (AUR), Debian and Ubuntu (`.deb`) and Fedora (COPR)
   ([desktop app](desktop.md)).
 * A command-line client (CLI) with a local encrypted copy, live sync, and a
   two-way folder of plain Markdown files for Obsidian, Neovim, VS Code or

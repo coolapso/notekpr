@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run a command in the CLI's build image (packaging/Dockerfile), with this
+# Run a command in the clients' build image (packaging/Dockerfile), with this
 # checkout at /src as the working directory, as your own user:
 #
 #   packaging/run.sh goreleaser release --snapshot --clean
@@ -13,7 +13,19 @@ set -eu
 cd "$(dirname "$0")/.."
 
 image=notekpr-clients-build
-docker build -q -t "$image" -f packaging/Dockerfile packaging > /dev/null
+wasm_bindgen=$(sed -nE 's/^wasm-bindgen = "=([0-9.]+)".*/\1/p' crates/web/Cargo.toml)
+docker build -q -t "$image" --build-arg WASM_BINDGEN_VERSION="$wasm_bindgen" \
+    -f packaging/Dockerfile packaging > /dev/null
+
+# Builds made in another image (an older one, before a change to the
+# Dockerfile) were compiled against its system and may not link or run in
+# this one; Cargo can't tell. Start them again then.
+id=$(docker image inspect -f '{{.Id}}' "$image")
+if [ "$(cat target-release/image 2>/dev/null)" != "$id" ]; then
+  rm -rf target-release/target target-release/native target-release/desktop-web
+  mkdir -p target-release
+  echo "$id" > target-release/image
+fi
 
 mkdir -p target target-release/target target-release/cargo-registry target-release/home/.ssh
 # The image has no user with your uid, and ssh (git's, publishing to the

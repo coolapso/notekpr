@@ -1,21 +1,24 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-# The CLI's release files and packages (.deb, .rpm, the AUR's) for Linux
-# (docs/development.md, "Releases"), with the free GoReleaser. It runs in
-# the image packaging/Dockerfile builds (packaging/run.sh): `task
-# build:clients` makes everything into dist/clients without publishing;
-# `task release:clients` adds it to the release semrel made and publishes
-# the AUR package. COPR's source RPM, which GoReleaser has no pipe for, is
-# made after it (packaging/rpm/srpm.sh). The server is released as
-# container images only.
+# The CLI's and the desktop app's release files and packages (.deb, .rpm,
+# the AUR's) for Linux (docs/development.md, "Releases"), with the free
+# GoReleaser. It runs in the image packaging/Dockerfile builds
+# (packaging/run.sh): `task build:clients` makes everything into
+# dist/clients without publishing; `task release:clients` adds it to the
+# release semrel made and publishes the AUR packages. COPR's source RPMs,
+# which GoReleaser has no pipe for, are made after it
+# (packaging/rpm/srpm.sh). The server is released as container images only.
 version: 2
 
-project_name: notekpr-cli
+project_name: notekpr
 dist: dist/clients
 
 before:
   hooks:
-    # The shell completion scripts the archives and packages ship.
+    # The shell completion scripts the CLI's archives and packages ship.
     - packaging/completions.sh target-release/completions
+    # The web client the desktop app has inside (its build reads it from
+    # TAURI_CONFIG's folder), with the release's version.
+    - sh -c 'NOTEKPR_VERSION={{ .Version }} OUT=target-release/desktop-web scripts/build-web.sh > /dev/null'
 
 # Snapshots are named like the images: the last release, the commits since
 # and the commit (0.8.0-3-gabc1234).
@@ -26,7 +29,7 @@ metadata:
   mod_timestamp: "{{ .CommitTimestamp }}"
 
 builds:
-  - id: linux
+  - id: cli
     builder: rust
     binary: notekpr
     flags: [--release, --locked, --package=notekpr-cli]
@@ -37,11 +40,26 @@ builds:
       - x86_64-unknown-linux-gnu.2.28
       - aarch64-unknown-linux-gnu.2.28
 
+  # The desktop app links against the system's WebKitGTK and GTK: built with
+  # plain cargo against this image's (Ubuntu 22.04, the oldest it is for),
+  # not zig. For amd64 only, the machine's own (arm64: COPR builds it).
+  - id: desktop
+    builder: rust
+    binary: notekpr-desktop
+    command: build
+    flags: [--release, --locked, --package=notekpr-desktop]
+    env:
+      - NOTEKPR_VERSION={{ .Version }}
+      - 'TAURI_CONFIG={"build":{"frontendDist":"../../target-release/desktop-web"}}'
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    targets:
+      - x86_64-unknown-linux-gnu
+
 archives:
-  - id: linux
-    ids: [linux]
+  - id: cli
+    ids: [cli]
     formats: [tar.gz]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "notekpr-cli_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md
@@ -50,8 +68,33 @@ archives:
         strip_parent: true
       - src: packaging/systemd/notekpr-sync@.service
         strip_parent: true
+  # What the AUR package installs from (aurs below): the app, its desktop
+  # entry and its icons.
+  - id: desktop
+    ids: [desktop]
+    formats: [tar.gz]
+    name_template: "notekpr-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - src: packaging/desktop/md.notekpr.Notekpr.desktop
+        strip_parent: true
+      - src: crates/desktop/icons/32x32.png
+        dst: icons
+        strip_parent: true
+      - src: crates/desktop/icons/128x128.png
+        dst: icons
+        strip_parent: true
+      - src: crates/desktop/icons/128x128@2x.png
+        dst: icons
+        strip_parent: true
+      - src: crates/desktop/icons/icon.png
+        dst: icons
+        strip_parent: true
+      - src: crates/web/static/favicon.svg
+        dst: icons
+        strip_parent: true
 
-# The release's own source, which COPR's source RPM is made from
+# The release's own source, which COPR's source RPMs are made from
 # (packaging/rpm/srpm.sh, after GoReleaser).
 source:
   enabled: true
@@ -65,8 +108,8 @@ checksum:
 # update themselves). `task test:packages` installs them in Debian and in
 # AlmaLinux 8 (glibc 2.28, the oldest the builds run on) and runs them.
 nfpms:
-  - id: packages
-    ids: [linux]
+  - id: cli
+    ids: [cli]
     package_name: notekpr-cli
     file_name_template: "{{ .ConventionalFileName }}"
     vendor: coolapso
@@ -107,9 +150,63 @@ nfpms:
         dst: /usr/share/licenses/notekpr-cli/LICENSE
         packager: rpm
 
+  # `task test:packages` installs them in Ubuntu 22.04 (the oldest they are
+  # for), Debian and Fedora, and checks every library they need is there.
+  - id: desktop
+    ids: [desktop]
+    package_name: notekpr-desktop
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: coolapso
+    homepage: https://notekpr.md
+    maintainer: coolapso <c4s@coolapso.sh>
+    description: |-
+      notekpr, the desktop app: end-to-end encrypted, local-first Markdown
+      notes in a window of its own. It stays in the tray, syncs in the
+      background and keeps your notes as a folder of Markdown files too.
+    license: AGPL-3.0-or-later
+    section: editors
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    # What it links against (glibc, WebKitGTK and with it GTK; 2.40: the
+    # newest WebKitGTK API it uses), the tray's library, which it loads
+    # when it shows a tray (no package would see it), and xdg-open for
+    # links. rpm by the libraries' names: the same on Fedora and openSUSE.
+    overrides:
+      deb:
+        dependencies:
+          - libc6 (>= 2.35)
+          - libwebkit2gtk-4.1-0 (>= 2.40)
+          - libayatana-appindicator3-1
+          - xdg-utils
+      rpm:
+        dependencies:
+          - glibc >= 2.35
+          - libwebkit2gtk-4.1.so.0()(64bit)
+          - libayatana-appindicator3.so.1()(64bit)
+          - xdg-utils
+    contents:
+      - src: packaging/desktop/md.notekpr.Notekpr.desktop
+        dst: /usr/share/applications/md.notekpr.Notekpr.desktop
+      - src: crates/desktop/icons/32x32.png
+        dst: /usr/share/icons/hicolor/32x32/apps/md.notekpr.Notekpr.png
+      - src: crates/desktop/icons/128x128.png
+        dst: /usr/share/icons/hicolor/128x128/apps/md.notekpr.Notekpr.png
+      - src: crates/desktop/icons/128x128@2x.png
+        dst: /usr/share/icons/hicolor/256x256/apps/md.notekpr.Notekpr.png
+      - src: crates/desktop/icons/icon.png
+        dst: /usr/share/icons/hicolor/512x512/apps/md.notekpr.Notekpr.png
+      - src: crates/web/static/favicon.svg
+        dst: /usr/share/icons/hicolor/scalable/apps/md.notekpr.Notekpr.svg
+      - src: LICENSE
+        dst: /usr/share/doc/notekpr-desktop/copyright
+        packager: deb
+      - src: LICENSE
+        dst: /usr/share/licenses/notekpr-desktop/LICENSE
+        packager: rpm
+
 aurs:
   - name: notekpr-cli-bin
-    ids: [linux]
+    ids: [cli]
     homepage: https://notekpr.md
     description: Command-line client for notekpr, end-to-end encrypted Markdown notes
     maintainers: ["coolapso <c4s@coolapso.sh>"]
@@ -130,6 +227,32 @@ aurs:
       install -Dm644 completions/_notekpr "$pkgdir/usr/share/zsh/site-functions/_notekpr"
       install -Dm644 completions/notekpr.fish "$pkgdir/usr/share/fish/vendor_completions.d/notekpr.fish"
       install -Dm644 notekpr-sync@.service "$pkgdir/usr/lib/systemd/user/notekpr-sync@.service"
+
+  - name: notekpr-desktop-bin
+    ids: [desktop]
+    homepage: https://notekpr.md
+    description: notekpr, the desktop app for end-to-end encrypted Markdown notes
+    maintainers: ["coolapso <c4s@coolapso.sh>"]
+    license: AGPL-3.0-or-later
+    provides: [notekpr-desktop]
+    conflicts: [notekpr-desktop]
+    # As the .deb's and .rpm's (nfpms above).
+    depends: [glibc, webkit2gtk-4.1, libayatana-appindicator, xdg-utils]
+    private_key: '{{ envOrDefault "AUR_KEY" "" }}'
+    git_url: ssh://aur@aur.archlinux.org/notekpr-desktop-bin.git
+    skip_upload: auto
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    package: |-
+      install -Dm755 notekpr-desktop "$pkgdir/usr/bin/notekpr-desktop"
+      install -Dm644 md.notekpr.Notekpr.desktop "$pkgdir/usr/share/applications/md.notekpr.Notekpr.desktop"
+      install -Dm644 icons/32x32.png "$pkgdir/usr/share/icons/hicolor/32x32/apps/md.notekpr.Notekpr.png"
+      install -Dm644 icons/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/md.notekpr.Notekpr.png"
+      install -Dm644 icons/128x128@2x.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/md.notekpr.Notekpr.png"
+      install -Dm644 icons/icon.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/md.notekpr.Notekpr.png"
+      install -Dm644 icons/favicon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/md.notekpr.Notekpr.svg"
+      install -Dm644 LICENSE "$pkgdir/usr/share/licenses/notekpr-desktop/LICENSE"
 
 # semrel made the release with its notes; this only adds the files. Run
 # again after a failure, it replaces those already there, so they match what

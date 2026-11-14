@@ -3,8 +3,7 @@
 notekpr for your computer: the app you know from the browser, in a window
 of its own, that keeps running in the background, sits in the tray, can
 start when you log in, and keeps your notes as a folder of Markdown files
-too. Linux for now; it isn't packaged yet, so it is built from source
-([below](#build-it)).
+too. Linux for now ([install it](#install-it)).
 
 It is a client of your notekpr server like the browser and the CLI: your
 notes are encrypted on your computer before anything leaves it.
@@ -33,6 +32,28 @@ notes are encrypted on your computer before anything leaves it.
 You don't need the [CLI](cli.md) for any of that. It is still the tool for
 [AI agents](agents.md) (its gateway), scripts, and computers without a
 screen.
+
+## Install it
+
+From the release after 0.16.1 on, each release on
+[GitHub](https://github.com/coolapso/notekpr/releases) carries the app for
+Linux (amd64), as packages for systems with glibc 2.35 and WebKitGTK 4.1 or
+newer:
+
+| System | Install |
+|---|---|
+| Arch | from the AUR: `notekpr-desktop-bin` |
+| Debian 12+, Ubuntu 22.04+, Mint 21+ | the release's `.deb`: `sudo apt install ./notekpr-desktop_<version>_amd64.deb` |
+| Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-desktop` (amd64 and arm64); or the release's `.rpm`: `sudo dnf install ./notekpr-desktop-<version>-1.x86_64.rpm` |
+| Other Linux | the release's `notekpr-desktop_<version>_linux_amd64.tar.gz` (the app, its desktop entry and icons; it needs WebKitGTK 4.1 and libayatana-appindicator installed), or [build it from source](#build-it) |
+
+It shows in your applications as *notekpr*. COPR's package updates with the
+rest of Fedora; the release's `.deb` doesn't update itself (no package
+repository yet): install a newer release's the same way. The packages
+bring what the app needs from your system's own: WebKitGTK, the tray's
+library (libayatana-appindicator) and xdg-utils. The CLI is a package of
+its own (`notekpr-cli`, [cli.md](cli.md#packages)), and you don't need it
+for the app.
 
 ## Getting started
 
@@ -121,7 +142,7 @@ folder, like the CLI's `--profile`.
 
 ## Build it
 
-The app is `crates/desktop` ([Tauri](https://tauri.app) 2 around the web
+To build it yourself, or to work on it: the app is `crates/desktop` ([Tauri](https://tauri.app) 2 around the web
 client, `crates/web`). It needs what the web client needs
 ([development.md](development.md)), plus WebKitGTK 4.1 and GTK 3 with their
 headers, and libayatana-appindicator for the tray:

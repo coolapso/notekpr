@@ -49,7 +49,8 @@ COPR's package updates with the rest of Fedora (COPR builds it from source
 for each Fedora release). The release's `.deb` and `.rpm` don't update
 themselves (there is no package repository for them yet): install a newer
 release's the same way. Each release also
-lists the files' SHA-256 sums (`notekpr-cli_<version>_checksums.txt`).
+lists the files' SHA-256 sums (`notekpr_<version>_checksums.txt`; up to
+0.16.1 `notekpr-cli_<version>_checksums.txt`).
 
 ### Shell completions
 

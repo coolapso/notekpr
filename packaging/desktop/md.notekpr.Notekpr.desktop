@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=notekpr
+GenericName=Notes
+Comment=End-to-end encrypted Markdown notes
+Exec=notekpr-desktop
+Icon=md.notekpr.Notekpr
+Terminal=false
+Categories=Office;
+Keywords=notes;markdown;encrypted;sync;
+StartupNotify=true
+StartupWMClass=md.notekpr.Notekpr

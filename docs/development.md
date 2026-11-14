@@ -366,8 +366,11 @@ one) from `.goreleaser.yaml`. GoReleaser runs in a build image
 cross compilers, no WebKitGTK. It is Ubuntu 22.04, the oldest system the
 desktop app's packages are for: the app links against the system's
 WebKitGTK and GTK, so it is built against the oldest it runs with (glibc
-2.35, WebKitGTK 4.1), with plain cargo, and only for amd64 (the machine's
-own). The CLI links nothing but glibc: zig and cargo-zigbuild build it for
+2.35, WebKitGTK 4.1), with plain cargo: for amd64 against the image's own,
+for arm64 with Ubuntu's cross compiler against an arm64 Ubuntu 22.04's
+(`/sysroot/arm64`, installed in an arm64 image that Docker emulates, as
+the two architectures' development packages can't be installed side by
+side). The CLI links nothing but glibc: zig and cargo-zigbuild build it for
 both architectures and glibc 2.28, whatever the image's system. Also in it:
 Rust with the wasm32 target and the wasm-bindgen CLI the crates pin (the
 app has the web client inside, built before it), and rpmbuild for COPR's
@@ -378,7 +381,8 @@ again from scratch when the image changed.
 ```sh
 task build:clients      # everything into dist/clients, nothing published (a snapshot)
 task test:packages      # then: install the CLI's .deb in Debian and .rpm in AlmaLinux 8, the app's
-                        # .deb in Ubuntu 22.04 and Debian and .rpm in Fedora, and check them
+                        # .deb in Ubuntu 22.04 and Debian and .rpm in Fedora, and check them:
+                        # amd64, and arm64 where Docker can emulate it (qemu-user, binfmt)
 task test:srpm          # and: build both source RPMs in Fedora, as COPR does, install them, check them
 task ci:clients         # all three, as CI runs them
 task release:clients    # publish for the release tag at HEAD (task release does it)
@@ -392,8 +396,8 @@ A release adds to the GitHub Release semrel made (its notes stay):
 |---|---|
 | `notekpr-cli_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr` (glibc 2.28 or newer), completions, the systemd user unit |
 | `notekpr-cli_<v>_{amd64,arm64}.deb`, `notekpr-cli-<v>-1.{x86_64,aarch64}.rpm` | the same as packages, installed from the file (no package repository yet) |
-| `notekpr-desktop_<v>_linux_amd64.tar.gz` | `notekpr-desktop` (glibc 2.35, WebKitGTK 4.1), its desktop entry and icons: what the AUR package installs |
-| `notekpr-desktop_<v>_amd64.deb`, `notekpr-desktop-<v>-1.x86_64.rpm` | the app as packages, which depend on the system's WebKitGTK, the tray's library and xdg-utils |
+| `notekpr-desktop_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr-desktop` (glibc 2.35, WebKitGTK 4.1), its desktop entry and icons: what the AUR package installs |
+| `notekpr-desktop_<v>_{amd64,arm64}.deb`, `notekpr-desktop-<v>-1.{x86_64,aarch64}.rpm` | the app as packages, which depend on the system's WebKitGTK, the tray's library and xdg-utils |
 | `notekpr-<v>.tar.gz` | the source, which COPR's source RPMs are made from |
 | `notekpr_<v>_checksums.txt` | SHA-256 of all of them |
 

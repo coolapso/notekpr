@@ -41,8 +41,10 @@ builds:
       - aarch64-unknown-linux-gnu.2.28
 
   # The desktop app links against the system's WebKitGTK and GTK: built with
-  # plain cargo against this image's (Ubuntu 22.04, the oldest it is for),
-  # not zig. For amd64 only, the machine's own (arm64: COPR builds it).
+  # plain cargo against Ubuntu 22.04's (the oldest it is for), not zig —
+  # amd64 against the image's own, arm64 with the cross compiler against the
+  # arm64 Ubuntu in /sysroot/arm64 (packaging/Dockerfile). The arm64 settings
+  # name their target, so they never reach the amd64 build.
   - id: desktop
     builder: rust
     binary: notekpr-desktop
@@ -51,9 +53,16 @@ builds:
     env:
       - NOTEKPR_VERSION={{ .Version }}
       - 'TAURI_CONFIG={"build":{"frontendDist":"../../target-release/desktop-web"}}'
+      - CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+      - CFLAGS_aarch64_unknown_linux_gnu=--sysroot=/sysroot/arm64
+      - CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+      - CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Clink-arg=--sysroot=/sysroot/arm64
+      - PKG_CONFIG_SYSROOT_DIR_aarch64_unknown_linux_gnu=/sysroot/arm64
+      - PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu=/sysroot/arm64/usr/lib/aarch64-linux-gnu/pkgconfig:/sysroot/arm64/usr/share/pkgconfig
     mod_timestamp: "{{ .CommitTimestamp }}"
     targets:
       - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
 
 archives:
   - id: cli
@@ -170,7 +179,8 @@ nfpms:
     # What it links against (glibc, WebKitGTK and with it GTK; 2.40: the
     # newest WebKitGTK API it uses), the tray's library, which it loads
     # when it shows a tray (no package would see it), and xdg-open for
-    # links. rpm by the libraries' names: the same on Fedora and openSUSE.
+    # links. rpm by the libraries' names: the same on Fedora and openSUSE,
+    # and (64bit) on amd64 and arm64 alike.
     overrides:
       deb:
         dependencies:

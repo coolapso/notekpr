@@ -18,6 +18,19 @@
 # since 2.17, so it is copied into the build machine below.
 FROM rust:1.99-slim-trixie AS rust
 
+# What the desktop app links against, for arm64: Ubuntu 22.04's own
+# WebKitGTK and GTK with their headers, installed in an arm64 Ubuntu (Docker
+# emulates it) and copied below as /sysroot/arm64, which the app's arm64
+# build compiles and links against (.goreleaser.yaml). Ubuntu's development
+# packages for amd64 and arm64 can't be installed side by side.
+FROM --platform=linux/arm64 ubuntu:22.04 AS arm64-sysroot
+# Its links made relative (symlinks -c): absolute ones would point outside
+# the copy, and the linker would pass over the libraries they name.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libc6-dev libwebkit2gtk-4.1-dev symlinks \
+ && symlinks -rc /usr/lib > /dev/null \
+ && rm -rf /var/lib/apt/lists/*
+
 FROM ubuntu:22.04
 
 ARG TARGETARCH
@@ -29,8 +42,13 @@ COPY --from=rust /usr/local/cargo /usr/local/cargo
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl xz-utils git openssh-client rpm gcc libc6-dev pkg-config \
-      libwebkit2gtk-4.1-dev \
+      libwebkit2gtk-4.1-dev gcc-aarch64-linux-gnu \
  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=arm64-sysroot /usr/include /sysroot/arm64/usr/include
+COPY --from=arm64-sysroot /usr/lib /sysroot/arm64/usr/lib
+COPY --from=arm64-sysroot /usr/share/pkgconfig /sysroot/arm64/usr/share/pkgconfig
+RUN ln -s usr/lib /sysroot/arm64/lib
 
 RUN rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu wasm32-unknown-unknown
 

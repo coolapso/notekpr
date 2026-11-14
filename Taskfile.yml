@@ -459,37 +459,35 @@ tasks:
   # run by packaging/run.sh): Docker is all these need.
 
   build:clients:
-    desc: "Build the CLI's and the desktop app's release files into dist/clients without publishing: Linux as .tar.gz, .deb and .rpm (the CLI for amd64 and arm64, the app for amd64), AUR's PKGBUILDs and COPR's source RPMs (in Docker)"
+    desc: "Build the CLI's and the desktop app's release files into dist/clients without publishing: Linux (amd64, arm64) as .tar.gz, .deb and .rpm, AUR's PKGBUILDs and COPR's source RPMs (in Docker)"
     cmds:
       - packaging/run.sh goreleaser release --snapshot --clean
       - packaging/run.sh packaging/rpm/srpm.sh dist/clients
 
   test:packages:
-    desc: "Install the CLI's .deb in Debian and its .rpm in AlmaLinux 8 (glibc 2.28, the oldest the builds run on), for this machine's architecture, and run it; the desktop app's .deb in Ubuntu 22.04 (the oldest it is for) and Debian, its .rpm in Fedora (amd64) — after build:clients"
+    desc: "Install the CLI's .deb in Debian and its .rpm in AlmaLinux 8 (glibc 2.28, the oldest the builds run on), the desktop app's .deb in Ubuntu 22.04 (the oldest it is for) and Debian and its .rpm in Fedora, and check them: for amd64, and for arm64 where Docker can run it (qemu) — after build:clients"
     preconditions:
       - sh: ls dist/clients/*.deb dist/clients/*.rpm > /dev/null 2>&1
         msg: "No packages in dist/clients: task build:clients first"
     cmds:
-      - >-
-        docker run --rm -v "$PWD/dist/clients:/p:ro" debian:stable-slim
-        sh -c 'dpkg -i /p/notekpr-cli_*_$(dpkg --print-architecture).deb > /dev/null && {{.PACKAGE_CHECK}}'
-      - >-
-        docker run --rm -v "$PWD/dist/clients:/p:ro" almalinux:8
-        sh -c 'rpm -i /p/notekpr-cli-*.$(uname -m).rpm && {{.PACKAGE_CHECK}}'
-      # The desktop app's, with what they depend on from each system's own
-      # packages (amd64 only: build:clients makes no others).
-      - for: [ubuntu:22.04, debian:stable-slim]
-        cmd: >-
-          [ "$(uname -m)" != x86_64 ] ||
-          docker run --rm -v "$PWD/dist/clients:/p:ro" {{.ITEM}}
-          sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends
-          /p/notekpr-desktop_*_amd64.deb desktop-file-utils > /dev/null
-          && {{.DESKTOP_PACKAGE_CHECK}}
-          && desktop-file-validate /usr/share/applications/md.notekpr.Notekpr.desktop'
-      - >-
-        [ "$(uname -m)" != x86_64 ] ||
-        docker run --rm -v "$PWD/dist/clients:/p:ro" fedora:latest
-        sh -c 'dnf -y -q install /p/notekpr-desktop-*.x86_64.rpm > /dev/null && {{.DESKTOP_PACKAGE_CHECK}}'
+      # The desktop app's with what they depend on from each system's own
+      # packages. Each architecture's own files: dpkg and uname name them.
+      - |
+        set -eu
+        for platform in linux/amd64 linux/arm64; do
+          if ! docker run --rm --platform "$platform" debian:stable-slim true > /dev/null 2>&1; then
+            echo "test:packages: Docker can't run $platform here (it needs qemu-user and binfmt): skipped"
+            continue
+          fi
+          echo "test:packages: $platform"
+          run() { docker run --rm --platform "$platform" -v "$PWD/dist/clients:/p:ro" "$@"; }
+          run debian:stable-slim sh -c 'dpkg -i /p/notekpr-cli_*_$(dpkg --print-architecture).deb > /dev/null && {{.PACKAGE_CHECK}}'
+          run almalinux:8 sh -c 'rpm -i /p/notekpr-cli-*.$(uname -m).rpm && {{.PACKAGE_CHECK}}'
+          for image in ubuntu:22.04 debian:stable-slim; do
+            run "$image" sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends /p/notekpr-desktop_*_$(dpkg --print-architecture).deb desktop-file-utils > /dev/null && {{.DESKTOP_PACKAGE_CHECK}} && desktop-file-validate /usr/share/applications/md.notekpr.Notekpr.desktop'
+          done
+          run fedora:latest sh -c 'dnf -y -q install /p/notekpr-desktop-*.$(uname -m).rpm > /dev/null && {{.DESKTOP_PACKAGE_CHECK}}'
+        done
 
   test:srpm:
     desc: "Build the CLI and the desktop app from dist/clients' source RPMs in Fedora (FEDORA=latest), as COPR does, install them and run them — after build:clients (their source is the last commit, as GoReleaser's source archive is)"

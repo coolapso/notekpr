@@ -93,6 +93,7 @@ task check:wasm               # build the core for wasm32 (catches wasm-only iss
 task backup                   # a timestamped backup of ./data into backups/ (keeps the newest 10)
 task docker:dev               # the dev server in Docker (docker:dev:oidc adds Dex, docker:dev:down stops it)
 task clean                    # remove build outputs (keeps the dev database)
+task clean:worktrees          # remove git worktrees whose work is all on main, with their build outputs
 ```
 
 ## A demo with data

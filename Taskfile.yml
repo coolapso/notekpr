@@ -823,3 +823,8 @@ tasks:
     cmds:
       - cargo clean
       - rm -rf {{.WEB_TARGET_DIR}} dist
+
+  clean:worktrees:
+    desc: Remove the git worktrees whose work is all on main (parallel agents'; each holds its own build outputs)
+    cmds:
+      - scripts/clean-worktrees.sh

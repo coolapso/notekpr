@@ -179,7 +179,8 @@ scripts/        build-web.sh, build-load-ui.sh (wasm builds) · guide-shots.py (
                 table, from Unicode's data) · demo.py (task demo),
                 demo-files/ (what it can't make, e.g. a video) · logo.py (the logo
                 and icon in docs/assets, by hand) · test-s3.sh (task test:s3: the
-                S3 file store against Garage in Docker) · check-docs.py,
+                S3 file store against Garage in Docker) · clean-worktrees.sh
+                (task clean:worktrees) · check-docs.py,
                 docs-theme.sh (the docs site)
 docs/site       the docs as a website (docs.notekpr.md): Hugo with the Dockleaf theme,
                 copied into themes/dockleaf; data/docs.yaml lists its pages
@@ -445,3 +446,9 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
 - Never commit `target*/`, `dist/`, `data/`, `.env` or databases
   (`.gitignore` covers them). `Cargo.lock` is committed; release builds use
   `--locked`.
+- A worktree (an agent working beside another gets one; Claude Code puts
+  them in `.claude/worktrees/`) builds its own `target/` and `target-web/`:
+  tens of GB each. Once its commits are on main, remove it with its branch:
+  `task clean:worktrees` removes every worktree whose work is all on main
+  and that has nothing uncommitted, and keeps one changed in the last hour
+  (an agent may still be working there).

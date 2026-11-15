@@ -2530,6 +2530,9 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     let store = ctx.store()?;
     let profile = store.require()?;
     if a.no_dir {
+        // The folder is given back: its .notekpr-folder goes (a sync still
+        // running there takes it away as it stops).
+        crate::folder_claim::release(&store);
         store.update(|p| p.sync.mirror_dir = None)?;
         crate::out!("mirroring disabled (existing files are left in place)");
         return Ok(());
@@ -2557,6 +2560,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     let mirror_opts = MirrorOptions {
         allow_mass_delete: a.allow_mass_delete,
         restore_missing: a.restore_missing,
+        take_over: a.take_over,
         ..Default::default()
     };
     if let Some(d) = &dir
@@ -2564,7 +2568,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
     {
         // A folder named here follows the same rules as `notekpr setup`'s
         // and the desktop app's.
-        crate::setup::check_new_folder(d, &ctx.dirs, &ctx.profile)?;
+        crate::setup::check_new_folder(d, &ctx.dirs, &ctx.profile, a.take_over)?;
         if let Some(cloud) = crate::setup::cloud_synced(d) {
             ui::warn(&format!(
                 "{} is synced by {cloud}: it would upload the decrypted notes, and two tools syncing the \
@@ -2606,7 +2610,7 @@ async fn sync(ctx: &Ctx, a: SyncArgs) -> Result<()> {
         })?;
     }
     if a.once {
-        return sync_once(ctx, &a.vaults, dir.as_deref(), mirror_opts).await;
+        return sync_once(ctx, &a.vaults, dir.as_deref(), mirror_opts, None).await;
     }
     let hub = sync_hub(ctx, &a.vaults).await?;
 
@@ -2678,10 +2682,14 @@ pub(crate) async fn sync_once(
     vaults: &[String],
     dir: Option<&Path>,
     mirror_opts: MirrorOptions,
+    claim: Option<std::sync::Arc<crate::folder_claim::FolderClaim>>,
 ) -> Result<()> {
     let hub = sync_hub(ctx, vaults).await?;
     if let Some(d) = dir {
-        let mut m = Mirror::with_options(hub.clone(), d, mirror_opts).await?;
+        let mut m = match claim {
+            Some(c) => Mirror::with_claim(hub.clone(), c, mirror_opts).await?,
+            None => Mirror::with_options(hub.clone(), d, mirror_opts).await?,
+        };
         let mut r = m.reconcile_all(true).await?;
         if r.held > 0
             && ui::confirm(&format!(

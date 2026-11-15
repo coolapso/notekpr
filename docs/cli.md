@@ -512,8 +512,50 @@ A folder named with `--dir` follows the same rules as `notekpr setup`'s and
 the [desktop app](desktop.md)'s: not the top of the file system, your home
 folder or notekpr's own settings and data, and not a folder — or one in or
 around it — that another profile or the desktop app keeps in sync already
-(two would fight over its files). One synced by a cloud drive gets a
-warning.
+(two would fight over its files, and one server's notes would reach the
+other's). One synced by a cloud drive gets a warning.
+
+**One keeper per folder.** A Markdown folder holds a hidden file at its
+top, `.notekpr-folder`, saying who keeps it in sync: a random id that the
+keeping profile remembers too, and a line naming it for messages ("the
+CLI, profile 'default'"). Every notekpr on the computer reads it — the
+CLI, the desktop app however it is installed, a development copy with
+folders of its own — so none needs to know where the others keep their
+settings:
+
+* **Taken as the sync starts** (`sync`, `sync --once`, the desktop app), and
+  by `setup` before it creates a vault or moves anything: a lock on the
+  folder itself, held for as long as the sync runs (its disk can't be
+  unmounted meanwhile), then the file written. Two starting on one folder
+  at the same moment can't both have it; the one that doesn't stops with
+  an error, having touched nothing. Another folder made under its name
+  while it runs (the folder moved away) isn't the one taken: the sync
+  stops at its next pass over the folder.
+* **Refused** when the file names another: one that the CLI or the app
+  knows and that still keeps the folder, or one neither knows (a copy with
+  settings of its own) — unless you take it over: `--take-over` with
+  `setup` or `sync --dir`, after making sure nothing keeps it any more (or
+  delete the file). One the CLI or the app knows that keeps the folder no
+  longer is taken without asking. Each start also checks, as choosing
+  does, that no other profile the CLI or the app knows keeps it.
+* **Never inside another:** a folder in or around a Markdown folder (one
+  holding `.notekpr-folder`) is refused — also while that one is being
+  taken — and nothing inside another's is read or written: a sync that
+  finds one inside its folder stops.
+* **Given back** by `sync --no-dir`, `logout --forget` and the app's
+  *Stop…*: the file goes (a sync still running there takes it away as it
+  stops). A folder kept from before there was this file gets it at its
+  next start.
+
+It holds between releases that have it, on one computer, on a disk that
+can lock files: a folder that can't be locked at all is refused. On a disk
+that can lock files but not folders (some network disks), a hidden
+`.notekpr-folder.lock` in the folder stands in, and there a folder and one
+inside it taken at the very same moment aren't told apart. Releases
+from before it check only each other's profiles, as above: stop those
+before using a newer one on the same folder. Two computers syncing one
+folder through a cloud drive each have their own copy of the file, so
+nothing stops them fighting (the warning above).
 
 ### Modes and their security implications
 
@@ -544,6 +586,7 @@ are unaffected.
   Quick notes/            <- your quick notes: flat, no folders
     2026-10-19 14.32.md
   Saved shapes.excalidrawlib   <- your saved shapes, Excalidraw's library file
+  .notekpr-folder         <- who keeps the folder in sync (hidden; above)
 ```
 
 **Quick notes** ([§3](#quick-notes)) are the folder `Quick notes/`, mirrored

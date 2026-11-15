@@ -276,6 +276,21 @@ def main():
         r = cli("sync", "--dir", notes, "--once", "--plaintext-ok")
         check(r.returncode != 0 and "the desktop app" in r.stderr,
               f"the CLI won't sync the folder the app keeps ({r.stderr.strip()[-160:]})")
+        # The folder says so itself: a CLI that doesn't know where this
+        # copy of the app keeps its settings is refused too.
+        marker = json.load(open(f"{notes}/.notekpr-folder"))
+        check(marker["by"].startswith("the desktop app (development "),
+              f"the folder names its keeper in .notekpr-folder ({marker['by']})")
+        blind = {k: v for k, v in cenv.items() if not k.startswith("NOTEKPR_DESKTOP_")}
+        r = subprocess.run([os.path.abspath(a_cli), "sync", "--dir", notes, "--once", "--plaintext-ok"],
+                           env=blind, capture_output=True, text=True, timeout=60)
+        check(r.returncode != 0 and "the desktop app (development" in r.stderr,
+              f"nor a CLI that knows nothing of this copy of the app ({r.stderr.strip()[-160:]})")
+        r = subprocess.run([os.path.abspath(a_cli), "sync", "--dir", notes, "--once", "--plaintext-ok",
+                            "--take-over"], env=blind, capture_output=True, text=True, timeout=60)
+        check(r.returncode != 0 and "right now" in r.stderr,
+              f"not even told to take it over, while the app keeps it ({r.stderr.strip()[-160:]})")
+        subprocess.run([os.path.abspath(a_cli), "sync", "--no-dir"], env=blind, capture_output=True, timeout=60)
         welcome = f"{notes}/My notes/Welcome.md"
         wait_for("Welcome.md", lambda: os.path.exists(welcome))
         check(True, "the vault's notes are written into it as Markdown files")

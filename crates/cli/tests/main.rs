@@ -11,6 +11,7 @@ mod agent;
 mod cli;
 mod comments;
 mod dates;
+mod keepers;
 mod member_log;
 mod mirror;
 mod moving;

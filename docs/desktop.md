@@ -159,7 +159,11 @@ since it is the same code.
 copies for the folder. The folder follows the same rules as the CLI's: a
 folder the CLI already keeps in sync (or one in or around it), one inside
 notekpr's own data or your home folder itself is refused — and the CLI
-refuses the app's folder in turn. Until the app can bring notes in, the
+refuses the app's folder in turn. A hidden file at the folder's top,
+`.notekpr-folder`, says which notekpr keeps it, so every copy of notekpr on
+the computer sees that, wherever it keeps its settings
+([cli.md](cli.md#4-sync-and-the-markdown-mirror), "One keeper per
+folder"). Until the app can bring notes in, the
 folder must be empty, too; to bring notes from a folder in, use *Import
 notes* in the app or [`notekpr setup`](own-editor.md#coming-from-obsidian).
 

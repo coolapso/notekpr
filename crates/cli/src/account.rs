@@ -663,6 +663,8 @@ pub async fn logout(dirs: &Dirs, profile: &str, forget: bool) -> Result<()> {
         }
     }
     if forget {
+        // Its Markdown folder (the files stay) is free for another.
+        crate::folder_claim::release(&ps);
         SecretStore::wipe(&ps.data_dir())?;
         ps.delete()?;
     } else {
@@ -780,6 +782,8 @@ pub fn drop_session(dirs: &Dirs, profile: &str) -> Result<()> {
 /// telling the server. Files it mirrored stay where they are.
 pub fn forget_locally(dirs: &Dirs, profile: &str) -> Result<()> {
     let ps = ProfileStore::new(dirs, profile)?;
+    // Its Markdown folder (the files stay) is free for another.
+    crate::folder_claim::release(&ps);
     SecretStore::wipe(&ps.data_dir())?;
     if ps.load()?.is_some() {
         ps.delete()?;
@@ -799,6 +803,7 @@ pub async fn delete_account(dirs: &Dirs, profile: &str) -> Result<()> {
     };
     let api = Api::new(&p.server, Credentials::Session(token.clone()))?;
     api.delete("/me").await?;
+    crate::folder_claim::release(&ps);
     SecretStore::wipe(&ps.data_dir())?;
     ps.delete()?;
     Ok(())

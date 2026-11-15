@@ -14,6 +14,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use notekpr_cli::account::{self, Adopt};
 use notekpr_cli::api::{Api, Credentials};
+use notekpr_cli::folder_claim::FolderClaim;
 use notekpr_cli::hub::{Hub, HubOptions};
 use notekpr_cli::mirror::{Mirror, MirrorOptions};
 use notekpr_cli::profile::{Dirs, Profile, ProfileLock, ProfileStore};
@@ -41,6 +42,9 @@ pub struct Folder {
     /// The server its account is on (with notes only on this computer, the
     /// app's own): a profile kept for another never runs here.
     server: Option<String>,
+    /// How the folder's `.notekpr-folder` names this app
+    /// ([`notekpr_cli::folder_claim`]).
+    label: String,
     updates: Arc<Updates>,
     running: Mutex<Option<Running>>,
 }
@@ -109,10 +113,11 @@ pub struct Check {
 }
 
 impl Folder {
-    pub fn new(dirs: Dirs, server: Option<String>, updates: Arc<Updates>) -> Folder {
+    pub fn new(dirs: Dirs, server: Option<String>, label: String, updates: Arc<Updates>) -> Folder {
         Folder {
             dirs,
             server,
+            label,
             updates,
             running: Mutex::new(None),
         }
@@ -164,7 +169,7 @@ impl Folder {
         if !dir.is_absolute() {
             bail!("choose a folder by its full path");
         }
-        setup::check_new_folder(dir, &self.dirs, PROFILE)?;
+        setup::check_new_folder(dir, &self.dirs, PROFILE, false)?;
         let c = setup::inspect(dir)?;
         if c.notes + c.files + c.folders > 0 {
             bail!(
@@ -200,11 +205,14 @@ impl Folder {
             account::forget_locally(&self.dirs, PROFILE)?;
         }
         account::adopt(&self.dirs, PROFILE, a).await?;
+        // Taken before it is remembered: of two choosing it at once, one
+        // stops here, its folder setting untouched.
+        let claim = FolderClaim::take(&dir, &self.store()?, &self.label, false)?;
         self.store()?.update(|p| {
             p.sync.confirm_plaintext(&dir);
             p.sync.mirror_dir = Some(dir.clone());
         })?;
-        self.start_locked(&mut running)
+        self.start_with(&mut running, Some(Arc::new(claim)))
     }
 
     /// Start keeping the remembered folder in sync (at launch, again after
@@ -217,6 +225,16 @@ impl Folder {
 
     // One change at a time: every operation holds `running` throughout.
     fn start_locked(&self, running: &mut Option<Running>) -> Result<()> {
+        self.start_with(running, None)
+    }
+
+    /// Start, with the folder taken already (`claim`), or taking it as the
+    /// sync starts.
+    fn start_with(
+        &self,
+        running: &mut Option<Running>,
+        claim: Option<Arc<FolderClaim>>,
+    ) -> Result<()> {
         let Some(dir) = self.configured() else {
             return Ok(());
         };
@@ -265,8 +283,9 @@ impl Folder {
         });
         let dirs = self.dirs.clone();
         let updates = self.updates.clone();
+        let label = self.label.clone();
         let task = tokio::spawn(async move {
-            let result = run(&dirs, &dir, stop_rx, &updates).await;
+            let result = run(&dirs, &dir, claim, &label, stop_rx, &updates).await;
             drop(lock);
             updates.update(|s| {
                 s.folder = match result {
@@ -422,12 +441,24 @@ async fn end<T>(mut t: Owned<T>, within: Duration) {
 async fn run(
     dirs: &Dirs,
     dir: &Path,
+    claim: Option<Arc<FolderClaim>>,
+    label: &str,
     mut stop: watch::Receiver<bool>,
     updates: &Updates,
 ) -> Result<()> {
     // Starting can take a while (the server, a big folder): a stop meanwhile
     // ends it there.
     let started = async {
+        // The folder is this account's before anything starts on it.
+        let claim = match claim {
+            Some(c) => c,
+            None => Arc::new(FolderClaim::take(
+                dir,
+                &ProfileStore::new(dirs, PROFILE)?,
+                label,
+                false,
+            )?),
+        };
         let session = Session::open(dirs, PROFILE)?;
         let hub = Hub::start(
             Arc::new(session),
@@ -441,7 +472,7 @@ async fn run(
             },
         )
         .await?;
-        let m = Mirror::with_options(hub.clone(), dir, MirrorOptions::default()).await?;
+        let m = Mirror::with_claim(hub.clone(), claim, MirrorOptions::default()).await?;
         anyhow::Ok((hub, m))
     };
     let (hub, mut m) = tokio::select! {
@@ -521,6 +552,7 @@ mod tests {
         let folder = Folder::new(
             Dirs::under(tmp.path()),
             Some("http://127.0.0.1:52002".into()),
+            "the desktop app".into(),
             Arc::new(Updates::default()),
         );
         // No folder yet: nothing to follow, nothing made.
@@ -591,7 +623,12 @@ mod tests {
         p.sync.mirror_dir = Some(notes);
         ProfileStore::new(&dirs, PROFILE).unwrap().save(&p).unwrap();
         let updates = Arc::new(Updates::default());
-        let folder = Folder::new(dirs, Some("https://b.example.com".into()), updates.clone());
+        let folder = Folder::new(
+            dirs,
+            Some("https://b.example.com".into()),
+            "the desktop app".into(),
+            updates.clone(),
+        );
         folder.start().await.unwrap();
         let (_, status) = updates.current();
         assert!(

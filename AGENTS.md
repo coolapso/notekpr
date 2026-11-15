@@ -409,6 +409,12 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   (`paths.rs`): never let one server's session reach another. The app
   never changes account on a server's word, only when the person picks
   one.
+- A Markdown folder (the app's or the CLI's) is touched only once it is
+  taken (`notekpr_cli::folder_claim`): every sync starts through
+  `Mirror::with_options` or `Mirror::with_claim`, and anything that
+  changes the folder before that (`setup` moving notes in) takes the
+  claim first and hands it over. Its `.notekpr-folder` is someone's
+  file: only read without following links, only replaced by a rename.
 - Running it by hand pops a window up: tests use `tests/e2e/desktop.py`
   (headless sway). The `auto-launch` crate writes `~/.config/autostart`
   whatever `XDG_CONFIG_HOME` says: give a test its own `HOME`.

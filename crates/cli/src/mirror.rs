@@ -44,6 +44,7 @@ use notekpr_core::{paths, textdiff};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc, watch};
 
+use crate::folder_claim::{self, FolderClaim};
 use crate::fsutil;
 use crate::hub::{Hub, HubEvent};
 use crate::ui;
@@ -216,11 +217,18 @@ pub struct MirrorOptions {
     /// Treat it as ignoring how accents are written (`None` = detect).
     #[doc(hidden)]
     pub unicode_insensitive: Option<bool>,
+    /// Take the folder although its `.notekpr-folder` names a keeper
+    /// notekpr doesn't know here (`--take-over`).
+    pub take_over: bool,
 }
 
 pub struct Mirror {
     hub: Arc<Hub>,
     root: PathBuf,
+    /// The folder is this profile's while the mirror runs.
+    claim: Arc<FolderClaim>,
+    /// Why it stopped for good: nothing more is written, and `run` ends.
+    stopped: Option<String>,
     vaults: BTreeMap<String, MirrorVault>,
     warned: BTreeSet<String>,
     opts: MirrorOptions,
@@ -716,14 +724,21 @@ fn disk_state(path: &Path, rec: &mut impl Seen) -> std::io::Result<DiskState> {
 
 /// Disk path of a `/`-separated relative path below `dir`. Every segment must
 /// be one plain path component (no drive prefix, root, `..`, or a separator
-/// of the platform), and the result must stay below `dir`.
+/// of the platform), and the result must stay below `dir`. Nor may it lead
+/// into another Markdown folder (one holding a `.notekpr-folder`): nothing
+/// in one is ever read or written from another.
 pub(crate) fn disk_path(dir: &Path, rel: &str) -> Result<PathBuf> {
     use std::path::Component;
     let mut p = dir.to_path_buf();
     for seg in rel.split('/') {
         let mut comps = Path::new(seg).components();
         match (comps.next(), comps.next()) {
-            (Some(Component::Normal(c)), None) if c == std::ffi::OsStr::new(seg) => p.push(c),
+            (Some(Component::Normal(c)), None) if c == std::ffi::OsStr::new(seg) => {
+                p.push(c);
+                if folder_claim::holds_marker(&p) {
+                    bail!(NestedFolder(p));
+                }
+            }
             _ => bail!("a path segment is not supported on this system"),
         }
     }
@@ -733,8 +748,34 @@ pub(crate) fn disk_path(dir: &Path, rel: &str) -> Result<PathBuf> {
     Ok(p)
 }
 
+/// Another Markdown folder inside this one: never reached into.
+#[derive(Debug)]
+pub(crate) struct NestedFolder(PathBuf);
+
+impl std::fmt::Display for NestedFolder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} holds a {} (another Markdown folder): nothing in it is synced from here",
+            self.0.display(),
+            folder_claim::MARKER
+        )
+    }
+}
+
+impl std::error::Error for NestedFolder {}
+
+/// What [`scan_dir`] found.
+struct Scanned {
+    files: BTreeMap<String, Stat>,
+    empty_dirs: BTreeSet<String>,
+    /// A folder below holding a `.notekpr-folder`: another Markdown
+    /// folder, which this one must never reach into.
+    nested: Option<PathBuf>,
+}
+
 /// Files (and empty directories) below `dir`, by vault path.
-fn scan_dir(dir: &Path) -> (BTreeMap<String, Stat>, BTreeSet<String>) {
+fn scan_dir(dir: &Path) -> Scanned {
     let mut files = BTreeMap::new();
     let mut nonempty: BTreeSet<String> = BTreeSet::new();
     let mut dirs = BTreeSet::new();
@@ -758,6 +799,13 @@ fn scan_dir(dir: &Path) -> (BTreeMap<String, Stat>, BTreeSet<String>) {
         }
         let ft = e.file_type();
         if ft.is_dir() {
+            if folder_claim::holds_marker(e.path()) {
+                return Scanned {
+                    files,
+                    empty_dirs: BTreeSet::new(),
+                    nested: Some(e.into_path()),
+                };
+            }
             dirs.insert(rel);
         } else if ft.is_file()
             && let Ok(Node::File(st)) = stat(e.path())
@@ -770,8 +818,12 @@ fn scan_dir(dir: &Path) -> (BTreeMap<String, Stat>, BTreeSet<String>) {
             files.insert(rel, st);
         }
     }
-    let empty = dirs.into_iter().filter(|d| !nonempty.contains(d)).collect();
-    (files, empty)
+    let empty_dirs = dirs.into_iter().filter(|d| !nonempty.contains(d)).collect();
+    Scanned {
+        files,
+        empty_dirs,
+        nested: None,
+    }
 }
 
 /// Outcome of [`replace_if_unchanged`].
@@ -1933,7 +1985,29 @@ impl Mirror {
     /// although files were mirrored into it before (moved, renamed, an
     /// unmounted drive) is not re-created — every note would look deleted —
     /// unless `restore_missing` asks for a fresh copy.
+    /// Mirror into `root`, taking it for this profile first
+    /// ([`FolderClaim::take`]).
     pub async fn with_options(hub: Arc<Hub>, root: &Path, opts: MirrorOptions) -> Result<Mirror> {
+        Mirror::open(hub, root, opts, None).await
+    }
+
+    /// Mirror into the folder `claim` holds (taken before, by `setup` or
+    /// the desktop app).
+    pub async fn with_claim(
+        hub: Arc<Hub>,
+        claim: Arc<FolderClaim>,
+        opts: MirrorOptions,
+    ) -> Result<Mirror> {
+        let root = claim.root().to_path_buf();
+        Mirror::open(hub, &root, opts, Some(claim)).await
+    }
+
+    async fn open(
+        hub: Arc<Hub>,
+        root: &Path,
+        opts: MirrorOptions,
+        claim: Option<Arc<FolderClaim>>,
+    ) -> Result<Mirror> {
         if root.symlink_metadata().is_err() && !opts.restore_missing {
             let want = resolve_lenient(root);
             for v in hub.vaults() {
@@ -1954,6 +2028,25 @@ impl Mirror {
         let root = root
             .canonicalize()
             .with_context(|| format!("resolving {}", root.display()))?;
+        // Nothing in the folder is read or written before it is this
+        // profile's.
+        let claim = match claim {
+            Some(c) if c.root() == root => c,
+            Some(c) => bail!(
+                "the folder taken ({}) isn't the one to mirror ({})",
+                c.root().display(),
+                root.display()
+            ),
+            None => {
+                let store = &hub.session.profiles;
+                Arc::new(FolderClaim::take(
+                    &root,
+                    store,
+                    &folder_claim::cli_label(store.name()),
+                    opts.take_over,
+                )?)
+            }
+        };
         // (Left over from writing the saved shapes' file.)
         fsutil::remove_stale_temp_files(&root, 1, STALE_TEMP_AGE);
         let fold = Fold {
@@ -1972,6 +2065,8 @@ impl Mirror {
         let mut m = Mirror {
             hub,
             root,
+            claim,
+            stopped: None,
             vaults: BTreeMap::new(),
             warned: BTreeSet::new(),
             opts,
@@ -2141,6 +2236,34 @@ impl Mirror {
         true
     }
 
+    /// Before anything in the folder is read or written: still the folder
+    /// taken (not another made under its name), and the vault's folder not
+    /// another Markdown folder. If not, the mirror stops for good.
+    fn still_ours(&mut self, vault_dir: Option<&Path>) -> Result<()> {
+        if self.stopped.is_none() && !self.claim.holds() {
+            self.stopped = Some(format!(
+                "{} was replaced by another folder of that name while being kept in sync: start again to keep \
+                 the new one",
+                self.root.display()
+            ));
+        }
+        if self.stopped.is_none()
+            && let Some(d) = vault_dir.filter(|d| folder_claim::holds_marker(d))
+        {
+            self.stopped = Some(format!(
+                "{} holds a {} (another Markdown folder) inside {}: stopped, before touching either. Move it \
+                 out, then start again",
+                d.display(),
+                folder_claim::MARKER,
+                self.root.display()
+            ));
+        }
+        match &self.stopped {
+            Some(why) => bail!("{why}"),
+            None => Ok(()),
+        }
+    }
+
     async fn save_state(&mut self, vault_id: &str) -> Result<()> {
         let (Some(mv), Some(v)) = (self.vaults.get_mut(vault_id), self.hub.get(vault_id)) else {
             return Ok(());
@@ -2165,8 +2288,12 @@ impl Mirror {
         for id in ids {
             match self.reconcile_vault(&id, final_pass).await {
                 Ok(r) => total.add(r),
+                Err(_) if self.stopped.is_some() => break,
                 Err(e) => ui::warn(&format!("mirror: {e:#}")),
             }
+        }
+        if let Some(why) = &self.stopped {
+            bail!("{why}");
         }
         Ok(total)
     }
@@ -2185,6 +2312,8 @@ impl Mirror {
     /// Disk → CRDT for one vault.
     pub async fn ingest(&mut self, vault_id: &str, final_pass: bool) -> Result<Report> {
         let mut report = Report::default();
+        let vault_dir = self.vaults.get(vault_id).map(|m| m.dir.clone());
+        self.still_ours(vault_dir.as_deref())?;
         if self.root_missing() {
             return Ok(report);
         }
@@ -2198,7 +2327,22 @@ impl Mirror {
         let Some(mv) = self.vaults.get_mut(vault_id) else {
             return Ok(report);
         };
-        let (disk, empty_dirs) = scan_dir(&mv.dir);
+        let Scanned {
+            files: disk,
+            empty_dirs,
+            nested,
+        } = scan_dir(&mv.dir);
+        if let Some(n) = nested {
+            let why = format!(
+                "{} holds a {} (another Markdown folder) inside {}: stopped, before touching either. Move it out, \
+                 then start again",
+                n.display(),
+                folder_claim::MARKER,
+                self.root.display()
+            );
+            self.stopped = Some(why.clone());
+            bail!(why);
+        }
         let mut v = shared.lock().await;
         let name = v.name().to_string();
         let writable = !self.hub.read_only && v.require_writable().is_ok();
@@ -2420,6 +2564,8 @@ impl Mirror {
     /// CRDT → disk for one vault.
     pub async fn write_remote(&mut self, vault_id: &str, scope: &Scope) -> Result<Report> {
         let mut report = Report::default();
+        let vault_dir = self.vaults.get(vault_id).map(|m| m.dir.clone());
+        self.still_ours(vault_dir.as_deref())?;
         if self.root_missing() {
             return Ok(report);
         }
@@ -2701,6 +2847,12 @@ impl Mirror {
         let mut remote_deadline: Option<tokio::time::Instant> = None;
         let mut deletion_check = tokio::time::interval(RENAME_WINDOW);
         loop {
+            if let Some(why) = self.stopped.clone() {
+                for id in self.vaults.keys().cloned().collect::<Vec<_>>() {
+                    let _ = self.save_state(&id).await;
+                }
+                bail!("{why}");
+            }
             let remote_sleep = async {
                 match remote_deadline {
                     Some(d) => tokio::time::sleep_until(d).await,
@@ -2775,6 +2927,9 @@ impl Mirror {
                     }
                 }
                 _ = full.tick() => {
+                    // Another folder by that name isn't the one taken: it
+                    // may be someone else's.
+                    let _ = self.still_ours(None);
                     // The directory may have been removed and re-created
                     // (remounted): its old watch is gone.
                     let ident = dir_ident(&self.root);

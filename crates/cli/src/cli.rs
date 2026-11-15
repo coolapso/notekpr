@@ -442,6 +442,11 @@ pub struct SetupArgs {
     /// Confirm that writing decrypted files to --dir is intended.
     #[arg(long)]
     pub plaintext_ok: bool,
+    /// Take --dir although its .notekpr-folder names another keeper, one
+    /// notekpr doesn't know here: only once you are sure nothing keeps it
+    /// in sync any more.
+    #[arg(long, requires = "dir")]
+    pub take_over: bool,
     /// Keep syncing in the background, from now on and after restarts (a
     /// systemd user service).
     #[arg(long, conflicts_with = "no_service")]
@@ -755,6 +760,11 @@ pub struct SyncArgs {
     /// Stop mirroring to the remembered directory (keeps the files).
     #[arg(long, conflicts_with = "dir")]
     pub no_dir: bool,
+    /// Take --dir although its .notekpr-folder names another keeper, one
+    /// notekpr doesn't know here: only once you are sure nothing keeps it
+    /// in sync any more.
+    #[arg(long, requires = "dir")]
+    pub take_over: bool,
     /// Move mirrored files that disappeared to the trash even when many (or a
     /// whole vault folder) vanished at once; normally that is held for safety.
     #[arg(long, conflicts_with = "restore_missing")]

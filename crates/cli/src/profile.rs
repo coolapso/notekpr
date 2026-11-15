@@ -306,6 +306,10 @@ pub struct SyncSettings {
     pub plaintext_dirs: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mirror_dir: Option<PathBuf>,
+    /// This profile's id in the `.notekpr-folder` of the folder it keeps
+    /// ([`crate::folder_claim`]): made the first time it takes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
 }
 
 impl SyncSettings {
@@ -461,6 +465,14 @@ impl ProfileStore {
 
     pub fn path(&self) -> PathBuf {
         self.dirs.profile_path(&self.name)
+    }
+
+    pub fn dirs(&self) -> &Dirs {
+        &self.dirs
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn data_dir(&self) -> PathBuf {
@@ -784,6 +796,7 @@ mod tests {
             plaintext_ok: true,
             plaintext_dirs: vec![],
             mirror_dir: Some(a.into()),
+            folder_id: None,
         };
         assert!(s.plaintext_confirmed(a));
         assert!(!s.plaintext_confirmed(b));

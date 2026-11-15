@@ -265,9 +265,26 @@ pub fn run(args: Args) -> Result<()> {
         None => open.as_ref().and_then(|a| a.server.clone()),
     };
     let updates = Arc::new(Updates::default());
+    // A copy with folders of its own runs beside the installed app, with an
+    // autostart entry of its own that starts it with the same folders.
+    let own = crate::paths::own_folders();
+    let default_profile = args.profile == "default";
+    // How a Markdown folder's .notekpr-folder names this app.
+    let mut which = vec![];
+    if let Some((tag, _)) = &own {
+        which.push(format!("development {tag}"));
+    }
+    if !default_profile {
+        which.push(format!("profile '{}'", args.profile));
+    }
     let folder = Folder::new(
         paths.folder(open.as_ref().map_or("none", |a| a.id.as_str())),
         api_server.clone(),
+        if which.is_empty() {
+            "the desktop app".to_string()
+        } else {
+            format!("the desktop app ({})", which.join(", "))
+        },
         updates.clone(),
     );
 
@@ -278,11 +295,7 @@ pub fn run(args: Args) -> Result<()> {
     // are named after (packaging/desktop), so desktops find them.
     #[cfg(target_os = "linux")]
     glib::set_prgname(Some(context.config().identifier.as_str()));
-    let default_profile = args.profile == "default";
 
-    // A copy with folders of its own runs beside the installed app, with an
-    // autostart entry of its own that starts it with the same folders.
-    let own = crate::paths::own_folders();
     let mut single = tauri_plugin_single_instance::Builder::new().callback(|app, argv, _cwd| {
         // Started again: show the window — unless it was the autostart of
         // an app that is already running.

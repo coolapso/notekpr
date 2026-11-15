@@ -318,6 +318,10 @@ notes](writing.md) and [Drawings](drawings.md).
 * `notekpr setup` sets a computer up in one go: signs in, takes the folder
   for your Markdown files (an Obsidian vault already there comes along) and
   keeps it in sync in the background.
+* One keeper per Markdown folder: a hidden `.notekpr-folder` in it says
+  which notekpr keeps it in sync, so no other — another profile, the
+  desktop app, a copy of it with settings of its own — takes it, or one
+  inside it, even at the same moment ([how](cli.md#4-sync-and-the-markdown-mirror)).
 * Import folders of Markdown and zip files (an Obsidian vault, say) with their
   attachments; export a vault as plain `.md` files any time.
 * Import from Notion: export a page or database as HTML there (⋯ → Export,

@@ -96,6 +96,10 @@ async fn setup_moves_the_notes_in_a_folder_into_a_vault() {
         .require()
         .unwrap();
     assert_eq!(profile.sync.mirror_dir.as_deref(), Some(notes.as_path()));
+    // The folder says who keeps it, at its top: it didn't move with the
+    // notes.
+    let marker = std::fs::read_to_string(notes.join(".notekpr-folder")).unwrap();
+    assert!(marker.contains(profile.sync.folder_id.as_deref().unwrap()));
 
     // The server has them: Bob, whom Alice shares the vault with, reads them.
     let alice = reopen(&srv, "alice", "alice").await;

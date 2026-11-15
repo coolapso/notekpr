@@ -12,6 +12,7 @@
 //! exactly as they were.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -21,6 +22,7 @@ use notekpr_core::protocol::PrincipalKind;
 use crate::api::{Api, Credentials};
 use crate::cli::{LoginArgs, SetupArgs};
 use crate::commands::{self, Ctx};
+use crate::folder_claim::FolderClaim;
 use crate::hub::VaultSummary;
 use crate::mirror::{self, MirrorOptions};
 use crate::profile::{self, DEFAULT_PROFILE, Dirs, Profile, ProfileLock, ProfileStore};
@@ -444,14 +446,14 @@ pub enum Keeper {
 }
 
 impl Keeper {
-    fn dirs(&self) -> &Dirs {
+    pub(crate) fn dirs(&self) -> &Dirs {
         match self {
             Keeper::Cli(d) | Keeper::Desktop(_, d) => d,
         }
     }
 
     /// Who, and how to stop it, for a message.
-    fn who(&self, profile: &str) -> String {
+    pub(crate) fn who(&self, profile: &str) -> String {
         match self {
             Keeper::Cli(_) => format!(
                 "the CLI (profile '{profile}'; `notekpr --profile {profile} sync --no-dir` stops that)"
@@ -493,14 +495,18 @@ pub fn keepers(mine: &Dirs) -> Vec<Keeper> {
 /// (the CLI's or the desktop app's), and not a folder — or one in or around
 /// it — that another profile or app keeps in sync already: two would fight
 /// over its files. `profile` in `mine` is whose folder it is to become.
-pub fn check_new_folder(dir: &Path, mine: &Dirs, profile: &str) -> Result<()> {
+/// Then what a `.notekpr-folder` in it, or in a folder in or around it,
+/// says ([`crate::folder_claim::check`]; `take_over`: the person said its
+/// unknown keeper keeps it no more).
+pub fn check_new_folder(dir: &Path, mine: &Dirs, profile: &str, take_over: bool) -> Result<()> {
     let mut own = vec![mine.clone()];
     own.extend(Dirs::from_env());
     own.extend(crate::profile::cli_dirs_outside_sandbox());
     for (config, data) in crate::profile::desktop_roots_all() {
         own.push(Dirs { config, data });
     }
-    check_new_folder_among(dir, &own, &keepers(mine), mine, profile)
+    check_new_folder_among(dir, &own, &keepers(mine), mine, profile)?;
+    crate::folder_claim::check(dir, &ProfileStore::new(mine, profile)?, take_over)
 }
 
 /// [`check_new_folder`], with notekpr's own folders (`own`) and who keeps
@@ -636,7 +642,7 @@ fn folder_plan(
     dir: &Path,
     remembered: Option<&Path>,
 ) -> Result<Option<Folder>> {
-    check_new_folder(dir, &ctx.dirs, &ctx.profile)?;
+    check_new_folder(dir, &ctx.dirs, &ctx.profile, a.take_over)?;
     let folder = |bring: Bring| -> Result<Option<Folder>> {
         Ok(Some(Folder {
             root: dir.to_path_buf(),
@@ -821,6 +827,11 @@ pub fn move_into(root: &Path, dest: &Path) -> Result<()> {
     let names = std::fs::read_dir(root)
         .with_context(|| format!("reading {}", root.display()))?
         .map(|e| e.map(|e| e.file_name()))
+        .filter(|n| {
+            // The folder's own: it stays at the top.
+            n.as_ref()
+                .map_or(true, |n| !crate::folder_claim::is_own_file(n))
+        })
         .collect::<std::io::Result<Vec<_>>>()?;
     fsutil::create_private_dir(dest)?;
     let mut moved = Vec::new();
@@ -854,6 +865,11 @@ pub fn copy_into(src: &Path, dest: &Path) -> Result<usize> {
     let mut links = 0;
     for e in walkdir::WalkDir::new(src).min_depth(1) {
         let e = e.with_context(|| format!("copying {}", src.display()))?;
+        // Who keeps a Markdown folder there is no note: it never comes
+        // along (it would make a folder inside the new one).
+        if e.file_type().is_file() && crate::folder_claim::is_own_file(e.file_name()) {
+            continue;
+        }
         let to = dest.join(e.path().strip_prefix(src)?);
         let ft = e.file_type();
         if ft.is_dir() {
@@ -945,6 +961,7 @@ async fn set_up(ctx: &Ctx, a: &SetupArgs, tty: bool, folder: Option<&Folder>) ->
     }
 
     let mut done = Done::default();
+    let claim;
     if let (Some((target, dest)), Some(c)) = (&target, contents) {
         let (what, from, first) = match &folder.bring {
             Bring::Copy(src, _) => ("Copy", src, ""),
@@ -968,6 +985,7 @@ async fn set_up(ctx: &Ctx, a: &SetupArgs, tty: bool, folder: Option<&Folder>) ->
         {
             bail!("cancelled; nothing was moved or copied");
         }
+        claim = Some(take_folder(ctx, a, root)?);
         let id = match target {
             Target::Existing { id, .. } => id.clone(),
             Target::New(name) => {
@@ -994,6 +1012,7 @@ async fn set_up(ctx: &Ctx, a: &SetupArgs, tty: bool, folder: Option<&Folder>) ->
         done.brought = Some((dest.clone(), target.name().to_string()));
         done.obsidian = c.hidden.iter().any(|h| h == ".obsidian");
     } else {
+        claim = Some(take_folder(ctx, a, root)?);
         first_vault(ctx, a, tty, &vaults).await?;
     }
     store.update(|p| {
@@ -1001,8 +1020,21 @@ async fn set_up(ctx: &Ctx, a: &SetupArgs, tty: bool, folder: Option<&Folder>) ->
         p.sync.mirror_dir = Some(root.clone());
     })?;
     ui::status(&format!("syncing with {}…", shown(root)));
-    commands::sync_once(ctx, &[], Some(root), MirrorOptions::default()).await?;
+    commands::sync_once(ctx, &[], Some(root), MirrorOptions::default(), claim).await?;
     Ok(done)
+}
+
+/// Take the folder for this profile ([`crate::folder_claim`]) before
+/// anything in it changes: held until the first sync is done.
+fn take_folder(ctx: &Ctx, a: &SetupArgs, root: &Path) -> Result<Arc<FolderClaim>> {
+    fsutil::create_private_dir(root).with_context(|| format!("creating {}", shown(root)))?;
+    let claim = FolderClaim::take(
+        root,
+        &ctx.store()?,
+        &crate::folder_claim::cli_label(&ctx.profile),
+        a.take_over,
+    )?;
+    Ok(Arc::new(claim))
 }
 
 /// A first vault when there is none: what the web app does for a new account.

@@ -10,6 +10,7 @@ pub mod audit;
 pub mod cli;
 pub mod commands;
 pub mod control;
+pub mod folder_claim;
 pub mod fsutil;
 pub mod gateway;
 pub mod hub;

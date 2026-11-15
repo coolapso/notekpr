@@ -106,6 +106,17 @@ pub fn legacy_account_id(server: &str) -> String {
     format!("{}-{}", host_part(server), &hash[..12])
 }
 
+/// Whether [`legacy_account_id`] leaves `server` no other address but the
+/// same host's on another port: its host in full (nothing replaced or cut)
+/// and no path — 48 bits of hash aren't enough to tell addresses apart on
+/// their own. Storage found under such a name is taken for an account
+/// added later only when this holds; the account open at the upgrade has
+/// its whole address ([`crate::settings::Settings::settle`]).
+pub fn legacy_name_is_its_own(server: &str) -> bool {
+    url::Url::parse(server)
+        .is_ok_and(|u| u.path() == "/" && u.host_str().is_some_and(|h| h == host_part(server)))
+}
+
 #[derive(Clone, Debug)]
 pub struct Paths {
     /// This profile's settings folder.
@@ -201,6 +212,25 @@ mod tests {
         let a = legacy_account_id("https://notes.example.com");
         assert_eq!(a, "notes.example.com-9914ea42e685");
         assert_ne!(a, legacy_account_id("https://notes.example.com/other"));
+        // Found again for another address only when the name pins it.
+        for s in [
+            "https://notes.example.com",
+            "https://notes.example.com:8443",
+            "http://127.0.0.1:8099",
+            "http://localhost:8099",
+            "https://my-notes.example.com",
+        ] {
+            assert!(legacy_name_is_its_own(s), "{s}");
+        }
+        for s in [
+            "https://notes.example.com/other",
+            "https://my_notes.example.com",
+            "http://[::1]:8099",
+            &format!("https://{}.example.com", "a".repeat(64)),
+            "not an address",
+        ] {
+            assert!(!legacy_name_is_its_own(s), "{s}");
+        }
         assert_eq!(
             p.webview(Some(&a)),
             PathBuf::from("/d/webview/notes.example.com-9914ea42e685")

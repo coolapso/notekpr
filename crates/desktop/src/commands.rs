@@ -181,9 +181,12 @@ pub async fn add_server(app: AppHandle, state: State<'_, Arc<AppState>>, url: St
     }
     let id = {
         let mut s = state.settings.lock().unwrap();
-        // Used with 0.17.0: its window storage, under the name it had then.
+        // Used with 0.17.0: its window storage, under the name it had then
+        // — if that name can't be another address's too.
         let legacy = crate::paths::legacy_account_id(&server);
-        let old = s.get(&legacy).is_none() && state.paths.webview(Some(&legacy)).is_dir();
+        let old = crate::paths::legacy_name_is_its_own(&server)
+            && s.get(&legacy).is_none()
+            && state.paths.webview(Some(&legacy)).is_dir();
         s.add(Some(server.clone()), || {
             if old {
                 legacy

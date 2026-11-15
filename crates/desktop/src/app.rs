@@ -191,6 +191,7 @@ fn download_path(downloads: &std::path::Path, suggested: &std::path::Path) -> Pa
 
 pub fn run(args: Args) -> Result<()> {
     let paths = Paths::for_profile(&args.profile)?;
+    paths.private_data()?;
     let settings = Settings::load(&paths.settings_file())?;
     let webview_dir = paths.webview(settings.server.as_deref());
     let updates = Arc::new(Updates::default());

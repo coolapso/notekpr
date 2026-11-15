@@ -79,6 +79,27 @@ impl Paths {
     pub fn folder(&self) -> Dirs {
         notekpr_cli::profile::desktop_folder_root(&self.data_root, &self.profile)
     }
+
+    /// Make this profile's data folder readable by this account only
+    /// (`0700`, as the CLI's), before anything is kept in it: it holds the
+    /// window's storage (its session, this device's key) and the Markdown
+    /// folder's keys. One made by an earlier version is tightened; a link
+    /// someone put there is left as it is.
+    pub fn private_data(&self) -> Result<()> {
+        use anyhow::Context;
+        notekpr_cli::fsutil::create_private_dir(&self.data)
+            .with_context(|| format!("creating {}", self.data.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::symlink_metadata(&self.data)?;
+            if meta.is_dir() && meta.permissions().mode() & 0o077 != 0 {
+                std::fs::set_permissions(&self.data, std::fs::Permissions::from_mode(0o700))
+                    .with_context(|| format!("making {} private", self.data.display()))?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Profile names: what the CLI allows for its own (`--profile`).
@@ -113,5 +134,44 @@ mod tests {
         assert_ne!(a, c);
         assert_eq!(a, p.webview(Some("https://notes.example.com")));
         assert_eq!(p.webview(None), PathBuf::from("/d/webview/none"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn data_readable_by_this_account_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("notekpr-desktop");
+        let paths = |profile: &str| Paths {
+            config: tmp.path().join("config"),
+            data: root.join(profile),
+            profile: profile.into(),
+            data_root: root.clone(),
+        };
+
+        // New: made private.
+        let new = paths("default");
+        new.private_data().unwrap();
+        assert_eq!(mode(&new.data), 0o700);
+
+        // Made by an earlier version, open to others: tightened, its
+        // contents kept.
+        let old = paths("work");
+        std::fs::create_dir_all(old.data.join("webview")).unwrap();
+        std::fs::write(old.data.join("webview/kept"), "x").unwrap();
+        std::fs::set_permissions(&old.data, std::fs::Permissions::from_mode(0o755)).unwrap();
+        old.private_data().unwrap();
+        assert_eq!(mode(&old.data), 0o700);
+        assert!(old.data.join("webview/kept").exists());
+
+        // A link is left alone (and not followed).
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let linked = paths("linked");
+        std::os::unix::fs::symlink(&elsewhere, &linked.data).unwrap();
+        linked.private_data().unwrap();
+        assert_eq!(mode(&elsewhere), 0o755);
     }
 }

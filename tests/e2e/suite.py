@@ -2276,7 +2276,10 @@ def test_quick_notes(env):
         b.keys("Projects")
         b.click(".modal button[type=submit]")
         b.wait(cards + ".join('|') === 'Old thought|Call the dentist'", 15, "the moved note leaves the quick notes")
-        check(not b.js("return !!document.querySelector('.modal')"), "moving closes the dialog")
+        # The card goes as soon as the original does; the dialog once it's
+        # deleted for good, a request later (quick notes have no trash).
+        b.wait("return !document.querySelector('.modal')", 10, "the dialog to close")
+        check(True, "moving closes the dialog")
         check(b.js("return document.querySelector('.qn-count').textContent") == "2 of 20", "and makes room")
         b.click_el(b.find_text(".tree-item", "Projects", 10))
         b.click_el(b.find_text(".tree-item", "Vegetable garden", 10))

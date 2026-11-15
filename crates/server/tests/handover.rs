@@ -50,7 +50,9 @@ impl Server {
             log,
         };
         let deadline = Instant::now() + Duration::from_secs(30);
-        while s.ready().await != Some(200) {
+        // Its own "ready", not just someone's on that port: the port was
+        // free a moment ago, and another test may have taken it since.
+        while !s.logs().contains("notekpr server ready") || s.ready().await != Some(200) {
             assert!(
                 Instant::now() < deadline,
                 "{name} never ready: {}",

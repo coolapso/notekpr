@@ -312,13 +312,30 @@ pub(super) async fn sign_missing_grants(vault_id: String) {
 /// it out), never from a later point the server names, which would exempt
 /// whatever it places before.
 pub async fn sign_vault(vault_id: String, made_now: bool) {
-    if !step(|c| member_log(c, &vault_id).has_log()) {
-        start_log(vault_id.clone()).await;
-    }
-    if !step(|c| member_log(c, &vault_id).needs_signatures()) {
+    // One at a time per vault (`Core::signing_logs`): a vault being made
+    // here, or signed already, is left to that.
+    if !step(|c| c.signing_logs.insert(vault_id.clone())) {
         return;
     }
-    if let Err(e) = require_signatures(&vault_id, made_now).await {
+    sign_claimed(&vault_id, made_now).await;
+    step(|c| c.signing_logs.remove(&vault_id));
+}
+
+/// [`sign_vault`] for a vault this app has just made, which it claimed when
+/// it added the vault (`Core::signing_logs`): from its start.
+pub async fn sign_made_vault(vault_id: String) {
+    sign_claimed(&vault_id, true).await;
+    step(|c| c.signing_logs.remove(&vault_id));
+}
+
+async fn sign_claimed(vault_id: &str, made_now: bool) {
+    if !step(|c| member_log(c, vault_id).has_log()) {
+        start_log(vault_id.to_string()).await;
+    }
+    if !step(|c| member_log(c, vault_id).needs_signatures()) {
+        return;
+    }
+    if let Err(e) = require_signatures(vault_id, made_now).await {
         util::warn(&format!("could not require signed changes: {e}"));
     }
 }

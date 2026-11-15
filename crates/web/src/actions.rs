@@ -59,11 +59,24 @@ pub async fn create_vault_of(name: &str, kind: VaultKind) -> Result<Option<Strin
         None => return Ok(None),
     };
     req.kind = kind;
+    // Signed from its start, by this (`sign_made_vault` below), claimed
+    // before the server lists it: no refresh meanwhile signs it from a
+    // later point.
+    step(|c| c.signing_logs.insert(req.id.clone()));
     let info: VaultInfo = match api::post("/vaults", &req).await {
         Ok(i) => i,
-        Err(e) if e.status == 409 && kind == VaultKind::QuickNotes => return Ok(None),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => {
+            step(|c| c.signing_logs.remove(&req.id));
+            if e.status == 409 && kind == VaultKind::QuickNotes {
+                return Ok(None);
+            }
+            return Err(e.to_string());
+        }
     };
+    if info.id != req.id {
+        step(|c| c.signing_logs.remove(&req.id));
+        return Err("the server answered for another vault".into());
+    }
     let id = info.id.clone();
     let note_keys = state::ui()
         .server
@@ -106,7 +119,7 @@ pub async fn create_vault_of(name: &str, kind: VaultKind) -> Result<Option<Strin
     // the server stored that with it (`signed_from_start`); if it didn't, we
     // require it now, from its start too.
     state::reload_log(&id).await;
-    state::sign_vault(id.clone(), true).await;
+    state::sign_made_vault(id.clone()).await;
     step(|c| state::publish_vaults(c));
     Ok(Some(id))
 }

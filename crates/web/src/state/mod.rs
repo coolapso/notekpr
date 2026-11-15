@@ -613,6 +613,11 @@ pub struct Core {
     pub registering: HashSet<(String, String)>,
     /// Verified membership logs, by vault (`state::members`).
     pub member_logs: BTreeMap<String, notekpr_sync::members::MemberLog>,
+    /// Vaults whose log this app is starting or making require signed
+    /// changes right now (`members::sign_vault`): one at a time, or both
+    /// would append and the second be refused. A vault this app makes is in
+    /// it from when it is added, so nothing else signs it from a later point.
+    pub signing_logs: BTreeSet<String>,
     /// Vault owners' account keys, checked against our pins this session.
     pub owner_keys: HashMap<String, notekpr_core::keys::AccountPublic>,
     pub prefs: Prefs,
@@ -721,8 +726,8 @@ mod vaults;
 pub use comments::*;
 pub use invitations::*;
 pub use members::{
-    fresh_log, log_entry, log_entry_after, member_log, pin_member_key, reload_log, sign_vault,
-    vouched, vouched_share,
+    fresh_log, log_entry, log_entry_after, member_log, pin_member_key, reload_log, sign_made_vault,
+    sign_vault, vouched, vouched_share,
 };
 pub use mentions::*;
 pub use nav::*;

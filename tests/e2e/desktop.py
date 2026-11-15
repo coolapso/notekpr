@@ -19,8 +19,8 @@ and dbus-run-session. Nothing reaches the desktop it runs on: its own
 display, D-Bus and home folder (autostart entries go in ~/.config/autostart
 whatever XDG_CONFIG_HOME says), and a profile of its own.
 """
-import argparse, json, os, shutil, signal, socket, subprocess, sys, tempfile, time
-import urllib.error, urllib.request
+import argparse, hashlib, json, os, re, secrets, shutil, signal, socket, sqlite3, subprocess, sys, tempfile, time
+import urllib.error, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wd  # noqa: E402
@@ -164,12 +164,20 @@ def main():
     desk_config, desk_data = f"{home}/desktop-config", f"{home}/desktop-data"
     wd_port = free_port()
     os.environ["NOTEKPR_WEBDRIVER"] = f"http://127.0.0.1:{wd_port}"
+    # The default browser, as the app opens it (xdg-open): a stand-in that
+    # hands this test the address, so nothing opens on the desktop it runs on.
+    os.makedirs(f"{home}/bin")
+    opened = f"{home}/opened"
+    with open(f"{home}/bin/xdg-open", "w") as f:
+        f.write(f"#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{opened}'\n")
+    os.chmod(f"{home}/bin/xdg-open", 0o755)
     start(["dbus-run-session", "--", "WebKitWebDriver", f"--port={wd_port}"], log="webdriver.log",
           env=dict(os.environ, XDG_RUNTIME_DIR=runtime, WAYLAND_DISPLAY=display, GDK_BACKEND="wayland",
                    TAURI_WEBVIEW_AUTOMATION="true", NOTEKPR_DESKTOP_TEST_FOLDER=notes,
                    NOTEKPR_DESKTOP_CONFIG_DIR=desk_config, NOTEKPR_DESKTOP_DATA_DIR=desk_data,
                    HOME=f"{home}/home", XDG_CONFIG_HOME=f"{home}/home/.config",
-                   XDG_DATA_HOME=f"{home}/home/.local/share", NOTEKPR_LOG="info"))
+                   XDG_DATA_HOME=f"{home}/home/.local/share", NOTEKPR_LOG="info",
+                   PATH=f"{home}/bin:{os.environ['PATH']}"))
     wait_for("WebKitWebDriver", lambda: _open(wd_port))
 
     def settings_of(p):
@@ -261,6 +269,57 @@ def main():
         check("err" in r, f"which folders the CLI keeps, only for the person the server says the window is ({r})")
         r = invoke("plugin:dialog|open", {"options": {}})
         check("err" in r, f"none of the plugins' own commands ({r})")
+
+        # ---- signing in through the system browser (protocol.md §3, "Apps"):
+        # the app opens the server's sign-in page in the default browser, and
+        # the browser comes back to the app with a code that the app swaps
+        # for a session. The identity provider's part is the server's tests'
+        # (crates/server/tests/oidc.rs), the page in a real browser suite.py's
+        # test_app_sign_in; here the sign-in waiting for the person's yes is
+        # put in place as the provider's return leaves it.
+        def post_json(path, body):
+            r = urllib.request.Request(f"{url}{path}", json.dumps(body).encode(), method="POST",
+                                       headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                return json.load(resp)
+        una = post_json("/api/v1/auth/dev-login", {"username": uniq("una")})["user"]["id"]
+        a.js("window.__signIn = null; window.__TAURI_INTERNALS__.invoke('sign_in', {})"
+             ".then(v => window.__signIn = {ok: v}, e => window.__signIn = {err: String(e)})")
+        sign_in_page = wait_for("the app to open the sign-in in the browser",
+                                lambda: os.path.exists(opened) and open(opened).read().split())[-1]
+        q = urllib.parse.parse_qs(urllib.parse.urlsplit(sign_in_page).query)
+        back, challenge = q["redirect_uri"][0], q["code_challenge"][0]
+        check(sign_in_page.startswith(f"{url}/api/v1/auth/oidc/start?") and q["code_challenge_method"] == ["S256"]
+              and re.fullmatch(r"http://127\.0\.0\.1:\d+/callback/[\w-]+", back),
+              "the app opens the server's sign-in in the browser, to come back to its own loopback address")
+        cookie = "notekpr_a_" + secrets.token_urlsafe(32)
+        db = sqlite3.connect(f"{home}/server/notekpr.db", timeout=10)
+        db.execute("INSERT INTO app_sign_ins (token_hash, user_id, app_redirect, code_challenge, expires_at)"
+                   " VALUES (?, ?, ?, ?, ?)", (hashlib.sha256(cookie.encode()).digest(), una, back, challenge,
+                                               int(time.time() * 1000) + 600_000))
+        db.commit()
+        db.close()
+        # The browser: the page asking for the person's yes, then its form.
+        browser = {"Cookie": f"notekpr_app={cookie}"}
+        page = urllib.request.urlopen(urllib.request.Request(f"{url}/api/v1/auth/oidc/app", headers=browser),
+                                      timeout=10).read().decode()
+        shown = invoke("next_event", {"since": 0})["ok"][1]["sign_in_code"]
+        check(shown and f'<p class="code">{shown}</p>' in page,
+              f"the app shows the code the server's page asks to compare ({shown})")
+        form = re.search(r'name="form" value="([^"]+)"', page).group(1)
+        yes = urllib.request.Request(f"{url}/api/v1/auth/oidc/app", method="POST",
+                                     data=urllib.parse.urlencode({"form": form, "approve": "yes"}).encode(),
+                                     headers=dict(browser, Origin=url))
+        # (Followed to the app as a browser follows it: a GET.)
+        with urllib.request.urlopen(yes, timeout=10) as r:
+            check(r.url.startswith(back + "?code=") and "Back to notekpr" in r.read().decode(),
+                  "Continue: the browser goes back to the app, which says so")
+        got = wait_for("the app's sign-in to end", lambda: a.js("return window.__signIn"), 20)
+        session = got.get("ok") or {}
+        check(session.get("user", {}).get("id") == una, f"the app swaps the code for a session as that person ({got})")
+        me = urllib.request.Request(f"{url}/api/v1/me", headers={"Authorization": f"Bearer {session.get('token')}"})
+        with urllib.request.urlopen(me, timeout=10) as r:
+            check(json.load(r)["user"]["id"] == una, "and the session works")
 
         # ---- the app speaks of this computer, not a browser
         a.route("/settings/devices")

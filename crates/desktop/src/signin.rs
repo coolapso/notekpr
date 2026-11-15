@@ -17,7 +17,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use data_encoding::BASE64URL_NOPAD;
 use notekpr_cli::api::{Api, Credentials};
-use notekpr_core::protocol::{ExchangeRequest, SessionResponse};
+use notekpr_core::protocol::SessionResponse;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
@@ -157,12 +157,9 @@ pub async fn sign_in(
             bail!("{}", error_text(&e));
         }
         let code = back.code.ok_or_else(|| anyhow!("{}", error_text("")))?;
+        // Not signed in yet: the code and the verifier are all it carries.
         let api = Api::new(server, Credentials::None)?;
-        let request = ExchangeRequest {
-            code,
-            code_verifier: Some(verifier.to_string()),
-        };
-        let exchange = api.post::<_, SessionResponse>("/auth/exchange", &request);
+        let exchange = api.exchange(&code, Some(verifier.as_str()));
         let session = tokio::select! {
             r = exchange => r.map_err(|e| anyhow!("{}: {e}", error_text("")))?,
             _ = &mut cancel => bail!("cancelled"),
@@ -250,6 +247,83 @@ mod tests {
         assert_eq!(result.unwrap_err().to_string(), "Sign-in was cancelled.");
         let code = shown.lock().unwrap().clone().unwrap();
         assert_eq!(code.len(), 9, "the code to compare is shown: {code}");
+    }
+
+    #[tokio::test]
+    async fn the_code_is_swapped_for_a_session() {
+        // A server that takes the code as the real one does (protocol.md §3,
+        // "Apps"): no session yet, the code it gave, and the verifier of the
+        // challenge the sign-in started with.
+        use axum::body::Bytes;
+        use axum::routing::post;
+        use notekpr_core::protocol::{ExchangeRequest, PrincipalKind, UserInfo};
+        let challenge = Arc::new(Mutex::new(None::<String>));
+        let c2 = challenge.clone();
+        let exchange = move |headers: HeaderMap, body: Bytes| {
+            let challenge = c2.lock().unwrap().clone();
+            async move {
+                let req: ExchangeRequest = serde_json::from_slice(&body).unwrap();
+                let verified = req.code_verifier.is_some_and(|v| {
+                    Some(BASE64URL_NOPAD.encode(&Sha256::digest(v.as_bytes()))) == challenge
+                });
+                if headers.contains_key(header::AUTHORIZATION)
+                    || req.code != "one-time"
+                    || !verified
+                {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                let session = SessionResponse {
+                    token: "the-session".into(),
+                    expires_at: 1,
+                    user: UserInfo {
+                        id: "u1".into(),
+                        display_name: "Una".into(),
+                        email: None,
+                        kind: PrincipalKind::Human,
+                        is_admin: false,
+                        created_at: 0,
+                    },
+                };
+                (
+                    [(header::CONTENT_TYPE, "application/json")],
+                    serde_json::to_string(&session).unwrap(),
+                )
+                    .into_response()
+            }
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().route("/api/v1/auth/exchange", post(exchange));
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let (_cancel_tx, cancel) = oneshot::channel();
+        let session = sign_in(
+            &server,
+            |url| {
+                // The browser, through the sign-in and back to the app.
+                let u = url::Url::parse(url).unwrap();
+                let q = |k: &str| {
+                    u.query_pairs()
+                        .find(|(n, _)| n == k)
+                        .unwrap()
+                        .1
+                        .into_owned()
+                };
+                *challenge.lock().unwrap() = Some(q("code_challenge"));
+                let back = q("redirect_uri");
+                tokio::spawn(async move {
+                    let r = reqwest::get(format!("{back}?code=one-time")).await.unwrap();
+                    assert_eq!(r.status(), 200);
+                });
+                Ok(())
+            },
+            |_| {},
+            cancel,
+        )
+        .await
+        .expect("signed in");
+        assert_eq!(session.token, "the-session");
+        assert_eq!(session.user.id, "u1");
     }
 
     #[tokio::test]

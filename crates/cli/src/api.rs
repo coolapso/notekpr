@@ -404,6 +404,23 @@ impl Api {
         decode(check(resp).await?).await
     }
 
+    /// Swap a one-time sign-in code for a session; an app's code needs the
+    /// verifier of the challenge it started with (protocol.md §3, "Apps").
+    pub async fn exchange(
+        &self,
+        code: &str,
+        code_verifier: Option<&str>,
+    ) -> ApiResult<SessionResponse> {
+        let req = ExchangeRequest {
+            code: code.to_string(),
+            code_verifier: code_verifier.map(str::to_string),
+        };
+        let resp = self
+            .send_unauthenticated(|| self.http.post(self.url("/auth/exchange")).json(&req))
+            .await?;
+        decode(check(resp).await?).await
+    }
+
     pub async fn device_authorization(
         &self,
         client_name: &str,

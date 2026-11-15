@@ -21,6 +21,46 @@ use std::path::PathBuf;
 use anyhow::Result;
 use notekpr_cli::profile::Dirs;
 
+/// The variables that give the app folders of its own.
+pub const CONFIG_VAR: &str = "NOTEKPR_DESKTOP_CONFIG_DIR";
+pub const DATA_VAR: &str = "NOTEKPR_DESKTOP_DATA_DIR";
+
+/// A copy of the app with folders of its own (development runs, tests:
+/// [`CONFIG_VAR`], [`DATA_VAR`], absolute by now): a short tag of them, so
+/// its single-copy name and its autostart entry are apart from the
+/// installed app's, and the arguments that start it with the same folders
+/// (an autostart entry keeps arguments, not variables). None for the app
+/// in the system's folders.
+pub fn own_folders() -> Option<(String, Vec<String>)> {
+    let given = |v: &str| std::env::var_os(v).filter(|v| !v.is_empty());
+    own_folders_of(given(CONFIG_VAR), given(DATA_VAR))
+}
+
+fn own_folders_of(
+    config: Option<std::ffi::OsString>,
+    data: Option<std::ffi::OsString>,
+) -> Option<(String, Vec<String>)> {
+    use sha2::Digest;
+    if config.is_none() && data.is_none() {
+        return None;
+    }
+    let mut h = sha2::Sha256::new();
+    let mut args = vec![];
+    for (dir, flag) in [(&config, "--config-dir"), (&data, "--data-dir")] {
+        h.update(
+            dir.as_ref()
+                .map(|d| d.as_encoded_bytes())
+                .unwrap_or_default(),
+        );
+        h.update([0]);
+        if let Some(d) = dir {
+            args.extend([flag.to_string(), d.to_string_lossy().into_owned()]);
+        }
+    }
+    let tag = data_encoding::HEXLOWER.encode(&h.finalize()[..4]);
+    Some((tag, args))
+}
+
 #[derive(Clone, Debug)]
 pub struct Paths {
     /// This profile's settings folder.
@@ -161,6 +201,26 @@ mod tests {
             assert_ne!(p.webview(Some(s)), here);
         }
         assert_eq!(p.this_computer(), PathBuf::from("/d/this-computer"));
+    }
+
+    #[test]
+    fn a_copy_with_folders_of_its_own() {
+        assert_eq!(own_folders_of(None, None), None);
+        let (tag, args) = own_folders_of(Some("/r/c".into()), Some("/r/d".into())).unwrap();
+        assert_eq!(tag.len(), 8);
+        assert_eq!(args, ["--config-dir", "/r/c", "--data-dir", "/r/d"]);
+        // Other folders, another copy; the same ones, the same copy.
+        let (other, _) = own_folders_of(Some("/s/c".into()), Some("/r/d".into())).unwrap();
+        assert_ne!(tag, other);
+        assert_eq!(
+            own_folders_of(Some("/r/c".into()), Some("/r/d".into()))
+                .unwrap()
+                .0,
+            tag
+        );
+        // Only one given: the other is the system's.
+        let (_, args) = own_folders_of(None, Some("/r/d".into())).unwrap();
+        assert_eq!(args, ["--data-dir", "/r/d"]);
     }
 
     #[cfg(unix)]

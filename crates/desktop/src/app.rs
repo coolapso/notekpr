@@ -62,6 +62,29 @@ pub fn csp(server: Option<&str>) -> String {
     )
 }
 
+/// One argument as an autostart entry's `Exec` line needs it (the
+/// desktop entry spec; `auto-launch` joins them with spaces as they are):
+/// quoted when it holds more than plain characters, a folder's path with a
+/// space say.
+fn exec_arg(a: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "/._-=,+:@".contains(c);
+    if !a.is_empty() && a.chars().all(plain) {
+        return a.to_string();
+    }
+    let mut q = String::from("\"");
+    for c in a.chars() {
+        match c {
+            // Escaped for the quoting, then the backslash itself for the
+            // entry's string value.
+            '"' | '`' | '$' => q.extend(['\\', '\\', c]),
+            '\\' => q.push_str("\\\\\\\\"),
+            c => q.push(c),
+        }
+    }
+    q.push('"');
+    q
+}
+
 /// Show the window and bring it to the front.
 pub fn show_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -244,6 +267,9 @@ pub fn run(args: Args) -> Result<()> {
     glib::set_prgname(Some(context.config().identifier.as_str()));
     let default_profile = args.profile == "default";
 
+    // A copy with folders of its own runs beside the installed app, with an
+    // autostart entry of its own that starts it with the same folders.
+    let own = crate::paths::own_folders();
     let mut single = tauri_plugin_single_instance::Builder::new().callback(|app, argv, _cwd| {
         // Started again: show the window — unless it was the autostart of
         // an app that is already running.
@@ -253,13 +279,21 @@ pub fn run(args: Args) -> Result<()> {
     });
     let mut autostart_args = vec!["--hidden".to_string()];
     let mut autostart = tauri_plugin_autostart::Builder::new();
+    let mut id = vec![];
+    let mut name = vec![];
+    if let Some((tag, folders)) = &own {
+        id.push(format!("d{tag}"));
+        name.push(format!("development {tag}"));
+        autostart_args.extend(folders.iter().cloned());
+    }
     if !default_profile {
-        single = single.dbus_id(format!(
-            "md.notekpr.Notekpr.p_{}",
-            args.profile.replace('-', "_")
-        ));
+        id.push(format!("p_{}", args.profile.replace('-', "_")));
+        name.push(args.profile.clone());
         autostart_args.extend(["--profile".to_string(), args.profile.clone()]);
-        autostart = autostart.app_name(format!("notekpr ({})", args.profile));
+    }
+    if !id.is_empty() {
+        single = single.dbus_id(format!("md.notekpr.Notekpr.{}", id.join(".")));
+        autostart = autostart.app_name(format!("notekpr ({})", name.join(", ")));
     }
 
     let state = Arc::new(AppState {
@@ -279,7 +313,11 @@ pub fn run(args: Args) -> Result<()> {
     let hidden = args.hidden;
     let app = tauri::Builder::default()
         .plugin(single.build())
-        .plugin(autostart.args(autostart_args).build())
+        .plugin(
+            autostart
+                .args(autostart_args.iter().map(|a| exec_arg(a)))
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .manage(state.clone())
         .invoke_handler(tauri::generate_handler![
@@ -444,6 +482,22 @@ mod tests {
             "connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:41234 ws://127.0.0.1:41234;"
         ));
         assert!(csp(None).contains("connect-src 'self' ipc: http://ipc.localhost;"));
+    }
+
+    #[test]
+    fn autostart_arguments_survive_the_entry() {
+        assert_eq!(exec_arg("--hidden"), "--hidden");
+        assert_eq!(
+            exec_arg("/home/ana/dev/notekpr/data/desktop/config"),
+            "/home/ana/dev/notekpr/data/desktop/config"
+        );
+        assert_eq!(
+            exec_arg("/home/ana/My notes/config"),
+            "\"/home/ana/My notes/config\""
+        );
+        assert_eq!(exec_arg("a\"b$c"), "\"a\\\\\"b\\\\$c\"");
+        assert_eq!(exec_arg("a\\b"), "\"a\\\\\\\\b\"");
+        assert_eq!(exec_arg(""), "\"\"");
     }
 
     #[test]

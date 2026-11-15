@@ -227,9 +227,16 @@ def main():
         check(a.js("return document.querySelector('.close-to-tray').disabled"),
               "without a tray (no StatusNotifier host), closing to it can't be turned on")
         a.click(".autostart")
-        autostart = f"{home}/home/.config/autostart/notekpr ({profile}).desktop"
-        wait_for("the autostart entry", lambda: os.path.exists(autostart))
-        check("--hidden" in open(autostart).read(), "start at login: an autostart entry that starts it in the tray")
+        entries = f"{home}/home/.config/autostart"
+        # (A copy with folders of its own, as here: an entry of its own.)
+        found = lambda: next((f"{entries}/{n}" for n in os.listdir(entries)
+                              if n.startswith("notekpr (development ") and n.endswith(f", {profile}).desktop")), None) \
+            if os.path.isdir(entries) else None
+        autostart = wait_for("the autostart entry", found)
+        entry = open(autostart).read()
+        check("--hidden" in entry, "start at login: an autostart entry that starts it in the tray")
+        check(f"--config-dir {desk_config}" in entry and f"--data-dir {desk_data}" in entry,
+              "with this copy's own folders, apart from an installed app's")
         a.click(".autostart")
         wait_for("the autostart entry to go", lambda: not os.path.exists(autostart))
         check(True, "turned off, the entry goes")

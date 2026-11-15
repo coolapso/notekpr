@@ -79,7 +79,8 @@ task docs:serve               # the docs as a website on http://localhost:8091, 
 task web:watch                # in a 2nd terminal: rebuild the web client on change, then reload the browser
 task cli:login DEV_USER=bob   # sign the CLI in as a test user (profile "bob")
 task cli -- --profile bob ls Family   # run any CLI command
-task desktop                  # the desktop app (choose http://localhost:8080 in it); task desktop -- --profile bob for a second person
+task desktop                  # the desktop app (choose http://localhost:8080 in it); task desktop -- --profile bob for a second person;
+                              # its settings and data in data/desktop, apart from an installed app's (it runs beside it)
 task build:desktop            # the desktop app's release build, the optimized web client inside
 task test                     # all Rust tests;  task test:e2e -- -k collab  for browser tests
 task test:editor              # the editor's DOM view in headless Chromium (wasm-bindgen-test)

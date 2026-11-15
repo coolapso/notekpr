@@ -170,7 +170,13 @@ The tray's menu: *Open notekpr*, *Open the Markdown folder*, *Settings* and
 
 What is protected how: [security.md](security.md#local-storage).
 `NOTEKPR_DESKTOP_CONFIG_DIR` and `NOTEKPR_DESKTOP_DATA_DIR` replace
-`~/.config/notekpr-desktop` and `~/.local/share/notekpr-desktop`.
+`~/.config/notekpr-desktop` and `~/.local/share/notekpr-desktop`, as do
+`--config-dir` and `--data-dir`. A copy of the app with folders of its own
+runs beside the installed one, and starts at login with an entry of its
+own (`notekpr (development …)`, with those folders): development runs
+(`task desktop`) keep theirs in the repository's `data/`
+([development.md](development.md)). Other copies of notekpr on the
+computer don't see such a copy's Markdown folders.
 `NOTEKPR_LOG=debug` shows more of what it does (on standard error).
 
 **Several people side by side** (development, testing):

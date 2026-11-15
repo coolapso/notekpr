@@ -15,6 +15,8 @@ pub mod settings;
 pub mod signin;
 pub mod status;
 
+use std::path::PathBuf;
+
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
@@ -27,6 +29,47 @@ pub struct Args {
     /// people can be signed in side by side (as the CLI's --profile).
     #[arg(long, default_value = "default", value_parser = profile_name)]
     pub profile: String,
+    /// Keep settings in this folder instead of the system's (as
+    /// NOTEKPR_DESKTOP_CONFIG_DIR): a copy of the app with folders of its
+    /// own, beside the installed one (development runs).
+    #[arg(long)]
+    pub config_dir: Option<PathBuf>,
+    /// Keep data in this folder instead of the system's (as
+    /// NOTEKPR_DESKTOP_DATA_DIR).
+    #[arg(long)]
+    pub data_dir: Option<PathBuf>,
+}
+
+impl Args {
+    /// Folders of its own, from `--config-dir` / `--data-dir` or the
+    /// variables: made, made absolute, and set in the variables, which the
+    /// CLI's library reads (`notekpr_cli::profile::desktop_roots`).
+    ///
+    /// # Safety
+    ///
+    /// Call it first thing in `main`, while the program has one thread:
+    /// it sets environment variables.
+    pub unsafe fn take_own_folders(&self) -> anyhow::Result<()> {
+        use anyhow::Context;
+        for (flag, var) in [
+            (&self.config_dir, paths::CONFIG_VAR),
+            (&self.data_dir, paths::DATA_VAR),
+        ] {
+            let given = flag.clone().or_else(|| {
+                std::env::var_os(var)
+                    .filter(|v| !v.is_empty())
+                    .map(PathBuf::from)
+            });
+            if let Some(dir) = given {
+                std::fs::create_dir_all(&dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+                let dir = dir.canonicalize()?;
+                // SAFETY: the caller's: one thread so far.
+                unsafe { std::env::set_var(var, &dir) };
+            }
+        }
+        Ok(())
+    }
 }
 
 fn profile_name(s: &str) -> Result<String, String> {

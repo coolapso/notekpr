@@ -239,11 +239,13 @@ tasks:
       - ./target/debug/notekpr-server --dev-mode --adminless {{.ADMINLESS}} --web-dir dist/web --data-dir {{.DATA_DIR}} --listen {{.LISTEN}} --public-url {{.PUBLIC_URL}} --log-format pretty {{.CLI_ARGS}}
 
   desktop:
-    desc: "Run the desktop app with the web client inside (unoptimized), e.g. against `task dev`: choose http://localhost:8080 in it. A second person side by side: task desktop -- --profile bob"
+    desc: "Run the desktop app with the web client inside (unoptimized), e.g. against `task dev`: choose http://localhost:8080 in it. A second person side by side: task desktop -- --profile bob. Its settings and data are in data/desktop, apart from an installed app's"
     deps: [rust]
     cmds:
       - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} PROFILE=dev OUT=dist/desktop-web ./scripts/build-web.sh > /dev/null
-      - 'TAURI_CONFIG=''{"build":{"frontendDist":"../../dist/desktop-web"}}'' cargo run -q -p notekpr-desktop -- {{.CLI_ARGS}}'
+      # Folders of its own: an installed app's settings, sign-ins, Markdown
+      # folder and autostart entry stay untouched, and it runs beside it.
+      - 'TAURI_CONFIG=''{"build":{"frontendDist":"../../dist/desktop-web"}}'' cargo run -q -p notekpr-desktop -- --config-dir "{{.ROOT_DIR}}/data/desktop/config" --data-dir "{{.ROOT_DIR}}/data/desktop/data" {{.CLI_ARGS}}'
 
   dev:adminless:
     desc: "`task dev` as an admin-less instance: nobody signing in administers anything, only admin clients (the dev one: its curl line) do. Same data as `task dev`"

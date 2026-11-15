@@ -8,6 +8,11 @@ use tracing_subscriber::EnvFilter;
 
 fn main() {
     let args = notekpr_desktop::Args::parse();
+    // SAFETY: first thing, before any other thread.
+    if let Err(e) = unsafe { args.take_own_folders() } {
+        eprintln!("error: {e:#}");
+        std::process::exit(1);
+    }
     // Logs go to stderr; NOTEKPR_LOG=debug for more.
     let filter = EnvFilter::try_from_env("NOTEKPR_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
     tracing_subscriber::fmt()

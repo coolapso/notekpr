@@ -1,6 +1,6 @@
 ---
 name: independent-review
-description: Have notekpr changes reviewed by an agent of another model family before they're committed — the maintainer's procedure. Use when designing anything that touches keys, trust, encryption, signatures or what the server learns (review the design before writing code), and before committing a feature, a larger fix, or anything touching sync, keys or the editor (code review, then a cryptography review where it applies). Not for small fixes, docs, tests or mechanical changes.
+description: Have notekpr changes reviewed by an agent of another model family before they're committed — the maintainer's procedure. Use when designing anything that touches keys, encryption, signatures, authorization or what the server or other people learn (review the design before writing code), and before committing a feature, a larger fix, or anything touching sync, keys or the editor (code review, then a cryptography review where it applies). Not for small fixes, docs, tests or mechanical changes.
 ---
 
 # Independent review
@@ -19,11 +19,17 @@ critical and reasonable, record the rest, move on.
 
 | What | Review | When |
 |---|---|---|
-| A change to keys, trust, encryption, signatures, the membership log, authorization, or what the server (or other people) can learn | **Design review**: the plan — the protocol and security docs as drafted, the flows, what each party signs and checks | Before writing the code |
+| A change to keys, encryption, signatures, the membership log, authorization, or what the server (or other people) can learn — including whom an app believes (keys, devices, members, a server's word) | **Design review**: the plan — the protocol and security docs as drafted, the flows, what each party signs and checks | Before writing the code |
 | A feature, a larger fix, anything touching sync, keys or the editor | **Code review** of the change | Before committing |
 | The changes in the first row | **Cryptography review** of the change, against [docs/security.md](../../../docs/security.md) | After the code review's fixes, before committing (at the latest before the release that ships it) |
 
 Not for small fixes, docs, tests, formatting or other mechanical changes.
+
+Every other feature takes the code review only: UI flows, settings, the
+desktop app's own features, how the Markdown folder is handled on this
+computer — even when it touches decrypted files or reuses
+security-relevant code. In doubt, ask the maintainer rather than start a
+design review.
 
 ## Who reviews
 
@@ -31,8 +37,10 @@ Never the model that wrote the change. As set up now:
 
 | Review | Reviewer | Effort |
 |---|---|---|
-| Code | Codex, `gpt-6.1-sol` | `high` |
-| Design, cryptography | Codex, `gpt-daybreak-blue-latest` (Daybreak Blue) | `xhigh` |
+| Code, design | Codex, `gpt-6.1-sol` | `high` |
+| Cryptography (the security review) | Codex, `gpt-daybreak-blue-latest` (Daybreak Blue) | `xhigh` |
+
+Daybreak Blue is for cryptography reviews only, never design reviews.
 
 The maintainer may name others; this table changes with them.
 
@@ -49,8 +57,9 @@ command codex exec -C <repository path> \
   - < <brief file>
 ```
 
-For a design or cryptography review, use `-m gpt-daybreak-blue-latest -c
-model_reasoning_effort=xhigh` and name the output file after the review.
+A design review runs the same way. For a cryptography review, use `-m
+gpt-daybreak-blue-latest -c model_reasoning_effort=xhigh`. Name the
+output file after the review.
 
 - `command` skips a shell alias that adds flags, such as one that changes
   the sandbox. `-s read-only` lets the reviewer read files and run

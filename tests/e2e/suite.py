@@ -4170,7 +4170,112 @@ def test_device_code(env):
         a.close()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_invitations, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_new_vault_signed_from_its_start, test_note_recipient_never_added, test_note_key_without_owner_proof, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code]
+def test_app_sign_in(env):
+    """An app's sign-in, confirmed in the browser (protocol.md §3, "Apps"):
+    the page's own form reaches the server, and the browser goes back to the
+    app's loopback address with a code that only the app's verifier swaps
+    for a session. The identity provider's part is the server's tests'
+    (crates/server/tests/oidc.rs); here the sign-in waiting for its
+    confirmation is put in place as the provider's return leaves it."""
+    import hashlib, http.server, secrets, threading, urllib.request
+
+    def post_json(path, body):
+        r = urllib.request.Request(env.url + path, json.dumps(body).encode(), method="POST",
+                                   headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(r) as resp:
+                return resp.status, json.load(resp)
+        except urllib.error.HTTPError as e:
+            return e.code, None
+
+    _, me = post_json("api/v1/auth/dev-login", {"username": uniq("una")})
+    user = me["user"]["id"]
+
+    # The app's loopback address (127.0.0.1, or [::1] where that can't be
+    # had): what the browser brings back to it.
+    came = []
+    class Back(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith("/callback/"):  # not the browser's /favicon.ico
+                came.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"back in the app")
+        def log_message(self, *a):
+            pass
+    class Back6(http.server.HTTPServer):
+        address_family = socket.AF_INET6
+    apps = []
+    def listen(server, host):
+        app = server((host, 0), Back)
+        apps.append(app)
+        threading.Thread(target=app.serve_forever, daemon=True).start()
+        h = f"[{host}]" if ":" in host else host
+        return f"http://{h}:{app.server_port}/callback/e2e"
+    back = listen(http.server.HTTPServer, "127.0.0.1")
+
+    def waiting_sign_in(b):
+        """A sign-in waiting for this browser's confirmation; the app's verifier."""
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        cookie = "notekpr_a_" + secrets.token_urlsafe(32)
+        server_db(env, "INSERT INTO app_sign_ins (token_hash, user_id, app_redirect, code_challenge, expires_at)"
+                  " VALUES (?, ?, ?, ?, ?)", hashlib.sha256(cookie.encode()).digest(), user, back, challenge,
+                  int(time.time() * 1000) + 600_000)
+        cdp(b, "Network.setCookie", {"name": "notekpr_app", "value": cookie, "url": env.url + "api/v1/auth/oidc/app",
+                                    "path": "/api/v1/auth/oidc", "httpOnly": True, "sameSite": "Lax"})
+        b.go(env.url + "api/v1/auth/oidc/app")
+        b.find_text("h1", "Sign in to the notekpr app?", 10)
+        return verifier
+
+    def came_back():
+        end = time.time() + 10
+        while not came and time.time() < end:
+            time.sleep(0.1)
+
+    b = Browser()
+    try:
+        b.go(env.url)
+        waiting_sign_in(b)
+        b.click_el(b.find_text("button.yes", "Continue"))
+        came_back()
+        check(came and came[0].startswith("/callback/e2e?code=notekpr_l_"),
+              f"Continue: the browser goes back to the app with a one-time code ({b.js('return document.body.innerText')[:120]!r})")
+        code = came.pop(0).split("code=", 1)[1]
+        status, _ = post_json("api/v1/auth/exchange", {"code": code})
+        check(status == 401, "the code alone, without the app's verifier, is refused (and used up)")
+
+        verifier = waiting_sign_in(b)
+        b.click_el(b.find_text("button.yes", "Continue"))
+        came_back()
+        code = came.pop(0).split("code=", 1)[1]
+        status, session = post_json("api/v1/auth/exchange", {"code": code, "code_verifier": verifier})
+        check(status == 200 and session["user"]["id"] == user, "the app's verifier swaps it for a session as that person")
+
+        waiting_sign_in(b)
+        b.click_el(b.find_text("button", "Cancel"))
+        came_back()
+        check(came and came[0] == "/callback/e2e?error=access_denied", "Cancel: back to the app, denied")
+
+        came.clear()
+        try:
+            back = listen(Back6, "::1")
+        except OSError:
+            print("    (no IPv6 loopback here: skipping [::1])")
+            return
+        verifier = waiting_sign_in(b)
+        b.click_el(b.find_text("button.yes", "Continue"))
+        came_back()
+        check(came and came[0].startswith("/callback/e2e?code=notekpr_l_"), "an app at [::1]: the same")
+        status, _ = post_json("api/v1/auth/exchange", {"code": came.pop(0).split("code=", 1)[1], "code_verifier": verifier})
+        check(status == 200, "and its verifier swaps the code for a session")
+    finally:
+        b.close()
+        for app in apps:
+            app.shutdown()
+
+
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_invitations, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_new_vault_signed_from_its_start, test_note_recipient_never_added, test_note_key_without_owner_proof, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code, test_app_sign_in]
 
 
 def main():

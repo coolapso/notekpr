@@ -556,6 +556,15 @@ impl Setup {
             .await
             .unwrap();
         assert_eq!(page.status(), 200);
+        // Its form's post carries the page's origin (`no-referrer` would
+        // make it `null`), and its answer may lead to the app, nowhere else.
+        let h = page.headers();
+        assert_eq!(h[header::REFERRER_POLICY], "same-origin");
+        let csp = h[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(
+            csp.ends_with("; form-action 'self' http://127.0.0.1:4321"),
+            "{csp}"
+        );
         (page.text().await.unwrap(), cookie)
     }
 

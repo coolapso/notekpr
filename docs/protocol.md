@@ -164,7 +164,12 @@ with the one-time code bound to the app that asked by PKCE (RFC 7636):
    the cookie, which only a page that could read the form has — the cookie
    reaches sibling sites' forms too); a post without the cookie or the
    token, or with an `Origin` other than the server's, uses nothing up and
-   gets `400`. Continue sends the browser to `<redirect_uri>?code=…` (a
+   gets `400`. The page has headers of its own: `Referrer-Policy:
+   same-origin`, so its post carries the server's `Origin` (browsers send
+   `null` under the server's usual `no-referrer`), and a CSP whose
+   `form-action` also allows the app's address, which covers where the
+   form's answer sends the browser: `http://127.0.0.1:<port>`, or for
+   `[::1]`, which CSP can't name, `http://*:<port>`. Continue sends the browser to `<redirect_uri>?code=…` (a
    query: no fragment reaches the app's listener), Cancel to
    `<redirect_uri>?error=access_denied`; either uses the sign-in up, and
    without its cookie, used up or expired the page says the sign-in is over

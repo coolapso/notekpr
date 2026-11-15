@@ -30,9 +30,18 @@ use crate::ratelimit;
 use crate::state::AppState;
 use crate::ws;
 
+/// Every response's Content-Security-Policy, unless it sets its own
+/// ([`csp_forms_to`]). `form-action` stays last.
 const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; \
 img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; object-src 'none'; \
 frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+
+/// [`CSP`], with the page's forms also allowed to go to `origin`: where a
+/// form's answer sends the browser counts too (an app's loopback address,
+/// after the page confirming its sign-in).
+pub(crate) fn csp_forms_to(origin: &str) -> String {
+    format!("{CSP} {origin}")
+}
 
 async fn api_not_found() -> AppError {
     AppError::NotFound
@@ -317,7 +326,10 @@ pub(crate) fn routes(state: AppState, mount: Mount) -> Router {
 
     let hsts = cfg.public_url.starts_with("https://");
     let mut app = app
-        .layer(SetResponseHeaderLayer::overriding(
+        // The CSP and the referrer policy only where a response hasn't set
+        // its own (the page confirming an app's sign-in: auth.rs,
+        // `app_confirm_page`).
+        .layer(SetResponseHeaderLayer::if_not_present(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(CSP),
         ))
@@ -325,7 +337,7 @@ pub(crate) fn routes(state: AppState, mount: Mount) -> Router {
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
         ))
-        .layer(SetResponseHeaderLayer::overriding(
+        .layer(SetResponseHeaderLayer::if_not_present(
             header::REFERRER_POLICY,
             HeaderValue::from_static("no-referrer"),
         ))

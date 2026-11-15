@@ -407,12 +407,41 @@ pub async fn app_confirm_page(
         return Ok(app_sign_in_over());
     }
     let code = notekpr_core::keys::app_sign_in_code(&s.code_challenge);
-    Ok(app_page(&format!(
+    let mut page = app_page(&format!(
         "<h1>Sign in to the notekpr app?</h1><p>The notekpr app on this computer asks to be signed in as you. \
          Continue only if it shows this code:</p><p class=\"code\">{code}</p><p>Didn't start a sign-in in the app, \
          or it shows another code? Cancel.</p><form method=\"post\"><input type=\"hidden\" name=\"form\" \
          value=\"{form}\"><button name=\"approve\" value=\"no\">Cancel</button><button class=\"yes\" name=\"approve\" value=\"yes\">Continue</button></form>"
-    )))
+    ));
+    // The form is posted with the page's origin, which `app_confirm`
+    // checks (under the server's `no-referrer` a browser sends `null`),
+    // and its answer may send the browser on to this sign-in's app: the
+    // only place besides this page that the form may lead (`form-action`
+    // covers where a form's answer redirects).
+    let h = page.headers_mut();
+    h.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    if let Some(app) = app_form_target(&s.app_redirect)
+        && let Ok(csp) = HeaderValue::from_str(&super::csp_forms_to(&app))
+    {
+        h.insert(header::CONTENT_SECURITY_POLICY, csp);
+    }
+    Ok(page)
+}
+
+/// An app's loopback address as a CSP source. CSP has no way to name an
+/// IPv6 address, so for `[::1]` any host at its port: the browser is only
+/// ever sent to the app's own.
+fn app_form_target(app_redirect: &str) -> Option<String> {
+    let u = url::Url::parse(app_redirect).ok()?;
+    let port = u.port()?;
+    match u.host()? {
+        url::Host::Ipv4(ip) => Some(format!("http://{ip}:{port}")),
+        url::Host::Ipv6(_) => Some(format!("http://*:{port}")),
+        url::Host::Domain(_) => None,
+    }
 }
 
 #[derive(Deserialize)]

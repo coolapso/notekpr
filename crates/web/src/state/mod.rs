@@ -470,8 +470,13 @@ pub fn desktop_status(s: crate::desktop::Status) {
     let ui = ui();
     let asked = s.show_settings > ui.desktop.get_untracked().show_settings;
     ui.desktop.set(s);
-    if asked && ui.phase.get_untracked() == Phase::Ready {
-        navigate(Route::Settings("app".into()));
+    if asked {
+        match ui.phase.get_untracked() {
+            Phase::Ready => navigate(Route::Settings("app".into())),
+            // Stuck before the notes open: the app's accounts.
+            Phase::Fatal(_) => ui.phase.set(Phase::Connect { error: None }),
+            _ => {}
+        }
     }
 }
 

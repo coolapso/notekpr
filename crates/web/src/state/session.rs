@@ -96,6 +96,18 @@ pub async fn boot() {
                 offline::start(b).await;
                 return;
             }
+            // The desktop app: which server, and the way to its other
+            // accounts (it never moves to one by itself).
+            if e.is_unreachable()
+                && let Some(server) = crate::desktop::server()
+            {
+                ui.phase.set(Phase::Connect {
+                    error: Some(format!(
+                        "notekpr can't reach {server}. The server may be down or have moved, or this computer may be offline."
+                    )),
+                });
+                return;
+            }
             ui.phase
                 .set(Phase::Fatal(format!("Cannot reach the server: {e}")));
             return;

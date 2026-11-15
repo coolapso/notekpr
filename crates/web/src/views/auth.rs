@@ -37,13 +37,13 @@ pub fn Fatal(msg: String) -> impl IntoView {
     }
 }
 
-/// Notes only on this computer, and stuck before they open (they can't be
-/// opened, or the keys are gone without the recovery key): the way to the
-/// app's other accounts, or a new one ([`Connect`]). Nothing moves by
-/// itself.
+/// The desktop app, stuck before the notes open (a server that can't be
+/// reached or answers wrongly, notes on this computer that can't be
+/// opened, keys gone without the recovery key): the way to its other
+/// accounts, or a new one ([`Connect`]). Nothing moves by itself.
 #[component]
 fn AccountsButton() -> impl IntoView {
-    crate::desktop::this_computer().then(|| {
+    crate::desktop::is_desktop().then(|| {
         view! {
             <button class="btn ghost accounts-button" on:click=move |_| ui().phase.set(Phase::Connect { error: None })>"Accounts"</button>
         }
@@ -215,10 +215,15 @@ fn OnThisComputer(error: Option<String>) -> impl IntoView {
 #[component]
 pub fn Connect(error: Option<String>) -> impl IntoView {
     let first = crate::desktop::accounts().is_empty();
+    // The open account's server can't be reached: try it again, or another.
+    let stuck = error.is_some();
     view! {
         <Card>
             <h1>{if first { "Where are your notes?" } else { "Accounts" }}</h1>
-            {error.map(|e| view! { <div class="alert error">{e}</div> })}
+            {error.map(|e| view! {
+                <div class="alert error cant-reach">{e}</div>
+                <button class="btn primary try-again" on:click=move |_| { let _ = util::window().location().reload(); }>"Try again"</button>
+            })}
             {(!first).then(|| view! {
                 <super::accounts::AccountsList/>
                 <h2>"Add an account"</h2>
@@ -226,7 +231,7 @@ pub fn Connect(error: Option<String>) -> impl IntoView {
             <super::accounts::AddAccount first/>
             // Back: the open account again, from the start (its server
             // asked again, its session found again).
-            {(!first).then(|| view! {
+            {(!first && !stuck).then(|| view! {
                 <button class="btn ghost" on:click=move |_| { let _ = util::window().location().reload(); }>"Back"</button>
             })}
         </Card>

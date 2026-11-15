@@ -99,6 +99,10 @@ on this computer*. *Settings → Desktop app → Accounts* has the same list.
   the app keeps for it stays, and adding it again finds it all. To delete
   that from this computer, open the account and use *Forget this
   computer*.
+* **A server that can't be reached** (down, moved, its address mistyped,
+  or no network): the app says which address it tried, and offers *Try
+  again*, your other accounts and adding one. It never moves to another
+  server by itself.
 
 To take notes from one account to another: export them in one (*Settings
 → Account → Data*), switch, and import them in the other.

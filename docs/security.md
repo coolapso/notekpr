@@ -549,8 +549,8 @@ browser. What it adds to the above:
   name its window last reported, which is only a label beside that
   address. Removing an account asks in a system dialog and only hides it:
   its data stays. The app never moves to another account on a server's
-  word or by itself; the person picks one — or a script in the window,
-  which gains nothing by it.
+  word or by itself (an unreachable server shows the list); the person
+  picks one — or a script in the window, which gains nothing by it.
 * **The Markdown folder** runs the CLI's own sync in the app, with this
   computer's device: the window hands over the device key, the account key
   it was approved for (its pin) and its session — never the account

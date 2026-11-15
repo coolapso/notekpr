@@ -455,6 +455,27 @@ def main():
         a.wait("return ![...document.querySelectorAll('.accounts .account')].some(e => e.textContent.includes(arguments[0]))",
                10, "it to leave the list", shown)
         check(os.path.isdir(f"{desk_data}/{here}/webview/{server_id}"), "removed from the list: what the app keeps for it stays")
+        # ---- a server that can't be reached: which one, and the way out
+        a.quit()
+        gone = uniq("gone")
+        dead = f"http://localhost:{free_port()}"
+        os.makedirs(f"{desk_config}/{gone}")
+        with open(f"{desk_config}/{gone}/settings.json", "w") as f:
+            json.dump({"server": dead}, f)  # as 0.17.0 leaves it: one server
+        a = App(app_bin, gone)
+        a.find_text(".auth-card .cant-reach", f"can't reach {dead}", 20)
+        a.find_text(".auth-card button", "Try again")
+        a.find_text(".accounts .account.open", dead.split("://")[1])
+        check(True, "a server that can't be reached: the app names it, with Try again and the accounts")
+        before = app_pids(gone)
+        keep_here = a.find_text(".auth-card button", "Keep them on this computer", 10)
+        restarting(lambda: a.click_el(keep_here))
+        wait_for("this computer to open", lambda: settings_of(gone).get("this_computer"))
+        kill_restarted(gone, before)
+        a.quit()
+        a = App(app_bin, gone)
+        a.find_text(".auth-card button", "Create my keys", 20)
+        check(len(settings_of(gone)["accounts"]) == 2, "and leads out of it, keeping the account it can't reach")
         print("desktop: all checks passed")
     except Exception:
         if a:

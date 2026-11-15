@@ -193,7 +193,8 @@ download it. More in [Writing notes](writing.md#pictures-video-sound-and-files).
   a folder of plain Markdown files too, for Obsidian, VS Code or any
   editor (*Settings → Desktop app*; [more](own-editor.md)). It can also
   keep your notes [only on that computer](desktop.md#only-on-this-computer),
-  with no server and no account.
+  with no server and no account, and have [accounts](desktop.md#accounts)
+  on several servers: switch between them from the menu behind your name.
 
 ## On your phone
 

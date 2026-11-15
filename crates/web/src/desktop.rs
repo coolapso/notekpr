@@ -47,18 +47,78 @@ pub struct Info {
     pub profile: String,
     /// Where the API is: the server chosen, or the app's own.
     pub server: Option<String>,
-    /// The notes are only on this computer (`server` is the app's own).
+    /// The open account is on this computer (`server` is the app's own).
     #[serde(default)]
     pub this_computer: bool,
-    /// The server chosen last, also while the notes are on this computer.
+    /// The app's accounts (docs/desktop.md "Accounts").
     #[serde(default)]
-    pub chosen_server: Option<String>,
+    pub accounts: Vec<Account>,
     pub close_to_tray: bool,
     /// A tray icon could be shown: closing to it is possible.
     pub tray: bool,
     pub autostart: bool,
     pub status_version: u64,
     pub status: Status,
+}
+
+/// One of the app's accounts: on a server, or on this computer.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Account {
+    pub id: String,
+    /// Its server; none: on this computer.
+    pub server: Option<String>,
+    /// What its window last showed: a label beside the server.
+    pub name: Option<String>,
+    pub open: bool,
+}
+
+impl Account {
+    /// How the list shows it: "ana on notes.example.com", "On this computer".
+    pub fn label(&self) -> String {
+        let Some(server) = &self.server else {
+            return "On this computer".into();
+        };
+        // Normalized by the app: `scheme://host[:port][/path]`.
+        let host = server
+            .split_once("://")
+            .map_or(server.as_str(), |(_, rest)| rest)
+            .split('/')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        match &self.name {
+            Some(n) => format!("{n} on {host}"),
+            None => host,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accounts_as_the_list_shows_them() {
+        let a = |server: Option<&str>, name: Option<&str>| Account {
+            id: "x".into(),
+            server: server.map(Into::into),
+            name: name.map(Into::into),
+            open: false,
+        };
+        assert_eq!(
+            a(Some("https://notes.example.com"), Some("ana")).label(),
+            "ana on notes.example.com"
+        );
+        assert_eq!(
+            a(Some("http://localhost:8099"), None).label(),
+            "localhost:8099"
+        );
+        assert_eq!(
+            a(Some("https://example.com/notes"), Some("bo")).label(),
+            "bo on example.com"
+        );
+        assert_eq!(a(None, Some("ana")).label(), "On this computer");
+    }
 }
 
 #[derive(Deserialize, Clone, Debug, Default, PartialEq)]
@@ -167,9 +227,14 @@ pub fn this_computer() -> bool {
     INFO.with(|i| i.borrow().as_ref().is_some_and(|i| i.this_computer))
 }
 
-/// The server chosen last, to show or go back to.
-pub fn chosen_server() -> Option<String> {
-    INFO.with(|i| i.borrow().as_ref().and_then(|i| i.chosen_server.clone()))
+/// The app's accounts, in the order added.
+pub fn accounts() -> Vec<Account> {
+    INFO.with(|i| {
+        i.borrow()
+            .as_ref()
+            .map(|i| i.accounts.clone())
+            .unwrap_or_default()
+    })
 }
 
 /// Where the notes are, as people read it: the server's address, or
@@ -182,8 +247,8 @@ pub fn place() -> String {
     }
 }
 
-/// Keep the notes only on this computer: the app asks first (when it was
-/// on a server) and starts again.
+/// The account *On this computer*, added if it isn't there yet, and
+/// opened: the app starts again.
 pub async fn use_this_computer() -> Result<(), String> {
     invoke("use_this_computer", json!({})).await
 }
@@ -199,10 +264,28 @@ pub async fn local_session() -> Result<SessionResponse, String> {
     invoke("local_session", json!({})).await
 }
 
-/// Choose the server: the app checks it, asks before replacing another,
-/// and starts again.
-pub async fn set_server(url: &str) -> Result<(), String> {
-    invoke("set_server", json!({ "url": url })).await
+/// Add an account on a server (the app asks first, in a system dialog,
+/// then checks it) and open it: the app starts again.
+pub async fn add_server(url: &str) -> Result<(), String> {
+    invoke("add_server", json!({ "url": url })).await
+}
+
+/// Open another of the app's accounts: the app starts again.
+pub async fn switch_account(id: &str) -> Result<(), String> {
+    invoke("switch_account", json!({ "id": id })).await
+}
+
+/// Take an account off the list (the app asks first); what it keeps for it
+/// stays.
+pub async fn remove_account(id: &str) -> Result<(), String> {
+    invoke("remove_account", json!({ "id": id })).await
+}
+
+/// The open account's name, for the list.
+pub fn account_seen(name: &str) {
+    if is_desktop() {
+        fire("account_seen", json!({ "name": name }));
+    }
 }
 
 /// Sign in through the system browser; ends when the browser came back.

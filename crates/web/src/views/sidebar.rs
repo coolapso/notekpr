@@ -225,6 +225,10 @@ pub fn Sidebar() -> impl IntoView {
                     <SyncStatus/>
                     <Show when=move || user_menu.get()>
                         <div class="menu up" on:click=move |_| user_menu.set(false)>
+                            {crate::desktop::is_desktop().then(|| view! {
+                                <super::accounts::AccountsMenu/>
+                                <div class="menu-sep"></div>
+                            })}
                             <button on:click=move |_| state::navigate(Route::Settings("account".into()))><Icon name="settings"/>" Settings"</button>
                             <button on:click=move |_| state::navigate(Route::Settings("devices".into()))><Icon name="device"/>" Devices"</button>
                             <button on:click=move |_| ui.modal.set(Some(Modal::Help))><Icon name="keyboard"/>" Keyboard shortcuts"</button>

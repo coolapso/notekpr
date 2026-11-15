@@ -398,14 +398,17 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   app's own files; links go to the default browser (`links.rs`).
 - Treat the window as untrusted (an XSS through a note): every IPC command
   must be safe under someone else's script. Files only through the system's
-  picker (the window gets a number, never names a path); the server and the
-  Markdown folder change only after a yes in a system dialog. A new command
+  picker (the window gets a number, never names a path); a new server and a
+  Markdown folder only after a yes in a system dialog (switching between
+  the accounts already added doesn't ask). A new command
   goes into `build.rs` and `capabilities/main.json`, nowhere else.
 - The account secret never crosses IPC: the folder gets the device key and
   the pinned account key, and unwraps the secret itself
   (`notekpr_cli::account::adopt`).
-- The window's storage is per server (`paths.rs`): never let one server's
-  session reach another.
+- The window's storage and the Markdown folder's profile are per account
+  (`paths.rs`): never let one server's session reach another. The app
+  never changes account on a server's word, only when the person picks
+  one.
 - Running it by hand pops a window up: tests use `tests/e2e/desktop.py`
   (headless sway). The `auto-launch` crate writes `~/.config/autostart`
   whatever `XDG_CONFIG_HOME` says: give a test its own `HOME`.

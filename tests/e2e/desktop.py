@@ -96,9 +96,17 @@ class App(wd.Browser):
 
     def find_text(self, css, text, timeout=10):
         # WebKitWebDriver's element text is empty for these: find it in the page.
-        found = wait_for(f"{css} containing {text!r}", lambda: self.js(
-            "return Array.from(document.querySelectorAll(arguments[0])).find(e => e.textContent.includes(arguments[1])) || null",
-            css, text), timeout)
+        def look():
+            try:
+                return self.js(
+                    "return Array.from(document.querySelectorAll(arguments[0])).find(e => e.textContent.includes(arguments[1])) || null",
+                    css, text)
+            except RuntimeError as e:
+                # Re-rendered while it was being handed over: look again.
+                if "stale element" in str(e):
+                    return None
+                raise
+        found = wait_for(f"{css} containing {text!r}", look, timeout)
         return list(found.values())[0]
 
     def route(self, path):
@@ -162,7 +170,18 @@ def main():
                    XDG_DATA_HOME=f"{home}/home/.local/share", NOTEKPR_LOG="info"))
     wait_for("WebKitWebDriver", lambda: _open(wd_port))
 
-    folder_profile = f"{desk_data}/{profile}/folder/config/profiles/folder.json"
+    def settings_of(p):
+        """The app's settings, with its accounts (kept apart, in accounts.json)."""
+        s = json.load(open(f"{desk_config}/{p}/settings.json"))
+        accounts = f"{desk_config}/{p}/accounts.json"
+        if os.path.exists(accounts):
+            s.update(json.load(open(accounts)))
+        return s
+
+    def folder_of(p, account):
+        """An account's Markdown folder's profile (one per account)."""
+        return f"{desk_data}/{p}/folders/{account}/config/profiles/folder.json"
+
     a = None
     try:
         # ---- the server: chosen once, then the app starts again
@@ -174,6 +193,7 @@ def main():
         settings = f"{desk_config}/{profile}/settings.json"
         wait_for("the server to be kept", lambda: os.path.exists(settings) and json.load(open(settings)).get("server") == url)
         check(True, "the server is chosen in the app, which starts again with it")
+        folder_profile = folder_of(profile, settings_of(profile)["account"])
         kill_restarted(profile, before)
         a.quit()
 
@@ -324,7 +344,7 @@ def main():
         os.makedirs(notes)
         here = uniq("here")
         here_settings = f"{desk_config}/{here}/settings.json"
-        here_folder = f"{desk_data}/{here}/folder/config/profiles/folder.json"
+        here_folder = folder_of(here, "this-computer")
         a = App(app_bin, here)
         before = app_pids(here)
         keep_here = a.find_text(".auth-card button", "Keep them on this computer", 20)
@@ -366,7 +386,7 @@ def main():
 
         # ---- the Markdown folder, at the server's new address each start
         a.route("/settings/app")
-        a.find_text(".settings-body .where-notes", "Only on this computer", 10)
+        a.find_text(".accounts .account.open", "On this computer", 10)
         a.click_el(a.find_text(".settings-body button", "Choose a folder", 10))
         wait_for("the folder to sync", lambda: "Keeping" in a.folder_status())
         welcome = f"{notes}/My notes/Welcome.md"
@@ -385,29 +405,56 @@ def main():
         check(json.load(open(here_folder)).get("server") == again,
               "the folder follows the server to its new address, without asking")
 
-        # ---- to the server and back: each keeps its own notes
+        # ---- accounts: one on the server too, each keeping its own
         a.route("/settings/app")
         before = app_pids(here)
-        a.click_el(a.find_text(".settings-body button", "Use a server", 10))
-        restarting(lambda: a.answer(typed=url))
-        wait_for("the server to be chosen", lambda: json.load(open(here_settings)).get("server") == url
-                 and not json.load(open(here_settings)).get("this_computer"))
+        a.click_el(a.find_text(".settings-body button", "Add an account", 10))
+        a.type(".modal input.server-address", url)
+        restarting(lambda: a.click(".modal form.connect button[type=submit]"))
+        wait_for("the server's account to open", lambda: settings_of(here).get("server") == url
+                 and not settings_of(here).get("this_computer"))
         kill_restarted(here, before)
         a.quit()
-        check(not os.path.exists(here_folder), "switching forgets the folder (its files stay)")
+        check(os.path.exists(here_folder), "switching keeps this computer's Markdown folder, for coming back")
         a = App(app_bin, here)
+        name2 = uniq("ines")
         a.find(".dev-box input", 20)
-        check(True, "on the server, the app signs in there")
+        a.type(".dev-box input", name2)
+        a.click(".dev-box button[type=submit]")
+        a.click_el(a.find_text(".auth-card button", "Create my keys", 15))
+        a.find(".recovery-key", 15)
+        a.click(".check input")
+        a.click_el(a.find_text(".auth-card button", "Continue"))
+        a.find(".ed .ln", 20)
+        check(True, "the account on the server: signed in there, with keys of its own")
+        # (Development sign-in names people with a capital.)
+        wait_for("its name in the list", lambda: any(x.get("server") == url and (x.get("name") or "").lower() == name2
+                                                     for x in settings_of(here)["accounts"]))
+        server_id, shown = next((x["id"], x["name"]) for x in settings_of(here)["accounts"] if x.get("server") == url)
+        check(server_id != "this-computer" and len(server_id) > 32, f"a random id of its own ({server_id})")
         before = app_pids(here)
-        a.click_el(a.find_text(".auth-card button", "Use another server", 10))
-        keep_here = a.find_text(".auth-card button", "Keep them on this computer", 10)
-        restarting(lambda: a.click_el(keep_here))
-        wait_for("this computer again", lambda: json.load(open(here_settings)).get("this_computer"))
+        a.click(".user-btn")
+        item = a.find_text(".menu .account-item", "On this computer", 10)
+        restarting(lambda: a.click_el(item))
+        wait_for("this computer again", lambda: settings_of(here).get("this_computer"))
         kill_restarted(here, before)
         a.quit()
         a = App(app_bin, here)
         a.find_text(".tree-item", "Kept here", 20)
-        check(True, "back on this computer, its notes are there")
+        check(True, "switched from the menu behind one's name: this computer's notes, no sign-in")
+        a.route("/settings/app")
+        wait_for("its folder again", lambda: "Keeping" in a.folder_status())
+        check(True, "and its Markdown folder goes on, without asking")
+        a.find_text(".accounts .account", f"{shown} on {url.split('://')[1]}", 10)
+        check(True, "the list names the account on the server")
+
+        # ---- removing an account only hides it
+        a.click_el(a.find_text(".accounts .remove-account", "Remove", 10))
+        wait_for("it to be hidden", lambda: any(x.get("server") == url and x.get("hidden")
+                                                for x in settings_of(here)["accounts"]))
+        a.wait("return ![...document.querySelectorAll('.accounts .account')].some(e => e.textContent.includes(arguments[0]))",
+               10, "it to leave the list", shown)
+        check(os.path.isdir(f"{desk_data}/{here}/webview/{server_id}"), "removed from the list: what the app keeps for it stays")
         print("desktop: all checks passed")
     except Exception:
         if a:

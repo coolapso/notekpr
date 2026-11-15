@@ -107,8 +107,9 @@ impl Dirs {
 /// `notekpr-desktop` in the system's folders for them (XDG on Linux,
 /// `%APPDATA%` / `%LOCALAPPDATA%` on Windows, `~/Library/Application
 /// Support` on macOS). Kept here so the app and the CLI agree: the app keeps
-/// its Markdown folder's CLI profile in `<data>/<app profile>/folder`
-/// ([`desktop_folder_dirs`]), where the CLI looks for the folders it keeps.
+/// each account's Markdown folder's CLI profile in
+/// `<data>/<app profile>/folders/<account>` ([`desktop_folder_dirs`]), where
+/// the CLI looks for the folders it keeps.
 pub fn desktop_roots() -> Result<(PathBuf, PathBuf)> {
     fn system_dir(xdg: &str, windows: &str, fallback: &[&str]) -> Result<PathBuf> {
         if let Some(p) = env_path(xdg) {
@@ -226,9 +227,16 @@ pub fn cli_dirs_outside_sandbox() -> Option<Dirs> {
     })
 }
 
-/// The desktop app's own CLI profile root for an app profile: where its
-/// Markdown folder's sync keeps its session, keys and local copies.
-pub fn desktop_folder_root(data: &Path, app_profile: &str) -> Dirs {
+/// The desktop app's own CLI profile root for an account of an app profile:
+/// where that account's Markdown folder's sync keeps its session, keys and
+/// local copies.
+pub fn desktop_folder_root(data: &Path, app_profile: &str, account: &str) -> Dirs {
+    Dirs::under(&data.join(app_profile).join("folders").join(account))
+}
+
+/// The one an app profile had before the app had accounts (0.17), until
+/// the app moves it to its account's.
+pub fn desktop_legacy_folder_root(data: &Path, app_profile: &str) -> Dirs {
     Dirs::under(&data.join(app_profile).join("folder"))
 }
 
@@ -236,21 +244,35 @@ pub fn desktop_folder_root(data: &Path, app_profile: &str) -> Dirs {
 /// the app profile each belongs to — however the app was installed
 /// ([`desktop_roots_all`]).
 pub fn desktop_folder_dirs() -> Vec<(String, Dirs)> {
+    folder_dirs_in(desktop_roots_all().into_iter().map(|(_, data)| data))
+}
+
+/// [`desktop_folder_dirs`] in these data folders of the app.
+fn folder_dirs_in(roots: impl IntoIterator<Item = PathBuf>) -> Vec<(String, Dirs)> {
     let mut v: Vec<(String, Dirs)> = vec![];
-    for (_, data) in desktop_roots_all() {
+    for data in roots {
         let Ok(rd) = std::fs::read_dir(&data) else {
             continue;
         };
-        v.extend(
-            rd.filter_map(|e| e.ok())
+        let profiles = rd
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str().map(str::to_string))
+            .filter(|n| valid_profile_name(n));
+        for n in profiles {
+            // Every account's on disk, those the app's list hides too.
+            let accounts = std::fs::read_dir(data.join(&n).join("folders"))
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.ok())
                 .filter_map(|e| e.file_name().to_str().map(str::to_string))
-                .filter(|n| valid_profile_name(n))
-                .map(|n| {
-                    let d = desktop_folder_root(&data, &n);
-                    (n, d)
-                })
-                .filter(|(_, d)| d.profiles_dir().exists()),
-        );
+                .map(|a| desktop_folder_root(&data, &n, &a));
+            v.extend(
+                std::iter::once(desktop_legacy_folder_root(&data, &n))
+                    .chain(accounts)
+                    .filter(|d| d.profiles_dir().exists())
+                    .map(|d| (n.clone(), d)),
+            );
+        }
     }
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
@@ -634,6 +656,39 @@ pub fn is_loopback_host(host: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_desktop_account_s_folder_is_found() {
+        use super::*;
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("notekpr-desktop");
+        let made = |d: &Dirs| std::fs::create_dir_all(d.profiles_dir()).unwrap();
+        let old = desktop_legacy_folder_root(&data, "default");
+        let a = desktop_folder_root(&data, "default", "a1");
+        let hidden = desktop_folder_root(&data, "default", "b2");
+        let bob = desktop_folder_root(&data, "bob", "c3");
+        for d in [&old, &a, &hidden, &bob] {
+            made(d);
+        }
+        // An account that never kept a folder: nothing to find.
+        std::fs::create_dir_all(data.join("default/folders/d4")).unwrap();
+        let found: Vec<(String, PathBuf)> = folder_dirs_in([data.clone()])
+            .into_iter()
+            .map(|(n, d)| (n, d.config))
+            .collect();
+        for (n, d) in [
+            ("default", &old),
+            ("default", &a),
+            ("default", &hidden),
+            ("bob", &bob),
+        ] {
+            assert!(
+                found.contains(&(n.to_string(), d.config.clone())),
+                "{n} {d:?}"
+            );
+        }
+        assert_eq!(found.len(), 4);
+    }
+
     use super::*;
 
     #[test]

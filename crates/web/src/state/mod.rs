@@ -264,6 +264,8 @@ pub struct PresenceView {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Modal {
     QuickSwitch,
+    /// The desktop app's accounts, and adding one.
+    Accounts,
     Search(String),
     NewVault,
     Share(String),

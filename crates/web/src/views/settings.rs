@@ -299,7 +299,7 @@ fn Devices() -> impl IntoView {
 }
 
 /// The desktop app's own settings ([`crate::desktop`]): the tray, starting
-/// at login, the Markdown folder and where the notes are.
+/// at login, the Markdown folder and the accounts.
 #[component]
 fn DesktopApp() -> impl IntoView {
     let ui = ui();
@@ -375,36 +375,6 @@ fn DesktopApp() -> impl IntoView {
             }
         });
     };
-    let here = crate::desktop::this_computer();
-    let change_server = move |_| {
-        leptos::task::spawn_local(async move {
-            let typed = ask::input(if here {
-                "Use a server"
-            } else {
-                "Use another server"
-            })
-            .label("The server's address")
-            .value(crate::desktop::chosen_server().unwrap_or_default())
-            .required()
-            .button("Continue")
-            .await;
-            if let Some(url) = typed
-                && let Err(e) = crate::desktop::set_server(url.trim()).await
-                && e != "cancelled"
-            {
-                state::error(e);
-            }
-        });
-    };
-    let use_this_computer = move |_| {
-        leptos::task::spawn_local(async move {
-            if let Err(e) = crate::desktop::use_this_computer().await
-                && e != "cancelled"
-            {
-                state::error(e);
-            }
-        });
-    };
     use crate::desktop::FolderStatus;
     view! {
         <h3>"In the background"</h3>
@@ -455,23 +425,12 @@ fn DesktopApp() -> impl IntoView {
             }.into_any(),
         }}
 
-        <h3>"Where your notes are"</h3>
-        <p class="small where-notes">{if here {
-            "Only on this computer".to_string()
-        } else {
-            format!("On {}", crate::desktop::server().unwrap_or_default())
-        }}</p>
+        <h3>"Accounts"</h3>
+        <p class="muted small">"Each keeps its own sign-in, notes and Markdown folder: pick one to open it, and switching back finds it as it was."</p>
+        <super::accounts::AccountsList/>
         <div class="row">
-            <button class="btn" on:click=change_server>{if here { "Use a server…" } else { "Use another server…" }}</button>
-            {(!here).then(|| view! {
-                <button class="btn use-this-computer" on:click=use_this_computer>"Only on this computer…"</button>
-            })}
+            <button class="btn add-account" on:click=move |_| ui.modal.set(Some(Modal::Accounts))><Icon name="plus"/>" Add an account…"</button>
         </div>
-        <p class="muted small">{if here {
-            "Your notes exist only here: keep a copy, as a Markdown folder (which your backups copy) or an export now and then (Settings → Account)."
-        } else {
-            "Each place keeps its own notes: switching back finds them again. To take notes along, export them (Settings → Account) and import them on the other side."
-        }}</p>
         <h3>"Version"</h3>
         <p class="muted small">{move || info.get().map(|i| format!("notekpr desktop app {}", i.version))}</p>
     }

@@ -74,9 +74,9 @@ impl Local {
             .map_err(|e| format!("{e:#}"))
     }
 
-    /// Stop it, if it started.
+    /// Stop it, if it started; asked again, it starts again.
     pub async fn stop(&self) {
-        let server = self.server.lock().await.clone();
+        let server = self.server.lock().await.take();
         if let Some(server) = server {
             server.stop().await;
         }
@@ -112,6 +112,11 @@ mod tests {
         assert_eq!(info.status(), 200);
         local.stop().await;
         assert!(dir.path().join("this-computer/notekpr.db").exists());
+        // Stopped, it starts again when asked (a switch that failed).
+        local.session().await.unwrap();
+        let info = reqwest::get(format!("{origin}/api/v1/info")).await.unwrap();
+        assert_eq!(info.status(), 200);
+        local.stop().await;
     }
 
     #[tokio::test]

@@ -797,6 +797,10 @@ pub(super) async fn enter_ready() {
     refresh_shares().await;
     connect_socket();
     ui.phase.set(Phase::Ready);
+    // The desktop app's list of accounts shows whose this one is.
+    if let Some(u) = ui.user.get_untracked() {
+        crate::desktop::account_seen(&u.display_name);
+    }
     go_to_last_location();
     refresh_pending_devices().await;
     offline::ensure_worker().await;

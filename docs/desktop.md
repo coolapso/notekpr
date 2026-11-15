@@ -78,7 +78,30 @@ for the app.
    ([Your other devices](getting-started.md#your-other-devices)).
 
 *Settings → Desktop app* holds the app's own settings: the tray, starting
-at login, the Markdown folder and where your notes are.
+at login, the Markdown folder and your [accounts](#accounts).
+
+## Accounts
+
+The app can have several accounts: one on each server you use it with,
+and one [only on this computer](#only-on-this-computer). Click your name
+in the sidebar: *Accounts* lists them, the open one ticked. Pick another
+to switch: the app starts again on it, in a moment. *Add an account…*
+adds a server (the app asks first, in a window of the system's) or *Only
+on this computer*. *Settings → Desktop app → Accounts* has the same list.
+
+* **Each keeps its own**: its sign-in, this computer's keys for it, the
+  encrypted copies of its vaults, its unsent changes and its
+  [Markdown folder](#the-markdown-folder). Switching back finds them as
+  they were, still signed in. Nothing of one account reaches another, and
+  only the open one syncs (its Markdown folder too).
+* **Removing** an account (*Remove*, beside any but the open one and *On
+  this computer*; the app asks first) only takes it off the list: what
+  the app keeps for it stays, and adding it again finds it all. To delete
+  that from this computer, open the account and use *Forget this
+  computer*.
+
+To take notes from one account to another: export them in one (*Settings
+→ Account → Data*), switch, and import them in the other.
 
 ## Only on this computer
 
@@ -105,12 +128,9 @@ Your notes exist only on this computer, so keep a copy: a Markdown folder
 in a `.zip`; imported, they become new vaults, without their history or
 comments).
 
-**One at a time.** The app is either on a server or on this computer.
-*Settings → Desktop app → Where your notes are* switches; each keeps its
-own notes, and switching back finds them again. Switching stops keeping
-the Markdown folder in sync (its files stay): choose one again after,
-best a folder of its own for each. To move your notes to a server, export
-them here, switch to the server, sign in and import the export there.
+It is one of your [accounts](#accounts): switch between it and your
+servers' from the list. To move your notes to a server, export them here,
+add the server's account, sign in and import the export there.
 
 ## The Markdown folder
 
@@ -139,6 +159,10 @@ refuses the app's folder in turn. Until the app can bring notes in, the
 folder must be empty, too; to bring notes from a folder in, use *Import
 notes* in the app or [`notekpr setup`](own-editor.md#coming-from-obsidian).
 
+Each [account](#accounts) has a Markdown folder of its own (two can't
+share one): only the open account's is kept in sync, and switching back to
+an account resumes its folder without asking.
+
 The folder uses this computer's device and the window's sign-in: signing
 out stops it (signing in again resumes it), and *Forget this computer*
 asks whether to forget its keys and copies too (never the files). If this
@@ -162,10 +186,10 @@ The tray's menu: *Open notekpr*, *Open the Markdown folder*, *Settings* and
 
 | What | Where (Linux) |
 |---|---|
-| Its settings (where your notes are, the tray) | `~/.config/notekpr-desktop/default/settings.json` |
-| The window's data (this device's key, encrypted copies of your vaults), one folder per server (`this-computer` for notes only on this computer) | `~/.local/share/notekpr-desktop/default/webview/` |
+| Its settings (the tray, the account open) and its accounts | `~/.config/notekpr-desktop/default/settings.json`, `accounts.json` |
+| The window's data (this device's key, encrypted copies of your vaults), one folder per account (`this-computer` for notes only on this computer) | `~/.local/share/notekpr-desktop/default/webview/` |
 | Only on this computer: the server's data (its database and attachments, encrypted as on any server) | `~/.local/share/notekpr-desktop/default/this-computer/` |
-| The Markdown folder's keys and encrypted copies | `~/.local/share/notekpr-desktop/default/folder/` |
+| The Markdown folders' keys and encrypted copies, one folder per account | `~/.local/share/notekpr-desktop/default/folders/` |
 | Starting at login | `~/.config/autostart/notekpr.desktop` |
 
 What is protected how: [security.md](security.md#local-storage).

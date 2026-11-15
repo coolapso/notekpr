@@ -3,13 +3,14 @@
 //!
 //! * `<config>/notekpr-desktop/<profile>/settings.json`: the server and the
 //!   app's settings ([`crate::settings`]). Nothing secret.
-//! * `<data>/notekpr-desktop/<profile>/webview/`: the window's storage, as a
-//!   browser profile holds the web app's (the device key, IndexedDB copies).
-//! * `<data>/notekpr-desktop/<profile>/folder/`: the Markdown folder's CLI
-//!   profile ([`crate::folder`]): its session, sealed keys, local copies.
+//! * `<data>/notekpr-desktop/<profile>/webview/<account>/`: an account's
+//!   window storage, as a browser profile holds the web app's (the device
+//!   key, IndexedDB copies); `<account>` is its id ([`crate::settings`]).
+//! * `<data>/notekpr-desktop/<profile>/folders/<account>/`: an account's
+//!   Markdown folder's CLI profile ([`crate::folder`]): its session, sealed
+//!   keys, local copies (before accounts: `folder/`).
 //! * `<data>/notekpr-desktop/<profile>/this-computer/`: notes only on this
-//!   computer, the server's data ([`crate::local`]); its window's storage
-//!   is `webview/this-computer`.
+//!   computer, the server's data ([`crate::local`]).
 //!
 //! `<config>` and `<data>` are the XDG base directories on Linux, `%APPDATA%`
 //! and `%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on
@@ -61,6 +62,50 @@ fn own_folders_of(
     Some((tag, args))
 }
 
+/// An account id: a folder's name, nothing that leads elsewhere.
+pub fn valid_account_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id != "none"
+        && !id.starts_with('.')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
+/// The host of `server` as a folder's name may hold it, for people looking
+/// at the folders (nothing depends on it).
+fn host_part(server: &str) -> String {
+    url::Url::parse(server)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_default()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(64)
+        .collect()
+}
+
+/// A new account's id on `server`: its host, then 128 random bits — no
+/// two servers' storage can be made to meet.
+pub fn new_account_id(server: &str) -> String {
+    format!("{}-{}", host_part(server), notekpr_core::random_id())
+}
+
+/// The id of an account from before accounts: the name its window storage
+/// had (its host and 48 bits of its address's hash), so it keeps it.
+pub fn legacy_account_id(server: &str) -> String {
+    use sha2::Digest;
+    let hash = data_encoding::HEXLOWER.encode(&sha2::Sha256::digest(server.as_bytes()));
+    format!("{}-{}", host_part(server), &hash[..12])
+}
+
 #[derive(Clone, Debug)]
 pub struct Paths {
     /// This profile's settings folder.
@@ -89,50 +134,28 @@ impl Paths {
         self.config.join("settings.json")
     }
 
-    /// The window's storage for `server`: one per server, so nothing one
+    /// An account's window storage: one per account, so nothing one
     /// server's session left (its token, device key, copies) is ever sent
-    /// to another.
-    pub fn webview(&self, server: Option<&str>) -> PathBuf {
-        let name = match server {
-            None => "none".to_string(),
-            Some(s) => {
-                use sha2::Digest;
-                let host: String = url::Url::parse(s)
-                    .ok()
-                    .and_then(|u| u.host_str().map(str::to_string))
-                    .unwrap_or_default()
-                    .chars()
-                    .map(|c| {
-                        if c.is_ascii_alphanumeric() || c == '.' {
-                            c
-                        } else {
-                            '-'
-                        }
-                    })
-                    .take(64)
-                    .collect();
-                let hash = data_encoding::HEXLOWER.encode(&sha2::Sha256::digest(s.as_bytes()));
-                format!("{host}-{}", &hash[..12])
-            }
-        };
-        self.data.join("webview").join(name)
+    /// to another. None: before an account was chosen.
+    pub fn webview(&self, account: Option<&str>) -> PathBuf {
+        self.data.join("webview").join(account.unwrap_or("none"))
     }
 
-    /// The window's storage for notes only on this computer (no server's
-    /// name has this form: theirs end in a hash).
-    pub fn webview_here(&self) -> PathBuf {
-        self.data.join("webview").join("this-computer")
+    /// An account's Markdown folder: its CLI profile lives under this root.
+    pub fn folder(&self, account: &str) -> Dirs {
+        notekpr_cli::profile::desktop_folder_root(&self.data_root, &self.profile, account)
+    }
+
+    /// The Markdown folder of before accounts (0.17), until it is moved to
+    /// its account's ([`crate::folder::take_legacy`]).
+    pub fn legacy_folder(&self) -> Dirs {
+        notekpr_cli::profile::desktop_legacy_folder_root(&self.data_root, &self.profile)
     }
 
     /// Notes only on this computer: the database and attachments of the
     /// server inside the app.
     pub fn this_computer(&self) -> PathBuf {
         self.data.join("this-computer")
-    }
-
-    /// The Markdown folder's CLI profile lives under this root.
-    pub fn folder(&self) -> Dirs {
-        notekpr_cli::profile::desktop_folder_root(&self.data_root, &self.profile)
     }
 
     /// Make this profile's data folder readable by this account only
@@ -167,39 +190,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_window_storage_per_server() {
+    fn a_window_storage_and_a_folder_per_account() {
         let p = Paths {
             config: "/c".into(),
             data: "/d".into(),
             profile: "default".into(),
             data_root: "/".into(),
         };
-        let a = p.webview(Some("https://notes.example.com"));
-        let b = p.webview(Some("https://notes.example.com/other"));
-        let c = p.webview(Some("http://localhost:8080"));
-        assert!(a.starts_with("/d/webview"));
-        assert!(
-            a.file_name()
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .starts_with("notes.example.com-")
+        // 0.17.0's names stay: an account from then keeps its storage.
+        let a = legacy_account_id("https://notes.example.com");
+        assert_eq!(a, "notes.example.com-9914ea42e685");
+        assert_ne!(a, legacy_account_id("https://notes.example.com/other"));
+        assert_eq!(
+            p.webview(Some(&a)),
+            PathBuf::from("/d/webview/notes.example.com-9914ea42e685")
         );
-        assert_ne!(a, b);
-        assert_ne!(a, c);
-        assert_eq!(a, p.webview(Some("https://notes.example.com")));
         assert_eq!(p.webview(None), PathBuf::from("/d/webview/none"));
-        // Notes only on this computer: a window's storage of their own,
-        // whatever server the app was on before.
-        let here = p.webview_here();
-        assert_eq!(here, PathBuf::from("/d/webview/this-computer"));
-        for s in [
-            "http://this-computer",
-            "http://127.0.0.1:8080",
-            "https://this-computer/",
-        ] {
-            assert_ne!(p.webview(Some(s)), here);
+        // New accounts: random, even on one server.
+        let n = new_account_id("https://notes.example.com");
+        assert!(n.starts_with("notes.example.com-"));
+        assert_eq!(n.len(), "notes.example.com-".len() + 32);
+        assert_ne!(n, new_account_id("https://notes.example.com"));
+        for id in [&a, &n, crate::settings::THIS_COMPUTER] {
+            assert!(valid_account_id(id), "{id}");
         }
+        for id in ["", "none", ".", "..", "../x", "a/b", ".hidden"] {
+            assert!(!valid_account_id(id), "{id}");
+        }
+        assert_eq!(
+            p.folder("x").config,
+            PathBuf::from("/default/folders/x/config")
+        );
+        assert_eq!(
+            p.legacy_folder().config,
+            PathBuf::from("/default/folder/config")
+        );
         assert_eq!(p.this_computer(), PathBuf::from("/d/this-computer"));
     }
 

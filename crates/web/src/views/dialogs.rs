@@ -144,6 +144,12 @@ pub fn ModalHost() -> impl IntoView {
     view! {
         {move || ui.modal.get().map(|m| match m {
             Modal::QuickSwitch => view! { <QuickSwitch/> }.into_any(),
+            Modal::Accounts => view! {
+                <Dialog title="Accounts">
+                    <super::accounts::AccountsList/>
+                    <super::accounts::AddAccount/>
+                </Dialog>
+            }.into_any(),
             Modal::Search(q) => view! { <SearchDialog initial=q/> }.into_any(),
             Modal::NewVault => view! { <NewVault/> }.into_any(),
             Modal::Share(_) | Modal::ShareNote(..) if crate::desktop::this_computer() => view! {

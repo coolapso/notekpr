@@ -3,7 +3,10 @@
 
 const COMMANDS: &[&str] = &[
     "desktop_info",
-    "set_server",
+    "add_server",
+    "switch_account",
+    "remove_account",
+    "account_seen",
     "use_this_computer",
     "local_start",
     "local_session",

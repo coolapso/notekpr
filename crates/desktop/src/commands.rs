@@ -3,8 +3,10 @@
 //! safe for a window running someone else's script (an XSS through a
 //! note): nothing here reads or writes a file the person didn't choose in
 //! the system's own dialog, starts a program other than the default
-//! browser for a web or mail address, or changes the server or the
-//! Markdown folder without the person's yes in a system dialog.
+//! browser for a web or mail address, adds a server or starts a Markdown
+//! folder without the person's yes in a system dialog. Switching between
+//! accounts already added doesn't ask: the next one's window has storage of
+//! its own.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -78,14 +80,13 @@ async fn confirm(
 pub struct Info {
     pub version: &'static str,
     pub profile: String,
-    /// Where the API is: the server chosen, or with notes only on this
-    /// computer the app's own (`http://127.0.0.1:<port>`).
+    /// Where the API is: the open account's server, or with notes only on
+    /// this computer the app's own (`http://127.0.0.1:<port>`).
     pub server: Option<String>,
-    /// The notes are only on this computer.
+    /// The open account is on this computer.
     pub this_computer: bool,
-    /// The server chosen last, also while the notes are on this computer:
-    /// to show, and to go back to.
-    pub chosen_server: Option<String>,
+    /// The accounts in the list, in the order added.
+    pub accounts: Vec<AccountInfo>,
     pub close_to_tray: bool,
     /// A tray icon could be shown: closing to it is possible.
     pub tray: bool,
@@ -94,16 +95,35 @@ pub struct Info {
     pub status: Status,
 }
 
+#[derive(Serialize)]
+pub struct AccountInfo {
+    pub id: String,
+    /// Its server's address; none: on this computer.
+    pub server: Option<String>,
+    /// What its window last reported (a label).
+    pub name: Option<String>,
+    pub open: bool,
+}
+
 #[tauri::command]
 pub fn desktop_info(app: AppHandle, state: State<'_, Arc<AppState>>) -> Res<Info> {
     let s = state.settings.lock().unwrap().clone();
     let (status_version, status) = state.updates.current();
+    let open = state.open.as_ref().map(|a| a.id.as_str());
     Ok(Info {
         version: notekpr_core::VERSION,
         profile: state.profile.clone(),
         server: state.api_server(),
         this_computer: state.local.is_some(),
-        chosen_server: s.server,
+        accounts: s
+            .visible()
+            .map(|a| AccountInfo {
+                id: a.id.clone(),
+                server: a.server.clone(),
+                name: a.name.clone(),
+                open: Some(a.id.as_str()) == open,
+            })
+            .collect(),
         close_to_tray: s.close_to_tray,
         tray: crate::app::tray_available(),
         autostart: if crate::flatpak::inside() {
@@ -116,12 +136,35 @@ pub fn desktop_info(app: AppHandle, state: State<'_, Arc<AppState>>) -> Res<Info
     })
 }
 
-/// Choose the server: checked here (it must answer as a notekpr server
-/// that apps can sign in to), remembered, then the app starts again so the
-/// window's Content-Security-Policy allows it.
+/// Add an account on a server, then open it: asked in a system dialog
+/// before the app contacts the address at all (but the first time, when
+/// there is no account yet), then checked (it must answer as a notekpr
+/// server apps can sign in to). A server the app has an account on already
+/// opens that account (back in the list if it was removed).
 #[tauri::command]
-pub async fn set_server(app: AppHandle, state: State<'_, Arc<AppState>>, url: String) -> Res<()> {
+pub async fn add_server(app: AppHandle, state: State<'_, Arc<AppState>>, url: String) -> Res<()> {
     let server = notekpr_cli::profile::normalize_server_url(&url, false).map_err(chain)?;
+    let known = state.settings.lock().unwrap().find(Some(&server)).cloned();
+    if let Some(a) = known {
+        return open_account(&app, &state, &a.id).await;
+    }
+    if state.open.is_some() {
+        let text = format!(
+            "notekpr will add an account on {server} and open it: you sign in there. Your other accounts stay \
+             as they are, on this computer."
+        );
+        if !confirm(
+            &app,
+            MessageDialogKind::Info,
+            "Add an account?",
+            &text,
+            "Add the account",
+        )
+        .await
+        {
+            return Err("cancelled".into());
+        }
+    }
     let info = Api::new(&server, Credentials::None)
         .map_err(text)?
         .info()
@@ -136,104 +179,161 @@ pub async fn set_server(app: AppHandle, state: State<'_, Arc<AppState>>, url: St
             info.version
         ));
     }
-    let before = state.settings.lock().unwrap().clone();
-    if before.remote() == Some(server.as_str()) {
-        return Ok(());
-    }
-    if before.chosen() {
-        let text = if before.this_computer {
-            format!(
-                "notekpr will use {server} instead of keeping your notes only on this computer: you sign in \
-                 there. Your notes on this computer stay here for when you come back to them.{}",
-                folder_stops(&state)
-            )
-        } else {
-            let before = before.server.as_deref().unwrap_or_default();
-            format!(
-                "notekpr will use {server} instead of {before}: you sign in there. What the app keeps for \
-                 {before} stays on this computer for when you come back to it.{}",
-                folder_stops(&state)
-            )
-        };
-        if !confirm(
-            &app,
-            MessageDialogKind::Info,
-            "Change the server?",
-            &text,
-            "Change the server",
-        )
-        .await
-        {
-            return Err("cancelled".into());
-        }
-    }
-    switch(&app, &state, |s| {
-        s.server = Some(server);
-        s.this_computer = false;
-    })
-    .await
+    let id = {
+        let mut s = state.settings.lock().unwrap();
+        // Used with 0.17.0: its window storage, under the name it had then.
+        let legacy = crate::paths::legacy_account_id(&server);
+        let old = s.get(&legacy).is_none() && state.paths.webview(Some(&legacy)).is_dir();
+        s.add(Some(server.clone()), || {
+            if old {
+                legacy
+            } else {
+                crate::paths::new_account_id(&server)
+            }
+        })
+    };
+    open_account(&app, &state, &id).await
 }
 
-/// Keep the notes only on this computer, with the server inside the app
-/// ([`crate::local`]): asked in a system dialog when the app was on a
-/// server, then the app starts again.
+/// Keep notes only on this computer, with the server inside the app
+/// ([`crate::local`]): the account *On this computer*, added if it isn't
+/// there yet, opened. No server is involved, so nothing to confirm.
 #[tauri::command]
 pub async fn use_this_computer(app: AppHandle, state: State<'_, Arc<AppState>>) -> Res<()> {
-    let before = state.settings.lock().unwrap().clone();
-    if before.this_computer {
+    let id = state.settings.lock().unwrap().add(None, || unreachable!());
+    open_account(&app, &state, &id).await
+}
+
+/// Open another account in the list: the app starts again on it. Not asked
+/// (a script that switches gains nothing: the next account's window has
+/// storage of its own).
+#[tauri::command]
+pub async fn switch_account(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Res<()> {
+    let listed = state
+        .settings
+        .lock()
+        .unwrap()
+        .get(&id)
+        .is_some_and(|a| !a.hidden);
+    if !listed {
+        return Err("no such account".into());
+    }
+    open_account(&app, &state, &id).await
+}
+
+/// Take an account off the list, after a yes in a system dialog: what the
+/// app keeps for it stays. Never the open one, nor *On this computer*.
+#[tauri::command]
+pub async fn remove_account(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    id: String,
+) -> Res<()> {
+    let Some(a) = state.settings.lock().unwrap().get(&id).cloned() else {
+        return Err("no such account".into());
+    };
+    let Some(server) = a
+        .server
+        .clone()
+        .filter(|_| state.open.as_ref().map(|o| &o.id) != Some(&id))
+    else {
+        return Err("this account can't be removed".into());
+    };
+    let who = match &a.name {
+        Some(n) => format!("{n} on {server}"),
+        None => server.clone(),
+    };
+    let text = format!(
+        "{who} leaves the list. What the app keeps for it stays on this computer: adding the account again \
+         finds it all."
+    );
+    if !confirm(
+        &app,
+        MessageDialogKind::Info,
+        "Remove the account?",
+        &text,
+        "Remove",
+    )
+    .await
+    {
+        return Err("cancelled".into());
+    }
+    if state.switching.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("notekpr is switching accounts".into());
+    }
+    let mut s = state.settings.lock().unwrap();
+    s.hide(&id);
+    s.save(&state.paths.settings_file()).map_err(chain)
+}
+
+/// The name the open account's window shows (its person's), kept beside
+/// the account in the list: a label, never anything the app acts on.
+#[tauri::command]
+pub fn account_seen(state: State<'_, Arc<AppState>>, name: String) -> Res<()> {
+    let Some(open) = &state.open else {
+        return Ok(());
+    };
+    if state.switching.load(std::sync::atomic::Ordering::SeqCst) {
         return Ok(());
     }
-    if let Some(server) = &before.server {
-        let text = format!(
-            "notekpr will keep your notes only on this computer, with no server and no account, instead of \
-             on {server}. Your notes on {server} stay there, and what the app keeps for it stays on this \
-             computer for when you come back to it.{}",
-            folder_stops(&state)
-        );
-        if !confirm(
-            &app,
-            MessageDialogKind::Info,
-            "Keep notes only on this computer?",
-            &text,
-            "Only on this computer",
-        )
-        .await
-        {
-            return Err("cancelled".into());
-        }
+    let name: String = name
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(100)
+        .collect();
+    let mut s = state.settings.lock().unwrap();
+    let Some(a) = s.accounts.iter_mut().find(|a| a.id == open.id) else {
+        return Ok(());
+    };
+    let name = Some(name).filter(|n| !n.is_empty());
+    if a.name == name {
+        return Ok(());
     }
-    switch(&app, &state, |s| s.this_computer = true).await
+    a.name = name;
+    s.save(&state.paths.settings_file()).map_err(chain)
 }
 
-/// What a switch says about the Markdown folder, if there is one.
-fn folder_stops(state: &AppState) -> String {
-    match state.folder.configured() {
-        Some(dir) => format!(
-            "\n\nThe app stops keeping {} in sync (the files stay): choose a folder again after.",
-            notekpr_cli::setup::shown(&dir)
-        ),
-        None => String::new(),
+/// Open account `id` (in the list): its Markdown folder and the app's own
+/// server stop as when quitting, the settings say so, and the app starts
+/// again with that account's window storage and Content-Security-Policy.
+/// One switch only: nothing about accounts changes once it began.
+async fn open_account(app: &AppHandle, state: &AppState, id: &str) -> Res<()> {
+    if state.open.as_ref().is_some_and(|a| a.id == id) {
+        return Ok(());
     }
-}
-
-/// Where the notes are changes: the folder, which belonged to the place
-/// before, is forgotten; the app's own server stops; the app starts again
-/// with the window's storage and Content-Security-Policy for the new place.
-async fn switch(
-    app: &AppHandle,
-    state: &AppState,
-    change: impl FnOnce(&mut crate::settings::Settings),
-) -> Res<()> {
-    let chosen = state.settings.lock().unwrap().chosen();
-    if chosen {
-        state.folder.forget().await.map_err(chain)?;
-    }
+    if state
+        .switching
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
     {
-        let mut s = state.settings.lock().unwrap();
-        change(&mut s);
-        s.save(&state.paths.settings_file()).map_err(chain)?;
+        return Err("notekpr is switching accounts".into());
     }
     state.stop().await;
+    let saved = {
+        let mut s = state.settings.lock().unwrap();
+        let before = s.clone();
+        s.open(id);
+        let saved = s.save(&state.paths.settings_file());
+        if saved.is_err() {
+            *s = before;
+        }
+        saved
+    };
+    if let Err(e) = saved {
+        // Still on this account: what it runs goes on.
+        state
+            .switching
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        if let Some(local) = &state.local {
+            let _ = local.start().await;
+        }
+        let _ = state.folder.start().await;
+        return Err(chain(e));
+    }
     app.restart();
 }
 
@@ -262,11 +362,9 @@ pub async fn local_session(state: State<'_, Arc<AppState>>) -> Res<SessionRespon
 #[tauri::command]
 pub async fn sign_in(app: AppHandle, state: State<'_, Arc<AppState>>) -> Res<SessionResponse> {
     let server = state
-        .settings
-        .lock()
-        .unwrap()
-        .remote()
-        .map(str::to_string)
+        .open
+        .as_ref()
+        .and_then(|a| a.server.clone())
         .ok_or("there is no server to sign in to")?;
     let (cancel_tx, cancel) = oneshot::channel();
     if let Some(previous) = state.sign_in.lock().unwrap().replace(cancel_tx) {

@@ -32,20 +32,20 @@ pub fn Fatal(msg: String) -> impl IntoView {
             <h1>"Something went wrong"</h1>
             <p class="muted">{msg}</p>
             <button class="btn primary" on:click=move |_| { let _ = util::window().location().reload(); }>"Try again"</button>
-            <UseAServer/>
+            <AccountsButton/>
         </Card>
     }
 }
 
 /// Notes only on this computer, and stuck before they open (they can't be
-/// opened, or the keys are gone without the recovery key): the way to a
-/// server instead, which the app asks about in a system dialog. The notes
-/// here stay.
+/// opened, or the keys are gone without the recovery key): the way to the
+/// app's other accounts, or a new one ([`Connect`]). Nothing moves by
+/// itself.
 #[component]
-fn UseAServer() -> impl IntoView {
+fn AccountsButton() -> impl IntoView {
     crate::desktop::this_computer().then(|| {
         view! {
-            <button class="btn ghost use-a-server" on:click=move |_| ui().phase.set(Phase::Connect { error: None })>"Use a server instead"</button>
+            <button class="btn ghost accounts-button" on:click=move |_| ui().phase.set(Phase::Connect { error: None })>"Accounts"</button>
         }
     })
 }
@@ -160,7 +160,7 @@ pub fn Login(error: Option<String>) -> impl IntoView {
             {desktop.then(|| view! {
                 <p class="small muted desktop-server">
                     {crate::desktop::server().map(|s| format!("On {s} · "))}
-                    <button class="btn small ghost" on:click=move |_| ui.phase.set(Phase::Connect { error: None })>"Use another server"</button>
+                    <button class="btn small ghost accounts-button" on:click=move |_| ui.phase.set(Phase::Connect { error: None })>"Accounts"</button>
                 </p>
             })}
         </Card>
@@ -203,74 +203,31 @@ fn OnThisComputer(error: Option<String>) -> impl IntoView {
                 <h1>"Your notes on this computer"</h1>
                 <div class="alert error">{move || failed.get()}</div>
                 <button class="btn primary" on:click=move |_| open()>"Try again"</button>
-                <UseAServer/>
+                <AccountsButton/>
             </Card>
         </Show>
     }
 }
 
-/// The desktop app's first screen: where the notes are — on a server
-/// ([`crate::desktop::set_server`]; the app checks it and starts again), or
-/// only on this computer ([`crate::desktop::use_this_computer`]).
+/// The desktop app's accounts screen ([`super::accounts`]): the first
+/// screen while there is none yet (where the notes are: on a server, or
+/// only on this computer), else the list and adding one.
 #[component]
 pub fn Connect(error: Option<String>) -> impl IntoView {
-    let ui = ui();
-    let here = crate::desktop::this_computer();
-    let chosen = crate::desktop::chosen_server();
-    let url = RwSignal::new(chosen.clone().unwrap_or_default());
-    let busy = RwSignal::new(false);
-    let err = RwSignal::new(error);
-    let had = here || chosen.is_some();
-    let local = move |_| {
-        busy.set(true);
-        err.set(None);
-        leptos::task::spawn_local(async move {
-            // The app starts again, on this computer.
-            match crate::desktop::use_this_computer().await {
-                Ok(()) => ui.phase.set(Phase::SignedOut { error: None }),
-                Err(e) if e == "cancelled" => {}
-                Err(e) => err.set(Some(e)),
-            }
-            busy.set(false);
-        });
-    };
-    let submit = move |ev: leptos::ev::SubmitEvent| {
-        ev.prevent_default();
-        let u = url.get_untracked();
-        if u.trim().is_empty() {
-            return;
-        }
-        busy.set(true);
-        err.set(None);
-        leptos::task::spawn_local(async move {
-            // A new server starts the app again; the same one changes nothing.
-            match crate::desktop::set_server(u.trim()).await {
-                Ok(()) => ui.phase.set(Phase::SignedOut { error: None }),
-                Err(e) if e == "cancelled" => {}
-                Err(e) => err.set(Some(e)),
-            }
-            busy.set(false);
-        });
-    };
+    let first = crate::desktop::accounts().is_empty();
     view! {
         <Card>
-            <h1>"Where are your notes?"</h1>
-            {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
-            <h2>"On a notekpr server"</h2>
-            <p class="muted">"The address you open notekpr at in a browser. Your notes reach your other devices, and you can share them."</p>
-            <form class="connect" on:submit=submit>
-                <input class="input server-address" type="url" inputmode="url" placeholder="https://notes.example.com"
-                    use:focus_on_mount prop:value=move || url.get() on:input=move |ev| url.set(event_target_value(&ev))/>
-                <button class="btn primary" type="submit" disabled=move || busy.get()>"Connect"</button>
-            </form>
-            <div class="divider"><span>"or"</span></div>
-            <h2>"Only on this computer"</h2>
-            <p class="muted">"No server and no account: your notes stay on this computer, encrypted. Other devices and sharing need a server."</p>
-            <button class="btn this-computer" disabled=move || busy.get() || here on:click=local>
-                {if here { "Your notes are on this computer" } else { "Keep them on this computer" }}
-            </button>
-            {had.then(|| view! {
-                <button class="btn ghost" on:click=move |_| ui.phase.set(Phase::SignedOut { error: None })>"Back"</button>
+            <h1>{if first { "Where are your notes?" } else { "Accounts" }}</h1>
+            {error.map(|e| view! { <div class="alert error">{e}</div> })}
+            {(!first).then(|| view! {
+                <super::accounts::AccountsList/>
+                <h2>"Add an account"</h2>
+            })}
+            <super::accounts::AddAccount first/>
+            // Back: the open account again, from the start (its server
+            // asked again, its session found again).
+            {(!first).then(|| view! {
+                <button class="btn ghost" on:click=move |_| { let _ = util::window().location().reload(); }>"Back"</button>
             })}
         </Card>
     }
@@ -474,7 +431,7 @@ pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl 
             {(!here).then(|| view! {
                 <button class="btn ghost" on:click=move |_| leptos::task::spawn_local(state::sign_out())>"Sign out"</button>
             })}
-            <UseAServer/>
+            <AccountsButton/>
         </Card>
     }
 }

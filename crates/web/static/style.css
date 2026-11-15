@@ -1394,3 +1394,12 @@ img.entry-pic { width: 16px; height: 16px; border-radius: 3px; object-fit: cover
 .drawing-thumb img { max-width: 100%; max-height: 100%; }
 .drawing-name { font-weight: 500; }
 .drawing-folder { margin-top: -4px; }
+
+/* The desktop app's accounts (views/accounts.rs). */
+.accounts { list-style: none; margin: 8px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.accounts .account { display: flex; align-items: center; gap: 6px; }
+.accounts .account-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: none; color: inherit; cursor: pointer; text-align: left; font: inherit; }
+.accounts .account-open:hover:not(:disabled) { background: var(--bg-2); }
+.accounts .account.open .account-open { cursor: default; border-color: var(--accent); }
+.menu .menu-head { padding: 4px 9px 2px; }
+.menu button.account-item.open { font-weight: 600; }

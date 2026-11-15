@@ -303,6 +303,10 @@ notes](writing.md) and [Drawings](drawings.md).
   no account, everything else as on a server (vaults, history, comments,
   drawings, attachments, the Markdown folder); export to move them to a
   server later ([only on this computer](desktop.md#only-on-this-computer)).
+* Accounts in the desktop app: one on each server you use it with, and one
+  only on that computer, switched from the menu behind your name; each keeps
+  its own sign-in, notes and Markdown folder. A server that can't be reached
+  shows the list ([accounts](desktop.md#accounts)).
 * A command-line client (CLI) with a local encrypted copy, live sync, and a
   two-way folder of plain Markdown files for Obsidian, Neovim, VS Code or
   anything else ([how](own-editor.md)), for scripts, agents and computers

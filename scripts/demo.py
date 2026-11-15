@@ -447,7 +447,7 @@ HOME = [
         - [ ] Settings → AI agents: the *Home assistant* agent, which writes in *Assistant*
         - [ ] Your notes as plain Markdown files, synced both ways: `task demo:cli -- --profile alice sync --dir /tmp/alice-notes`
         - [ ] The desktop app (Linux): `task desktop -- --profile demo`, choose `http://localhost:8099` and sign in as **alice** — its own device, so approve it here. Settings → *Desktop app*: start at login, close to the tray (if your desktop has one), and a Markdown folder kept in sync by the app itself: edit a file, and the note changes here
-        - [ ] Notes without a server: `task desktop -- --profile solo` and choose *Only on this computer* on its first screen — no sign-in, straight to your keys. Everything works but what needs other people or devices (*Share vault* says so); Settings → *Desktop app* → *Where your notes are* switches to this demo and back, each keeping its own notes
+        - [ ] Notes without a server: `task desktop -- --profile solo` and choose *Only on this computer* on its first screen — no sign-in, straight to your keys. Everything works but what needs other people or devices (*Share vault* says so); add this demo too from the menu behind your name (*Add an account…*, `http://localhost:8099`), sign in as **alice**, and switch between the two there, each keeping its own notes and Markdown folder
 
         ## Map of this vault
 

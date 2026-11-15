@@ -17,14 +17,21 @@ use crate::folder::Folder;
 use crate::links;
 use crate::local::Local;
 use crate::paths::Paths;
-use crate::settings::Settings;
+use crate::settings::{Account, Settings};
 use crate::status::Updates;
 
 pub struct AppState {
     pub profile: String,
     pub paths: Paths,
     pub settings: Mutex<Settings>,
+    /// The open account, fixed when the app starts (none: not chosen yet):
+    /// opening another starts the app again.
+    pub open: Option<Account>,
+    /// Set once a switch to another account began: nothing about accounts
+    /// changes after it.
+    pub switching: std::sync::atomic::AtomicBool,
     pub updates: Arc<Updates>,
+    /// The open account's Markdown folder.
     pub folder: Folder,
     /// Notes only on this computer: the server inside the app. Decided at
     /// start, as the server is (switching starts the app again).
@@ -100,7 +107,7 @@ impl AppState {
     pub fn api_server(&self) -> Option<String> {
         match &self.local {
             Some(local) => Some(local.origin().to_string()),
-            None => self.settings.lock().unwrap().remote().map(str::to_string),
+            None => self.open.as_ref().and_then(|a| a.server.clone()),
         }
     }
 
@@ -240,23 +247,29 @@ fn download_path(downloads: &std::path::Path, suggested: &std::path::Path) -> Pa
 pub fn run(args: Args) -> Result<()> {
     let paths = Paths::for_profile(&args.profile)?;
     paths.private_data()?;
-    let settings = Settings::load(&paths.settings_file())?;
+    let loaded = Settings::load(&paths.settings_file())?;
+    // The open account (an older file becomes a list of one); written once
+    // this is the only copy of the app (`setup`).
+    let mut settings = loaded.clone();
+    let open = settings.settle(crate::paths::legacy_account_id);
+    let settled = settings != loaded;
     // Notes only on this computer: the app's own server, its address taken
     // now (it starts once this is the only copy of the app: `setup`).
-    let local = if settings.this_computer {
-        Some(Local::bind(paths.this_computer())?)
-    } else {
-        None
+    let local = match &open {
+        Some(a) if a.server.is_none() => Some(Local::bind(paths.this_computer())?),
+        _ => None,
     };
-    let (webview_dir, api_server) = match &local {
-        Some(local) => (paths.webview_here(), Some(local.origin().to_string())),
-        None => (
-            paths.webview(settings.server.as_deref()),
-            settings.server.clone(),
-        ),
+    let webview_dir = paths.webview(open.as_ref().map(|a| a.id.as_str()));
+    let api_server = match &local {
+        Some(local) => Some(local.origin().to_string()),
+        None => open.as_ref().and_then(|a| a.server.clone()),
     };
     let updates = Arc::new(Updates::default());
-    let folder = Folder::new(paths.folder(), updates.clone());
+    let folder = Folder::new(
+        paths.folder(open.as_ref().map_or("none", |a| a.id.as_str())),
+        api_server.clone(),
+        updates.clone(),
+    );
 
     let mut context = tauri::generate_context!();
     context.config_mut().app.security.csp = Some(Csp::Policy(csp(api_server.as_deref())));
@@ -300,6 +313,8 @@ pub fn run(args: Args) -> Result<()> {
         profile: args.profile.clone(),
         paths: paths.clone(),
         settings: Mutex::new(settings),
+        open,
+        switching: Default::default(),
         updates,
         folder,
         local,
@@ -322,7 +337,10 @@ pub fn run(args: Args) -> Result<()> {
         .manage(state.clone())
         .invoke_handler(tauri::generate_handler![
             crate::commands::desktop_info,
-            crate::commands::set_server,
+            crate::commands::add_server,
+            crate::commands::switch_account,
+            crate::commands::remove_account,
+            crate::commands::account_seen,
             crate::commands::use_this_computer,
             crate::commands::local_start,
             crate::commands::local_session,
@@ -416,6 +434,25 @@ pub fn run(args: Args) -> Result<()> {
             // on this computer, at the app's own server's new address,
             // once it runs.
             let state = handle.state::<Arc<AppState>>().inner().clone();
+            if settled {
+                let s = state.settings.lock().unwrap();
+                if let Err(e) = s.save(&state.paths.settings_file()) {
+                    tracing::warn!("couldn't keep the accounts list: {e:#}");
+                }
+            }
+            // The Markdown folder from before accounts, if it is the open
+            // account's.
+            if let Some(a) = &state.open {
+                match crate::folder::take_legacy(
+                    &state.paths.legacy_folder(),
+                    &state.paths.folder(&a.id),
+                    a.server.as_deref(),
+                ) {
+                    Ok(true) => tracing::info!("the Markdown folder is the open account's now"),
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!("the Markdown folder from before accounts: {e:#}"),
+                }
+            }
             let followed = match &state.local {
                 Some(local) => state.folder.follow_server(local.origin()),
                 None => Ok(()),

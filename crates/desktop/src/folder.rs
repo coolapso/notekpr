@@ -4,6 +4,8 @@
 //! profiles. It uses this computer's device and the window's session,
 //! handed over once ([`notekpr_cli::account::adopt`]), and keeps running
 //! while the window is hidden; at the next start it runs from what it kept.
+//! One per account ([`crate::paths::Paths::folder`]): only the open
+//! account's runs, and only for the server that account is on.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,7 +16,7 @@ use notekpr_cli::account::{self, Adopt};
 use notekpr_cli::api::{Api, Credentials};
 use notekpr_cli::hub::{Hub, HubOptions};
 use notekpr_cli::mirror::{Mirror, MirrorOptions};
-use notekpr_cli::profile::{Dirs, ProfileLock, ProfileStore};
+use notekpr_cli::profile::{Dirs, Profile, ProfileLock, ProfileStore};
 use notekpr_cli::session::Session;
 use notekpr_cli::{livesync, setup};
 use tokio::sync::{Mutex, watch};
@@ -36,8 +38,63 @@ struct Running {
 
 pub struct Folder {
     dirs: Dirs,
+    /// The server its account is on (with notes only on this computer, the
+    /// app's own): a profile kept for another never runs here.
+    server: Option<String>,
     updates: Arc<Updates>,
     running: Mutex<Option<Running>>,
+}
+
+/// Whether two addresses are one server's, as the CLI writes them.
+fn same_server(a: &str, b: &str) -> bool {
+    let n = |s: &str| notekpr_cli::profile::normalize_server_url(s, true).ok();
+    n(a).is_some() && n(a) == n(b)
+}
+
+/// The app's own server's address, as notes only on this computer keep it
+/// (`http://127.0.0.1:<port>`).
+fn is_own_server(s: &str) -> bool {
+    url::Url::parse(s)
+        .is_ok_and(|u| u.scheme() == "http" && u.host_str() == Some("127.0.0.1") && u.path() == "/")
+}
+
+/// Before accounts (0.17.0) the app kept one Markdown folder per app
+/// profile (`legacy`). At the first start since, it becomes the open
+/// account's (`target`), if it was kept for that account's server (only on
+/// this computer, `server` none: the app's own); otherwise, or if that
+/// account has one already, it stays where it was. True if it moved. Call
+/// it once this is the only copy of the app running.
+pub fn take_legacy(legacy: &Dirs, target: &Dirs, server: Option<&str>) -> Result<bool> {
+    let (Some(from), Some(to)) = (legacy.config.parent(), target.config.parent()) else {
+        return Ok(false);
+    };
+    if !legacy.profiles_dir().exists() {
+        return Ok(false);
+    }
+    let Some(p) = ProfileStore::new(legacy, PROFILE)?.load()? else {
+        return Ok(false);
+    };
+    let belongs = match server {
+        Some(s) => same_server(&p.server, s),
+        None => is_own_server(&p.server),
+    };
+    if !belongs {
+        tracing::warn!(
+            "the Markdown folder from before accounts was kept for another server than the open account's: left where it was"
+        );
+        return Ok(false);
+    }
+    if to.exists() {
+        tracing::warn!(
+            "the open account has a Markdown folder already: the one from before accounts is left where it was"
+        );
+        return Ok(false);
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(from, to).context("moving the Markdown folder's profile to its account")?;
+    Ok(true)
 }
 
 /// What a folder may become a Markdown folder: refused folders say why.
@@ -52,12 +109,20 @@ pub struct Check {
 }
 
 impl Folder {
-    pub fn new(dirs: Dirs, updates: Arc<Updates>) -> Folder {
+    pub fn new(dirs: Dirs, server: Option<String>, updates: Arc<Updates>) -> Folder {
         Folder {
             dirs,
+            server,
             updates,
             running: Mutex::new(None),
         }
+    }
+
+    /// Whether `p` was kept for this account's server.
+    fn belongs(&self, p: &Profile) -> bool {
+        self.server
+            .as_deref()
+            .is_some_and(|s| same_server(&p.server, s))
     }
 
     fn store(&self) -> Result<ProfileStore> {
@@ -114,6 +179,13 @@ impl Folder {
     /// Hand over the window's device and session (see the module docs),
     /// remember `dir` and start keeping it in sync.
     pub async fn adopt_and_start(&self, a: Adopt, dir: PathBuf) -> Result<()> {
+        if !self
+            .server
+            .as_deref()
+            .is_some_and(|s| same_server(&a.server, s))
+        {
+            bail!("the folder is this account's: its server only");
+        }
         let mut running = self.running.lock().await;
         self.stop_locked(&mut running).await;
         // Another account (or server) than the folder had: start afresh.
@@ -151,6 +223,21 @@ impl Folder {
         // Still running: nothing to do. One that stopped on its own (its
         // error shown) starts again.
         if running.as_ref().is_some_and(|r| !r.task.is_finished()) {
+            return Ok(());
+        }
+        if let Some(p) = self.store()?.load()?
+            && !self.belongs(&p)
+        {
+            let error = format!(
+                "this folder was kept for {}, not this account's server: stop it here",
+                p.server
+            );
+            self.updates.update(|s| {
+                s.folder = FolderStatus::Stopped {
+                    dir: setup::shown(&dir),
+                    error,
+                }
+            });
             return Ok(());
         }
         // A remembered folder that is gone is never re-created: every note
@@ -229,6 +316,9 @@ impl Folder {
         let Some(p) = store.load()? else {
             return Ok(());
         };
+        if !self.belongs(&p) {
+            bail!("the folder was kept for another server");
+        }
         let (Some(user), Some(device)) = (p.user_id.clone(), p.device_id.clone()) else {
             return Ok(());
         };
@@ -289,7 +379,10 @@ impl Folder {
     /// else of the folder.
     pub fn follow_server(&self, origin: &str) -> Result<()> {
         let store = self.store()?;
-        if store.load()?.is_some_and(|p| p.server != origin) {
+        if store
+            .load()?
+            .is_some_and(|p| p.server != origin && is_own_server(&p.server))
+        {
             store.update(|p| p.server = origin.to_string())?;
         }
         Ok(())
@@ -425,7 +518,11 @@ mod tests {
     #[test]
     fn follows_the_app_s_own_server_to_its_new_port() {
         let tmp = tempfile::tempdir().unwrap();
-        let folder = Folder::new(Dirs::under(tmp.path()), Arc::new(Updates::default()));
+        let folder = Folder::new(
+            Dirs::under(tmp.path()),
+            Some("http://127.0.0.1:52002".into()),
+            Arc::new(Updates::default()),
+        );
         // No folder yet: nothing to follow, nothing made.
         folder.follow_server("http://127.0.0.1:41001").unwrap();
         assert!(folder.store().unwrap().load().unwrap().is_none());
@@ -444,5 +541,64 @@ mod tests {
         assert_eq!(p.device_id.as_deref(), Some("d1"));
         assert_eq!(p.session_token.as_deref(), Some("t"));
         assert_eq!(folder.configured(), Some(tmp.path().join("Notes")));
+    }
+
+    fn kept(dirs: &Dirs, server: &str) {
+        let mut p = Profile::new(server, PrincipalKind::Human, false);
+        p.user_id = Some("u1".into());
+        ProfileStore::new(dirs, PROFILE).unwrap().save(&p).unwrap();
+    }
+
+    #[test]
+    fn the_folder_from_before_accounts_goes_to_its_own_account_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = Dirs::under(&tmp.path().join("folder"));
+        let to = |id: &str| Dirs::under(&tmp.path().join("folders").join(id));
+        // Kept for another server than the open account's: stays.
+        kept(&legacy, "https://a.example.com");
+        assert!(!take_legacy(&legacy, &to("b"), Some("https://b.example.com")).unwrap());
+        assert!(!take_legacy(&legacy, &to("here"), None).unwrap());
+        assert!(legacy.profiles_dir().exists());
+        // Its own: moved, with everything it kept.
+        assert!(take_legacy(&legacy, &to("a"), Some("https://a.example.com/")).unwrap());
+        assert!(!legacy.profiles_dir().exists());
+        let p = ProfileStore::new(&to("a"), PROFILE)
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.user_id.as_deref(), Some("u1"));
+        // Nothing left: nothing to do.
+        assert!(!take_legacy(&legacy, &to("a"), Some("https://a.example.com")).unwrap());
+        // Only on this computer: the app's own server's.
+        kept(&legacy, "http://127.0.0.1:41001");
+        assert!(!take_legacy(&legacy, &to("x"), Some("https://a.example.com")).unwrap());
+        assert!(take_legacy(&legacy, &to("this-computer"), None).unwrap());
+        // An account with a folder already keeps it.
+        kept(&legacy, "https://a.example.com");
+        assert!(!take_legacy(&legacy, &to("a"), Some("https://a.example.com")).unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_folder_runs_only_for_its_account_s_server() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = Dirs::under(&tmp.path().join("folders/b"));
+        let notes = tmp.path().join("Notes");
+        std::fs::create_dir(&notes).unwrap();
+        let mut p = Profile::new("https://a.example.com", PrincipalKind::Human, false);
+        p.user_id = Some("u1".into());
+        p.session_token = Some("t".into());
+        p.sync.mirror_dir = Some(notes);
+        ProfileStore::new(&dirs, PROFILE).unwrap().save(&p).unwrap();
+        let updates = Arc::new(Updates::default());
+        let folder = Folder::new(dirs, Some("https://b.example.com".into()), updates.clone());
+        folder.start().await.unwrap();
+        let (_, status) = updates.current();
+        assert!(
+            matches!(&status.folder, FolderStatus::Stopped { error, .. } if error.contains("a.example.com")),
+            "{:?}",
+            status.folder
+        );
+        assert!(folder.session_changed("other".into(), 0).await.is_err());
     }
 }

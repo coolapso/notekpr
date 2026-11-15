@@ -414,7 +414,7 @@ sessions and envelope), rotate keys of shared vaults, rotate the recovery key.
 | CLI, plaintext mirror (explicit opt-in) | Ordinary Markdown files readable by any program running as the user — the point of the mode. It must be enabled explicitly and the CLI explains the implications. |
 | Desktop app, its window | As the browser's rows above, in the app's own webview profile (one per server it was used with, so nothing of one server's session ever goes to another), under the app's data folder ([desktop.md](desktop.md#where-it-keeps-things)), which the app makes readable by the person's account only (`0700`, as the CLI's; one that is a link elsewhere keeps the rights of where it leads); no service worker. |
 | Desktop app, only on this computer | As the window's row above, in a webview profile of its own (`this-computer`), plus the server's data: its database and attachments under the app's data folder, the same ciphertext a server holds. With the device key in the window's storage beside them, a copy of the app's data folder opens the notes without anything else: protection relies on the OS account (the data folder `0700`, as the window's row says) and full-disk encryption. |
-| Desktop app, Markdown folder (opt-in) | As the CLI's two rows above: a CLI profile of the app's own holding this computer's device key and the account secret (unwrapped by the app from the device's envelope, never handed over by the window), sealed with a local key file `0600` beside them, and the encrypted replicas; plus the decrypted Markdown files in the folder chosen, after the person confirmed in a system dialog what that means. "Forget this computer" and *Stop* delete the profile (never the Markdown files), each after a yes in a system dialog; a device the server reports as removed stops it (what it kept stays until then); signing out drops its session token once the server says the session ended. |
+| Desktop app, Markdown folder (opt-in) | As the CLI's two rows above: a CLI profile of the app's own (one per account) holding this computer's device key and the account secret (unwrapped by the app from the device's envelope, never handed over by the window), sealed with a local key file `0600` beside them, and the encrypted replicas; plus the decrypted Markdown files in the folder chosen, after the person confirmed in a system dialog what that means. "Forget this computer" and *Stop* delete the profile (never the Markdown files), each after a yes in a system dialog; a device the server reports as removed stops it (what it kept stays until then); signing out drops its session token once the server says the session ended. |
 | Agent gateway host | Holds the agent's keys and plaintext of the vaults shared with the agent. Treat it like any server with secrets; the gateway listens on localhost by default and requires a bearer token. |
 
 ### Untrusted sync operations
@@ -526,13 +526,31 @@ browser. What it adds to the above:
   list above: none reads or writes a file the person didn't choose in the
   system's own folder picker (the window gets a number for the folder,
   never a path to name one), runs a program other than the default browser
-  for a web or mail address, or changes the server or the Markdown folder
+  for a web or mail address, or adds a server or starts a Markdown folder
   without a yes in a system dialog, which a script in the window can't
-  give. Downloads (exports, attachments) go to the Downloads folder under
+  give. Switching between the app's accounts (below) doesn't ask, and
+  neither does adding *On this computer* (no server is involved): a
+  script that switches gains nothing (it ends with its window, and the
+  next account's window has storage of its own). Downloads (exports, attachments) go to the Downloads folder under
   a name of their own, never over a file, as in a browser — a script could
   put files there too, as on the web. Its CSP is the web app's, with the
   chosen server (and Tauri's IPC) in `connect-src`; Tauri's prototype
   freezing is on.
+* **Accounts** ([desktop.md](desktop.md#accounts)): the app keeps one
+  account per server added after that yes (the app asks before it
+  contacts a new address at all), and *On this computer* if chosen. Each
+  account has a random id, and under it a webview profile and a Markdown
+  folder profile of its own, so nothing of one server's session ever goes
+  to another; only the open account's window and folder run, the open
+  account is fixed when the app starts, and switching starts the app
+  again with the other's. A folder profile runs only for the server its
+  account names. The list is in the app's settings, nothing secret: each
+  account's id and address (which the app shows as it knows it), and the
+  name its window last reported, which is only a label beside that
+  address. Removing an account asks in a system dialog and only hides it:
+  its data stays. The app never moves to another account on a server's
+  word or by itself; the person picks one — or a script in the window,
+  which gains nothing by it.
 * **The Markdown folder** runs the CLI's own sync in the app, with this
   computer's device: the window hands over the device key, the account key
   it was approved for (its pin) and its session — never the account

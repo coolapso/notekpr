@@ -7,7 +7,10 @@
   ],
   "permissions": [
     "allow-desktop-info",
-    "allow-set-server",
+    "allow-add-server",
+    "allow-switch-account",
+    "allow-remove-account",
+    "allow-account-seen",
     "allow-use-this-computer",
     "allow-local-start",
     "allow-local-session",

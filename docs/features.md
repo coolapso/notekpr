@@ -299,6 +299,10 @@ notes](writing.md) and [Drawings](drawings.md).
   a Flatpak and packages for Arch (AUR), Debian and Ubuntu
   (`.deb`) and Fedora (COPR)
   ([desktop app](desktop.md)).
+* Or the desktop app keeps your notes only on that computer: no server and
+  no account, everything else as on a server (vaults, history, comments,
+  drawings, attachments, the Markdown folder); export to move them to a
+  server later ([only on this computer](desktop.md#only-on-this-computer)).
 * A command-line client (CLI) with a local encrypted copy, live sync, and a
   two-way folder of plain Markdown files for Obsidian, Neovim, VS Code or
   anything else ([how](own-editor.md)), for scripts, agents and computers

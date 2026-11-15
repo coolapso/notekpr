@@ -191,7 +191,9 @@ download it. More in [Writing notes](writing.md#pictures-video-sound-and-files).
 * **On your computer**: the [desktop app](desktop.md) is notekpr in a
   window of its own that stays in the tray, and it can keep your notes in
   a folder of plain Markdown files too, for Obsidian, VS Code or any
-  editor (*Settings → Desktop app*; [more](own-editor.md)).
+  editor (*Settings → Desktop app*; [more](own-editor.md)). It can also
+  keep your notes [only on that computer](desktop.md#only-on-this-computer),
+  with no server and no account.
 
 ## On your phone
 

@@ -6,7 +6,9 @@ start when you log in, and keeps your notes as a folder of Markdown files
 too. Linux for now ([install it](#install-it)).
 
 It is a client of your notekpr server like the browser and the CLI: your
-notes are encrypted on your computer before anything leaves it.
+notes are encrypted on your computer before anything leaves it. Or it keeps
+your notes [only on this computer](#only-on-this-computer), with no server
+and no account.
 
 ## What it does
 
@@ -58,11 +60,12 @@ for the app.
 
 ## Getting started
 
-1. **Your server.** The first time, the app asks for your notekpr server's
-   address — the one you open in a browser, like
-   `https://notes.example.com`. It checks the server and starts again with
-   it. The server must be recent enough for the app (the app says so if
-   not).
+1. **Where your notes are.** The first time, the app asks where you keep
+   your notes. *On a notekpr server*: its address — the one you open in a
+   browser, like `https://notes.example.com`. The app checks the server
+   and starts again with it. The server must be recent enough for the app
+   (the app says so if not). Or *Only on this computer*: no server and no
+   account ([below](#only-on-this-computer)); then there is no step 2.
 2. **Sign in.** *Continue with …* opens your browser at your server's
    sign-in page; sign in there as always (passkeys and your password manager
    work). Then your server asks whether to sign the app in, with a code:
@@ -75,7 +78,39 @@ for the app.
    ([Your other devices](getting-started.md#your-other-devices)).
 
 *Settings → Desktop app* holds the app's own settings: the tray, starting
-at login, the Markdown folder and the server.
+at login, the Markdown folder and where your notes are.
+
+## Only on this computer
+
+No server, no account to make: the app keeps your notes on this computer
+only. It runs notekpr's server inside itself while it runs, on this
+computer only, and signs itself in to it: there is nothing to sign in to,
+and nothing else gets in. Everything works as with a server — vaults,
+quick notes, drawings, comments, history, attachments, search, the
+Markdown folder — and is stored encrypted as on any server. The first
+time, the app makes your keys and shows your recovery key, as on a server:
+keep it, it opens your notes again if the app loses what it keeps for its
+window.
+
+What needs a server: your other devices (another computer, your phone, a
+browser), sharing vaults or notes with other people, invitations, and AI
+agents with vaults of their own (an assistant can work with the Markdown
+folder instead). Where they'd be, the app says they need a server. Signing out and the
+list of sessions aren't there either: your account on this computer is
+what guards your notes.
+
+Your notes exist only on this computer, so keep a copy: a Markdown folder
+(every note as a file, which your backups copy), or an export now and then
+(*Settings → Account → Data*: your vaults and quick notes as Markdown files
+in a `.zip`; imported, they become new vaults, without their history or
+comments).
+
+**One at a time.** The app is either on a server or on this computer.
+*Settings → Desktop app → Where your notes are* switches; each keeps its
+own notes, and switching back finds them again. Switching stops keeping
+the Markdown folder in sync (its files stay): choose one again after,
+best a folder of its own for each. To move your notes to a server, export
+them here, switch to the server, sign in and import the export there.
 
 ## The Markdown folder
 
@@ -127,8 +162,9 @@ The tray's menu: *Open notekpr*, *Open the Markdown folder*, *Settings* and
 
 | What | Where (Linux) |
 |---|---|
-| Its settings (the server, the tray) | `~/.config/notekpr-desktop/default/settings.json` |
-| The window's data (this device's key, encrypted copies of your vaults), one folder per server | `~/.local/share/notekpr-desktop/default/webview/` |
+| Its settings (where your notes are, the tray) | `~/.config/notekpr-desktop/default/settings.json` |
+| The window's data (this device's key, encrypted copies of your vaults), one folder per server (`this-computer` for notes only on this computer) | `~/.local/share/notekpr-desktop/default/webview/` |
+| Only on this computer: the server's data (its database and attachments, encrypted as on any server) | `~/.local/share/notekpr-desktop/default/this-computer/` |
 | The Markdown folder's keys and encrypted copies | `~/.local/share/notekpr-desktop/default/folder/` |
 | Starting at login | `~/.config/autostart/notekpr.desktop` |
 

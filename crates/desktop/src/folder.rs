@@ -282,6 +282,19 @@ impl Folder {
         }
     }
 
+    /// Notes only on this computer: the app's own server has another
+    /// address at each start, which the folder's profile follows before
+    /// the folder starts or checks a session. Nothing else of it changes
+    /// (the account, this device, its copies). Call it before anything
+    /// else of the folder.
+    pub fn follow_server(&self, origin: &str) -> Result<()> {
+        let store = self.store()?;
+        if store.load()?.is_some_and(|p| p.server != origin) {
+            store.update(|p| p.server = origin.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Stop and forget the folder's keys and local copies. The Markdown
     /// files stay where they are.
     pub async fn forget(&self) -> Result<()> {
@@ -401,4 +414,35 @@ async fn finish(hub: &Hub) {
     hub.snapshot_idle(Duration::ZERO, livesync::SESSION_MIN_UPDATES)
         .await;
     hub.save_all().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notekpr_cli::profile::Profile;
+    use notekpr_core::protocol::PrincipalKind;
+
+    #[test]
+    fn follows_the_app_s_own_server_to_its_new_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = Folder::new(Dirs::under(tmp.path()), Arc::new(Updates::default()));
+        // No folder yet: nothing to follow, nothing made.
+        folder.follow_server("http://127.0.0.1:41001").unwrap();
+        assert!(folder.store().unwrap().load().unwrap().is_none());
+
+        let mut p = Profile::new("http://127.0.0.1:41001", PrincipalKind::Human, false);
+        p.user_id = Some("u1".into());
+        p.device_id = Some("d1".into());
+        p.session_token = Some("t".into());
+        p.sync.mirror_dir = Some(tmp.path().join("Notes"));
+        folder.store().unwrap().save(&p).unwrap();
+
+        folder.follow_server("http://127.0.0.1:52002").unwrap();
+        let p = folder.store().unwrap().load().unwrap().unwrap();
+        assert_eq!(p.server, "http://127.0.0.1:52002");
+        assert_eq!(p.user_id.as_deref(), Some("u1"));
+        assert_eq!(p.device_id.as_deref(), Some("d1"));
+        assert_eq!(p.session_token.as_deref(), Some("t"));
+        assert_eq!(folder.configured(), Some(tmp.path().join("Notes")));
+    }
 }

@@ -9,6 +9,7 @@ mod commands;
 pub mod flatpak;
 pub mod folder;
 pub mod links;
+pub mod local;
 pub mod paths;
 pub mod settings;
 pub mod signin;

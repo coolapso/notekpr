@@ -15,6 +15,7 @@ use tokio::sync::oneshot;
 use crate::Args;
 use crate::folder::Folder;
 use crate::links;
+use crate::local::Local;
 use crate::paths::Paths;
 use crate::settings::Settings;
 use crate::status::Updates;
@@ -25,6 +26,9 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     pub updates: Arc<Updates>,
     pub folder: Folder,
+    /// Notes only on this computer: the server inside the app. Decided at
+    /// start, as the server is (switching starts the app again).
+    pub local: Option<Local>,
     /// Cancels the sign-in in progress.
     pub sign_in: Mutex<Option<oneshot::Sender<()>>>,
     /// The folder last picked in the system's dialog, by number
@@ -67,14 +71,35 @@ pub fn show_window(app: &AppHandle) {
     }
 }
 
-/// Quit, after the Markdown folder stopped the way `notekpr sync` does.
+impl AppState {
+    /// Where the window and the folder reach the API: the server chosen, or
+    /// the app's own with notes only on this computer.
+    pub fn api_server(&self) -> Option<String> {
+        match &self.local {
+            Some(local) => Some(local.origin().to_string()),
+            None => self.settings.lock().unwrap().remote().map(str::to_string),
+        }
+    }
+
+    /// Stop what runs before the app quits or starts again: the Markdown
+    /// folder the way `notekpr sync` does, then the app's own server it
+    /// may still be sending to.
+    pub async fn stop(&self) {
+        self.folder.stop().await;
+        if let Some(local) = &self.local {
+            local.stop().await;
+        }
+    }
+}
+
+/// Quit, after what runs stopped ([`AppState::stop`]).
 fn quit(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Some(w) = app.get_webview_window("main") {
             let _ = w.hide();
         }
-        app.state::<Arc<AppState>>().folder.stop().await;
+        app.state::<Arc<AppState>>().stop().await;
         app.exit(0);
     });
 }
@@ -193,12 +218,25 @@ pub fn run(args: Args) -> Result<()> {
     let paths = Paths::for_profile(&args.profile)?;
     paths.private_data()?;
     let settings = Settings::load(&paths.settings_file())?;
-    let webview_dir = paths.webview(settings.server.as_deref());
+    // Notes only on this computer: the app's own server, its address taken
+    // now (it starts once this is the only copy of the app: `setup`).
+    let local = if settings.this_computer {
+        Some(Local::bind(paths.this_computer())?)
+    } else {
+        None
+    };
+    let (webview_dir, api_server) = match &local {
+        Some(local) => (paths.webview_here(), Some(local.origin().to_string())),
+        None => (
+            paths.webview(settings.server.as_deref()),
+            settings.server.clone(),
+        ),
+    };
     let updates = Arc::new(Updates::default());
     let folder = Folder::new(paths.folder(), updates.clone());
 
     let mut context = tauri::generate_context!();
-    context.config_mut().app.security.csp = Some(Csp::Policy(csp(settings.server.as_deref())));
+    context.config_mut().app.security.csp = Some(Csp::Policy(csp(api_server.as_deref())));
     // The window's app id (Wayland) and class (X11) come from the program's
     // name: make it the app's identifier, which its desktop entry and icons
     // are named after (packaging/desktop), so desktops find them.
@@ -230,6 +268,7 @@ pub fn run(args: Args) -> Result<()> {
         settings: Mutex::new(settings),
         updates,
         folder,
+        local,
         sign_in: Mutex::new(None),
         picked: Mutex::new(None),
         autostart_line: std::iter::once("notekpr-desktop".to_string())
@@ -246,6 +285,9 @@ pub fn run(args: Args) -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             crate::commands::desktop_info,
             crate::commands::set_server,
+            crate::commands::use_this_computer,
+            crate::commands::local_start,
+            crate::commands::local_session,
             crate::commands::sign_in,
             crate::commands::cancel_sign_in,
             crate::commands::set_close_to_tray,
@@ -332,9 +374,26 @@ pub fn run(args: Args) -> Result<()> {
                     }
                 });
             }
-            // The Markdown folder goes on where it was.
+            // The Markdown folder goes on where it was — with notes only
+            // on this computer, at the app's own server's new address,
+            // once it runs.
             let state = handle.state::<Arc<AppState>>().inner().clone();
+            let followed = match &state.local {
+                Some(local) => state.folder.follow_server(local.origin()),
+                None => Ok(()),
+            };
             tauri::async_runtime::spawn(async move {
+                if let Some(local) = &state.local
+                    && let Err(e) = local.start().await
+                {
+                    // The window says so, asking for a session.
+                    tracing::error!("{e}");
+                    return;
+                }
+                if let Err(e) = followed {
+                    tracing::warn!("the Markdown folder can't reach this computer's notes: {e:#}");
+                    return;
+                }
                 if let Err(e) = state.folder.start().await {
                     tracing::warn!("the Markdown folder didn't start: {e:#}");
                 }
@@ -379,6 +438,11 @@ mod tests {
         assert!(c.contains("script-src 'self' 'wasm-unsafe-eval';"));
         let c = csp(Some("http://localhost:8080"));
         assert!(c.contains("http://localhost:8080 ws://localhost:8080;"));
+        // The app's own server: that address and port only.
+        let c = csp(Some("http://127.0.0.1:41234"));
+        assert!(c.contains(
+            "connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:41234 ws://127.0.0.1:41234;"
+        ));
         assert!(csp(None).contains("connect-src 'self' ipc: http://ipc.localhost;"));
     }
 

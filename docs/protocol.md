@@ -125,7 +125,7 @@ Defined in `crates/core/src/crypto.rs` and `keys.rs`.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /info` | server name, `version` (the release it was built as; `dev` for builds not made for a release), `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1), `read_only` (`manual` while the server refuses changes, §9; absent otherwise; older servers also said `storage_full`), `purge_undo_days` (how long deleting something for good can be undone, §6; 0 or absent: not at all), `app_sign_in` (apps can sign in through the system browser, below; absent on older servers) (no auth) |
+| `GET /info` | server name, `version` (the release it was built as; `dev` for builds not made for a release), `dev_mode`, `oidc_enabled`, `oidc_display_name` (the login button's label; null without OIDC), size limits (`max_attachment_bytes`, `max_update_bytes`, `max_snapshot_bytes`; older servers omit the last: it is `max(16 × max_update_bytes, 32 MiB)`), `note_keys` (notes can have their own keys, §5.1), `read_only` (`manual` while the server refuses changes, §9; absent otherwise; older servers also said `storage_full`), `purge_undo_days` (how long deleting something for good can be undone, §6; 0 or absent: not at all), `app_sign_in` (apps can sign in through the system browser, below: false without OIDC; absent on older servers) (no auth) |
 | `GET /auth/oidc/start?return_to=/path` | 303 to the identity provider (authorization code + PKCE + nonce); sets an HttpOnly, SameSite=Lax `notekpr_login` cookie that binds the login to this browser. An app's sign-in adds `redirect_uri`, `code_challenge` and `code_challenge_method` (below) |
 | `GET /auth/oidc/callback` | provider redirect target; requires the `notekpr_login` cookie of the browser that started the login (otherwise `#error=login_failed`, which closes login CSRF); redirects to `/auth/complete#code=…&return_to=…`, or for an app's sign-in to the page confirming it (below) |
 | `GET /auth/oidc/app`, `POST /auth/oidc/app {approve}` | an app's sign-in, confirmed by the person comparing a code (below) |
@@ -186,6 +186,28 @@ headers `Authorization`, `Content-Type`, `Notekpr-App`; exposes
 `Retry-After`; `Vary: Origin`; no credentials (the API takes bearer tokens,
 never cookies) — and for no other: web pages can't call the API from
 another origin. Its `Notekpr-App` is `desktop/<version>`.
+
+**The desktop app's own server** (*Only on this computer*,
+[desktop.md](desktop.md#only-on-this-computer)) is this server, run by the
+app inside itself, for one account. Clients use it unchanged; what
+differs:
+
+* It listens on `127.0.0.1` only, on a port chosen at each start, and
+  answers any request (the API, the WebSocket's upgrade, `/healthz`,
+  `/readyz`) whose `Host` isn't exactly `127.0.0.1:<port>` with `421`, and
+  one with an `Origin` other than the app's own (a web page's) with `403`.
+* No sign-in: `/auth/oidc/*`, `/auth/exchange`, `/auth/dev-login` and
+  `/oauth/*` answer `404`, as for unknown paths, and `GET /info` says
+  `app_sign_in: false`. The app makes the account's sessions in its own
+  process, labelled `this computer`, and gives one to its window; they
+  last and end as any session.
+* No agents (`/agents*`), administration (`/admin/*`) or `/metrics`: `404`.
+  No web files.
+* It is admin-less, with no admin clients; its instance settings are the
+  defaults, but for the rate limit, which the app raises (one person's
+  window and Markdown folder, from one address).
+* Nothing in the API says a server is one: the window learns it from the
+  app.
 
 **Native clients** use the RFC 8628 device authorization grant:
 

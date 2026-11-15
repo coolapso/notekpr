@@ -8,6 +8,9 @@
   "permissions": [
     "allow-desktop-info",
     "allow-set-server",
+    "allow-use-this-computer",
+    "allow-local-start",
+    "allow-local-session",
     "allow-sign-in",
     "allow-cancel-sign-in",
     "allow-set-close-to-tray",

@@ -2,7 +2,9 @@
 """The desktop app (crates/desktop, docs/desktop.md), driven by WebKitGTK's
 WebDriver in a headless sway: choosing the server, signing in, its own
 settings, the Markdown folder both ways, starting again, signing out and
-forgetting the computer — against a development server.
+forgetting the computer — against a development server. Then notes only on
+this computer: the app's own server, the folder following its new address
+at each start, and switching to the server and back.
 
     python3 tests/e2e/desktop.py --server target/debug/notekpr-server \
         --app target/debug/notekpr-desktop
@@ -16,6 +18,7 @@ display, D-Bus and home folder (autostart entries go in ~/.config/autostart
 whatever XDG_CONFIG_HOME says), and a profile of its own.
 """
 import argparse, json, os, shutil, signal, socket, subprocess, sys, tempfile, time
+import urllib.error, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wd  # noqa: E402
@@ -30,6 +33,40 @@ def free_port():
     p = s.getsockname()[1]
     s.close()
     return p
+
+
+def http_status(url, method="GET", headers=None, body=None):
+    req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
+def restarting(act):
+    """Do `act`, which starts the app again: it may end the WebDriver
+    session before its reply."""
+    try:
+        act()
+    except RuntimeError as e:
+        if "terminated" not in str(e):
+            raise
+
+
+def app_pids(profile):
+    return set(subprocess.run(["pgrep", "-f", f"notekpr-desktop --profile {profile}"],
+                              capture_output=True, text=True).stdout.split())
+
+
+def kill_restarted(profile, before):
+    """The app started again by itself (a process not among `before`, the
+    ones WebKitWebDriver started), once what ran stopped: then it goes, as
+    WebKitWebDriver doesn't know of it."""
+    wait_for("the app to start again by itself", lambda: app_pids(profile) - before)
+    for p in app_pids(profile):
+        subprocess.run(["kill", p])
+    wait_for("the app to quit", lambda: not app_pids(profile))
 
 
 def wait_for(what, cond, timeout=20):
@@ -131,16 +168,14 @@ def main():
         # ---- the server: chosen once, then the app starts again
         a = App(app_bin, profile)
         a.find("input.server-address", 20)
+        before = app_pids(profile)
         a.type("input.server-address", url)
-        a.click(".auth-card button[type=submit]")
+        restarting(lambda: a.click(".auth-card button[type=submit]"))
         settings = f"{desk_config}/{profile}/settings.json"
         wait_for("the server to be kept", lambda: os.path.exists(settings) and json.load(open(settings)).get("server") == url)
         check(True, "the server is chosen in the app, which starts again with it")
+        kill_restarted(profile, before)
         a.quit()
-        # The started-again app, which WebKitWebDriver doesn't know of.
-        for p in subprocess.run(["pgrep", "-f", f"notekpr-desktop --profile {profile}"],
-                                capture_output=True, text=True).stdout.split():
-            subprocess.run(["kill", p])
 
         # ---- signing in (development mode), this computer's keys
         a = App(app_bin, profile)
@@ -171,6 +206,8 @@ def main():
         def invoke(cmd, args):
             return a.js("return window.__TAURI_INTERNALS__.invoke(arguments[0], arguments[1])"
                         ".then(v => ({ok: v === undefined ? null : v}), e => ({err: String(e)}))", cmd, args)
+        r = invoke("local_session", {})
+        check("err" in r, f"on a server, the app makes no session of its own ({r})")
         r = invoke("open_external", {"url": "file:///etc/passwd"})
         check("err" in r, f"no file opens from the app, only web and mail addresses ({r})")
         r = invoke("folder_start", {"handoff": {"user_id": "x", "display_name": "x", "device_id": "x", "device_secret": "",
@@ -273,6 +310,97 @@ def main():
         a.find(".dev-box input", 15)
         wait_for("the folder's profile to go", lambda: not os.path.exists(folder_profile))
         check(os.path.exists(welcome), "forgetting this computer forgets the folder's keys and copies; the files stay")
+
+        # ---- only on this computer: no server, no account
+        a.quit()
+        shutil.rmtree(notes)
+        os.makedirs(notes)
+        here = uniq("here")
+        here_settings = f"{desk_config}/{here}/settings.json"
+        here_folder = f"{desk_data}/{here}/folder/config/profiles/folder.json"
+        a = App(app_bin, here)
+        before = app_pids(here)
+        keep_here = a.find_text(".auth-card button", "Keep them on this computer", 20)
+        restarting(lambda: a.click_el(keep_here))
+        wait_for("this computer to be chosen",
+                 lambda: os.path.exists(here_settings) and json.load(open(here_settings)).get("this_computer"))
+        kill_restarted(here, before)
+        a.quit()
+        a = App(app_bin, here)
+        a.find_text(".auth-card button", "Create my keys", 20)
+        check(not a.js("return [...document.querySelectorAll('.auth-card button')].some(b => b.textContent.includes('Sign out'))"),
+              "no sign-in and nothing to sign out of: straight to making the keys")
+        a.click_el(a.find_text(".auth-card button", "Create my keys"))
+        a.find(".recovery-key", 15)
+        a.click(".check input")
+        a.click_el(a.find_text(".auth-card button", "Continue"))
+        a.find(".ed .ln", 20)
+        check(True, "notes only on this computer: keys made, a recovery key shown, the notes open")
+        info = invoke("desktop_info", {})["ok"]
+        own = info["server"]
+        check(info["this_computer"] and own.startswith("http://127.0.0.1:"),
+              f"the app runs its own server on 127.0.0.1 ({own})")
+        port = own.rsplit(":", 1)[1]
+        check(http_status(f"{own}/api/v1/auth/dev-login", "POST", {"Content-Type": "application/json"},
+                          b'{"username":"mallory"}') == 404, "its server has no sign-in")
+        check(http_status(f"{own}/api/v1/info", headers={"Host": f"localhost:{port}"}) == 421,
+              "its server answers only requests to its own address")
+        check(http_status(f"{own}/api/v1/info", headers={"Origin": "https://evil.example"}) == 403,
+              "its server answers no web page")
+        check("err" in invoke("sign_in", {}), "and the app opens no browser to sign in")
+
+        # ---- what needs a server says so
+        a.route("/settings/devices")
+        a.find_text(".settings-body .needs-server", "needs a notekpr server", 10)
+        a.route("/settings/account")
+        a.find_text(".settings-body h3", "Version", 10)
+        check(not a.js("return [...document.querySelectorAll('.settings-body button')].some(b => /Sign out|Forget this/.test(b.textContent))"),
+              "other devices need a server, and there is nothing to sign out of")
+
+        # ---- the Markdown folder, at the server's new address each start
+        a.route("/settings/app")
+        a.find_text(".settings-body .where-notes", "Only on this computer", 10)
+        a.click_el(a.find_text(".settings-body button", "Choose a folder", 10))
+        wait_for("the folder to sync", lambda: "Keeping" in a.folder_status())
+        welcome = f"{notes}/My notes/Welcome.md"
+        wait_for("Welcome.md", lambda: os.path.exists(welcome))
+        check(True, "the Markdown folder works with notes only on this computer")
+        a.quit()
+        a = App(app_bin, here)
+        a.find(".ed .ln", 20)
+        again = invoke("desktop_info", {})["ok"]["server"]
+        check(again != own, f"another port at each start ({own} → {again})")
+        a.click_el(a.find_text(".tree-item", "Welcome", 10))
+        a.find(".ed .ln", 10)
+        with open(f"{notes}/My notes/Kept here.md", "w") as f:
+            f.write("# Only on this computer\n")
+        a.find_text(".tree-item", "Kept here", 20)
+        check(json.load(open(here_folder)).get("server") == again,
+              "the folder follows the server to its new address, without asking")
+
+        # ---- to the server and back: each keeps its own notes
+        a.route("/settings/app")
+        before = app_pids(here)
+        a.click_el(a.find_text(".settings-body button", "Use a server", 10))
+        restarting(lambda: a.answer(typed=url))
+        wait_for("the server to be chosen", lambda: json.load(open(here_settings)).get("server") == url
+                 and not json.load(open(here_settings)).get("this_computer"))
+        kill_restarted(here, before)
+        a.quit()
+        check(not os.path.exists(here_folder), "switching forgets the folder (its files stay)")
+        a = App(app_bin, here)
+        a.find(".dev-box input", 20)
+        check(True, "on the server, the app signs in there")
+        before = app_pids(here)
+        a.click_el(a.find_text(".auth-card button", "Use another server", 10))
+        keep_here = a.find_text(".auth-card button", "Keep them on this computer", 10)
+        restarting(lambda: a.click_el(keep_here))
+        wait_for("this computer again", lambda: json.load(open(here_settings)).get("this_computer"))
+        kill_restarted(here, before)
+        a.quit()
+        a = App(app_bin, here)
+        a.find_text(".tree-item", "Kept here", 20)
+        check(True, "back on this computer, its notes are there")
         print("desktop: all checks passed")
     except Exception:
         if a:

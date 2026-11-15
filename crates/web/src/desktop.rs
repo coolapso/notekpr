@@ -7,6 +7,10 @@
 //! Markdown folder, which the app keeps in sync with this window's device
 //! and session.
 //!
+//! Or the notes are only on this computer: the app runs the server inside
+//! itself, and gives this window its sessions — there is nothing to sign
+//! in to ([`local_session`]). What needs a server says so.
+//!
 //! The app's commands are called through Tauri's IPC
 //! (`window.__TAURI_INTERNALS__.invoke`, which only the app's window has).
 //! Everything else works as in a browser.
@@ -41,7 +45,14 @@ pub fn is_desktop() -> bool {
 pub struct Info {
     pub version: String,
     pub profile: String,
+    /// Where the API is: the server chosen, or the app's own.
     pub server: Option<String>,
+    /// The notes are only on this computer (`server` is the app's own).
+    #[serde(default)]
+    pub this_computer: bool,
+    /// The server chosen last, also while the notes are on this computer.
+    #[serde(default)]
+    pub chosen_server: Option<String>,
     pub close_to_tray: bool,
     /// A tray icon could be shown: closing to it is possible.
     pub tray: bool,
@@ -144,9 +155,48 @@ pub fn info() -> Option<Info> {
     INFO.with(|i| i.borrow().clone())
 }
 
-/// The server the person chose in the app (`https://notes.example.com`).
+/// Where the API is: the server the person chose in the app
+/// (`https://notes.example.com`), or with notes only on this computer the
+/// app's own (never to be shown: [`this_computer`]).
 pub fn server() -> Option<String> {
     INFO.with(|i| i.borrow().as_ref().and_then(|i| i.server.clone()))
+}
+
+/// The notes are only on this computer, with the app's own server.
+pub fn this_computer() -> bool {
+    INFO.with(|i| i.borrow().as_ref().is_some_and(|i| i.this_computer))
+}
+
+/// The server chosen last, to show or go back to.
+pub fn chosen_server() -> Option<String> {
+    INFO.with(|i| i.borrow().as_ref().and_then(|i| i.chosen_server.clone()))
+}
+
+/// Where the notes are, as people read it: the server's address, or
+/// "this computer".
+pub fn place() -> String {
+    if this_computer() {
+        "this computer".into()
+    } else {
+        server().unwrap_or_default()
+    }
+}
+
+/// Keep the notes only on this computer: the app asks first (when it was
+/// on a server) and starts again.
+pub async fn use_this_computer() -> Result<(), String> {
+    invoke("use_this_computer", json!({})).await
+}
+
+/// Notes only on this computer: the app's own server runs (it tries
+/// again if it failed to start), or why not.
+pub async fn local_start() -> Result<(), String> {
+    invoke("local_start", json!({})).await
+}
+
+/// Notes only on this computer: a session from the app's own server.
+pub async fn local_session() -> Result<SessionResponse, String> {
+    invoke("local_session", json!({})).await
 }
 
 /// Choose the server: the app checks it, asks before replacing another,

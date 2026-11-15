@@ -7,6 +7,9 @@
 //!   browser profile holds the web app's (the device key, IndexedDB copies).
 //! * `<data>/notekpr-desktop/<profile>/folder/`: the Markdown folder's CLI
 //!   profile ([`crate::folder`]): its session, sealed keys, local copies.
+//! * `<data>/notekpr-desktop/<profile>/this-computer/`: notes only on this
+//!   computer, the server's data ([`crate::local`]); its window's storage
+//!   is `webview/this-computer`.
 //!
 //! `<config>` and `<data>` are the XDG base directories on Linux, `%APPDATA%`
 //! and `%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on
@@ -75,6 +78,18 @@ impl Paths {
         self.data.join("webview").join(name)
     }
 
+    /// The window's storage for notes only on this computer (no server's
+    /// name has this form: theirs end in a hash).
+    pub fn webview_here(&self) -> PathBuf {
+        self.data.join("webview").join("this-computer")
+    }
+
+    /// Notes only on this computer: the database and attachments of the
+    /// server inside the app.
+    pub fn this_computer(&self) -> PathBuf {
+        self.data.join("this-computer")
+    }
+
     /// The Markdown folder's CLI profile lives under this root.
     pub fn folder(&self) -> Dirs {
         notekpr_cli::profile::desktop_folder_root(&self.data_root, &self.profile)
@@ -134,6 +149,18 @@ mod tests {
         assert_ne!(a, c);
         assert_eq!(a, p.webview(Some("https://notes.example.com")));
         assert_eq!(p.webview(None), PathBuf::from("/d/webview/none"));
+        // Notes only on this computer: a window's storage of their own,
+        // whatever server the app was on before.
+        let here = p.webview_here();
+        assert_eq!(here, PathBuf::from("/d/webview/this-computer"));
+        for s in [
+            "http://this-computer",
+            "http://127.0.0.1:8080",
+            "https://this-computer/",
+        ] {
+            assert_ne!(p.webview(Some(s)), here);
+        }
+        assert_eq!(p.this_computer(), PathBuf::from("/d/this-computer"));
     }
 
     #[cfg(unix)]

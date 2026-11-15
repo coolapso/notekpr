@@ -38,7 +38,9 @@ pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
         max_snapshot_bytes: settings.max_snapshot_bytes(),
         read_only: state.instance.read_only(),
         purge_undo_days: settings.purge_undo_days,
-        app_sign_in: true,
+        // Apps sign in through OIDC (`/auth/oidc/app`); development mode
+        // has its own sign-in.
+        app_sign_in: state.oidc.is_some(),
         demo_resets_at: state
             .config
             .demo_resets_at

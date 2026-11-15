@@ -413,6 +413,7 @@ sessions and envelope), rotate keys of shared vaults, rotate the recovery key.
 | CLI, default | Encrypted local replica (vault-key encrypted CRDT state, sealed with a local key file `0600`). The key file sits in the same profile directory, so this protects against other OS users and stray copies of single files, but not against a copy of the whole directory (a backup, a synced folder) or malware running as the same user; use full-disk encryption. Moving the key to the OS keyring is planned. |
 | CLI, plaintext mirror (explicit opt-in) | Ordinary Markdown files readable by any program running as the user — the point of the mode. It must be enabled explicitly and the CLI explains the implications. |
 | Desktop app, its window | As the browser's rows above, in the app's own webview profile (one per server it was used with, so nothing of one server's session ever goes to another), under the app's data folder ([desktop.md](desktop.md#where-it-keeps-things)), which the app makes readable by the person's account only (`0700`, as the CLI's; one that is a link elsewhere keeps the rights of where it leads); no service worker. |
+| Desktop app, only on this computer | As the window's row above, in a webview profile of its own (`this-computer`), plus the server's data: its database and attachments under the app's data folder, the same ciphertext a server holds. With the device key in the window's storage beside them, a copy of the app's data folder opens the notes without anything else: protection relies on the OS account (the data folder `0700`, as the window's row says) and full-disk encryption. |
 | Desktop app, Markdown folder (opt-in) | As the CLI's two rows above: a CLI profile of the app's own holding this computer's device key and the account secret (unwrapped by the app from the device's envelope, never handed over by the window), sealed with a local key file `0600` beside them, and the encrypted replicas; plus the decrypted Markdown files in the folder chosen, after the person confirmed in a system dialog what that means. "Forget this computer" and *Stop* delete the profile (never the Markdown files), each after a yes in a system dialog; a device the server reports as removed stops it (what it kept stays until then); signing out drops its session token once the server says the session ended. |
 | Agent gateway host | Holds the agent's keys and plaintext of the vaults shared with the agent. Treat it like any server with secrets; the gateway listens on localhost by default and requires a bearer token. |
 
@@ -542,6 +543,61 @@ browser. What it adds to the above:
   session from the window is checked the same way before the folder uses
   it; the window saying it signed out stops the folder, and only the
   server saying so ends its session.
+* **Only on this computer** ([desktop.md](desktop.md#only-on-this-computer)):
+  the app runs the server's own code (the `notekpr-server` library) in its
+  process, with its database and attachments under the app's data folder,
+  and the window and the Markdown folder use it as they use any server:
+  the same encryption, keys, membership logs and checks. The server inside
+  learns what any server learns, and it is on the same computer. What
+  differs:
+  * **The app signs itself in; nothing else can.** The server inside has
+    no sign-in of its own: no OIDC, no development mode, and its sign-in,
+    token, agent and administration routes answer `404` like unknown paths
+    ([protocol.md §3](protocol.md#3-authentication)). Instead the app's
+    native side makes the one account's sessions, in the same process,
+    and hands one to the window when the window has none that works (IPC
+    `local_session`, only while the notes are on this computer); the
+    window keeps it as after any sign-in. A script in the window gains
+    nothing by asking: it gets what the window already holds. Ending a
+    session is no boundary here (the app makes another), so the app offers
+    no signing out and no sessions to end: the person's account on the
+    computer is what guards the notes.
+  * **Only the app turns it on.** The server library builds it with a
+    constructor of its own, which only the app calls and which fixes
+    everything above and below (loopback, the routes, no metrics, no web
+    files, no OIDC, development mode or administration). Nothing in the
+    server's settings, flags or environment selects it, the server's
+    program never calls it, and development mode is untouched (still
+    refused where reachable). Whether notes are on this computer is the
+    app's own setting, changed only after a yes in a system dialog like
+    the server; the window learns it from the app, never from a server.
+  * **Loopback only.** It listens on `127.0.0.1`, on a port chosen at each
+    start, and answers every request (the API, the WebSocket's upgrade,
+    the health checks) whose `Host` isn't exactly `127.0.0.1:<port>` with
+    `421`, so a web page under a name that resolves to 127.0.0.1 (DNS
+    rebinding) gets nothing. A request from a web page at its own address
+    (an `Origin` other than the app's) gets `403`, the WebSocket's upgrade
+    too. Any program on the computer, another account's included, can
+    connect; without a session's token (256 random bits, as on any
+    server) it gets `GET /info`, `/healthz` and `/readyz`, and nothing
+    else. A program
+    running as the person can read the app's data anyway, as the CLI's
+    ([Local storage](#local-storage)).
+  * **Its data** is the ciphertext any server holds, but the window's
+    storage beside it holds the device key that opens it: a copy of the
+    app's data folder opens the notes, as with *Keep this browser usable
+    offline*. The app makes its data folder readable by the person's
+    account only (`0700`), as the CLI does (one that is a link elsewhere
+    keeps the rights of where it leads); disk encryption protects them
+    from the rest. The recovery key is made and shown as on any server: if the
+    window's storage is lost, it opens the notes again from the server's
+    data. There is no copy anywhere else: a lost disk loses the notes but
+    for the person's own copies, which the app suggests keeping: a
+    Markdown folder, or the account's export (Markdown in a `.zip`,
+    decrypted; imported, its vaults are new ones, without their history
+    or comments).
+  * **One version.** The app and the server inside are always the same
+    release; an app update migrates its database as a server update does.
 
 ### Server hardening
 

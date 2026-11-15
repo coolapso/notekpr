@@ -74,7 +74,37 @@ async fn body_limit(
     next.run(req).await
 }
 
+/// Which routes a server has besides the API's core ([`router`] has them
+/// all). Only this crate chooses: the server's program serves everything;
+/// the desktop app's own server (`crate::embedded`) leaves out every way
+/// to sign in, agents and administration.
+#[derive(Clone, Copy)]
+pub(crate) struct Mount {
+    /// Signing in: OIDC, the exchange, development mode, device grants and
+    /// agents' tokens.
+    pub login: bool,
+    pub agents: bool,
+    pub admin: bool,
+}
+
+impl Mount {
+    const ALL: Mount = Mount {
+        login: true,
+        agents: true,
+        admin: true,
+    };
+    pub(crate) const NONE: Mount = Mount {
+        login: false,
+        agents: false,
+        admin: false,
+    };
+}
+
 pub fn router(state: AppState) -> Router {
+    routes(state, Mount::ALL)
+}
+
+pub(crate) fn routes(state: AppState, mount: Mount) -> Router {
     let cfg = &state.config;
     let limit = |carries| from_fn_with_state((state.clone(), carries), body_limit);
 
@@ -98,7 +128,40 @@ pub fn router(state: AppState) -> Router {
         .route("/oauth/device/decision", post(oauth::device_decision))
         .layer(from_fn_with_state(state.clone(), ratelimit::auth_limit));
 
-    let api = Router::new()
+    let agents = Router::new()
+        .route("/agents", get(agents::list).post(agents::create))
+        .route("/agents/{id}", delete(agents::delete))
+        .route("/agents/{id}/credentials", post(agents::create_credential))
+        .route(
+            "/agents/{id}/credentials/{client_id}",
+            delete(agents::revoke_credential),
+        );
+
+    let admin = Router::new()
+        .route("/admin/users", get(admin::users))
+        .route("/admin/users/{id}", patch(admin::update_user))
+        .route("/admin/stats", get(admin::stats))
+        .route("/admin/vaults", get(admin::vaults))
+        .route("/admin/vaults/{id}", patch(admin::update_vault))
+        .route(
+            "/admin/settings",
+            get(admin::settings).patch(admin::update_settings),
+        )
+        .route(
+            "/admin/clients",
+            get(admin::clients).post(admin::create_client),
+        )
+        .route(
+            "/admin/clients/{id}",
+            patch(admin::update_client).delete(admin::delete_client),
+        )
+        .route("/admin/clients/{id}/tokens", post(admin::create_token))
+        .route(
+            "/admin/clients/{id}/tokens/{token_id}",
+            delete(admin::delete_token),
+        );
+
+    let mut api = Router::new()
         .route("/info", get(auth::info))
         .route("/auth/logout", post(auth::logout))
         .route("/me", get(me::me).delete(me::delete_account))
@@ -199,37 +262,17 @@ pub fn router(state: AppState) -> Router {
             "/vaults/{v}/attachments/{id}/restore",
             post(attachments::restore),
         )
-        .route("/agents", get(agents::list).post(agents::create))
-        .route("/agents/{id}", delete(agents::delete))
-        .route("/agents/{id}/credentials", post(agents::create_credential))
-        .route(
-            "/agents/{id}/credentials/{client_id}",
-            delete(agents::revoke_credential),
-        )
-        .route("/admin/users", get(admin::users))
-        .route("/admin/users/{id}", patch(admin::update_user))
-        .route("/admin/stats", get(admin::stats))
-        .route("/admin/vaults", get(admin::vaults))
-        .route("/admin/vaults/{id}", patch(admin::update_vault))
-        .route(
-            "/admin/settings",
-            get(admin::settings).patch(admin::update_settings),
-        )
-        .route(
-            "/admin/clients",
-            get(admin::clients).post(admin::create_client),
-        )
-        .route(
-            "/admin/clients/{id}",
-            patch(admin::update_client).delete(admin::delete_client),
-        )
-        .route("/admin/clients/{id}/tokens", post(admin::create_token))
-        .route(
-            "/admin/clients/{id}/tokens/{token_id}",
-            delete(admin::delete_token),
-        )
-        .route("/ws", get(ws::handler))
-        .merge(login)
+        .route("/ws", get(ws::handler));
+    if mount.login {
+        api = api.merge(login);
+    }
+    if mount.agents {
+        api = api.merge(agents);
+    }
+    if mount.admin {
+        api = api.merge(admin);
+    }
+    let api = api
         .route_layer(from_fn_with_state(state.clone(), read_only_guard))
         // (Before the read-only check: the server taking over reads the
         // settings again first.)
@@ -381,7 +424,7 @@ const CHANGING_GETS: &[&str] = &["/auth/oidc/start", "/auth/oidc/callback"];
 /// inside the app, so it calls the API from there; no web page can have
 /// these origins. The API takes bearer tokens, never cookies, so no
 /// credentials are allowed either.
-const APP_ORIGINS: [&str; 3] = [
+pub(crate) const APP_ORIGINS: [&str; 3] = [
     "tauri://localhost",
     "http://tauri.localhost",
     "https://tauri.localhost",

@@ -78,7 +78,14 @@ async fn confirm(
 pub struct Info {
     pub version: &'static str,
     pub profile: String,
+    /// Where the API is: the server chosen, or with notes only on this
+    /// computer the app's own (`http://127.0.0.1:<port>`).
     pub server: Option<String>,
+    /// The notes are only on this computer.
+    pub this_computer: bool,
+    /// The server chosen last, also while the notes are on this computer:
+    /// to show, and to go back to.
+    pub chosen_server: Option<String>,
     pub close_to_tray: bool,
     /// A tray icon could be shown: closing to it is possible.
     pub tray: bool,
@@ -94,7 +101,9 @@ pub fn desktop_info(app: AppHandle, state: State<'_, Arc<AppState>>) -> Res<Info
     Ok(Info {
         version: notekpr_core::VERSION,
         profile: state.profile.clone(),
-        server: s.server,
+        server: state.api_server(),
+        this_computer: state.local.is_some(),
+        chosen_server: s.server,
         close_to_tray: s.close_to_tray,
         tray: crate::app::tray_available(),
         autostart: if crate::flatpak::inside() {
@@ -127,22 +136,25 @@ pub async fn set_server(app: AppHandle, state: State<'_, Arc<AppState>>, url: St
             info.version
         ));
     }
-    let before = state.settings.lock().unwrap().server.clone();
-    if before.as_deref() == Some(server.as_str()) {
+    let before = state.settings.lock().unwrap().clone();
+    if before.remote() == Some(server.as_str()) {
         return Ok(());
     }
-    if let Some(before) = &before {
-        let folder = match state.folder.configured() {
-            Some(dir) => format!(
-                "\n\nThe app stops keeping {} in sync (the files stay).",
-                notekpr_cli::setup::shown(&dir)
-            ),
-            None => String::new(),
+    if before.chosen() {
+        let text = if before.this_computer {
+            format!(
+                "notekpr will use {server} instead of keeping your notes only on this computer: you sign in \
+                 there. Your notes on this computer stay here for when you come back to them.{}",
+                folder_stops(&state)
+            )
+        } else {
+            let before = before.server.as_deref().unwrap_or_default();
+            format!(
+                "notekpr will use {server} instead of {before}: you sign in there. What the app keeps for \
+                 {before} stays on this computer for when you come back to it.{}",
+                folder_stops(&state)
+            )
         };
-        let text = format!(
-            "notekpr will use {server} instead of {before}: you sign in there. What the app keeps for \
-             {before} stays on this computer for when you come back to it.{folder}"
-        );
         if !confirm(
             &app,
             MessageDialogKind::Info,
@@ -154,16 +166,95 @@ pub async fn set_server(app: AppHandle, state: State<'_, Arc<AppState>>, url: St
         {
             return Err("cancelled".into());
         }
-        // The folder belonged to the other server.
+    }
+    switch(&app, &state, |s| {
+        s.server = Some(server);
+        s.this_computer = false;
+    })
+    .await
+}
+
+/// Keep the notes only on this computer, with the server inside the app
+/// ([`crate::local`]): asked in a system dialog when the app was on a
+/// server, then the app starts again.
+#[tauri::command]
+pub async fn use_this_computer(app: AppHandle, state: State<'_, Arc<AppState>>) -> Res<()> {
+    let before = state.settings.lock().unwrap().clone();
+    if before.this_computer {
+        return Ok(());
+    }
+    if let Some(server) = &before.server {
+        let text = format!(
+            "notekpr will keep your notes only on this computer, with no server and no account, instead of \
+             on {server}. Your notes on {server} stay there, and what the app keeps for it stays on this \
+             computer for when you come back to it.{}",
+            folder_stops(&state)
+        );
+        if !confirm(
+            &app,
+            MessageDialogKind::Info,
+            "Keep notes only on this computer?",
+            &text,
+            "Only on this computer",
+        )
+        .await
+        {
+            return Err("cancelled".into());
+        }
+    }
+    switch(&app, &state, |s| s.this_computer = true).await
+}
+
+/// What a switch says about the Markdown folder, if there is one.
+fn folder_stops(state: &AppState) -> String {
+    match state.folder.configured() {
+        Some(dir) => format!(
+            "\n\nThe app stops keeping {} in sync (the files stay): choose a folder again after.",
+            notekpr_cli::setup::shown(&dir)
+        ),
+        None => String::new(),
+    }
+}
+
+/// Where the notes are changes: the folder, which belonged to the place
+/// before, is forgotten; the app's own server stops; the app starts again
+/// with the window's storage and Content-Security-Policy for the new place.
+async fn switch(
+    app: &AppHandle,
+    state: &AppState,
+    change: impl FnOnce(&mut crate::settings::Settings),
+) -> Res<()> {
+    let chosen = state.settings.lock().unwrap().chosen();
+    if chosen {
         state.folder.forget().await.map_err(chain)?;
     }
     {
         let mut s = state.settings.lock().unwrap();
-        s.server = Some(server);
+        change(&mut s);
         s.save(&state.paths.settings_file()).map_err(chain)?;
     }
-    // Again with the window's storage and Content-Security-Policy for it.
+    state.stop().await;
     app.restart();
+}
+
+/// Notes only on this computer: the app's own server runs (started again
+/// if it failed to), or why not. The window asks before anything else.
+#[tauri::command]
+pub async fn local_start(state: State<'_, Arc<AppState>>) -> Res<()> {
+    let local = state.local.as_ref().ok_or("your notes are on a server")?;
+    local.start().await
+}
+
+/// Notes only on this computer: a session for the window, from the app's
+/// own server — there is nothing to sign in to. A script in the window
+/// asking gets what the window holds already.
+#[tauri::command]
+pub async fn local_session(state: State<'_, Arc<AppState>>) -> Res<SessionResponse> {
+    let local = state
+        .local
+        .as_ref()
+        .ok_or("your notes are on a server: sign in there")?;
+    local.session().await
 }
 
 /// Sign in through the system browser (`crate::signin`). A new attempt
@@ -174,9 +265,9 @@ pub async fn sign_in(app: AppHandle, state: State<'_, Arc<AppState>>) -> Res<Ses
         .settings
         .lock()
         .unwrap()
-        .server
-        .clone()
-        .ok_or("choose a server first")?;
+        .remote()
+        .map(str::to_string)
+        .ok_or("there is no server to sign in to")?;
     let (cancel_tx, cancel) = oneshot::channel();
     if let Some(previous) = state.sign_in.lock().unwrap().replace(cancel_tx) {
         let _ = previous.send(());
@@ -330,13 +421,7 @@ pub async fn folder_start(
     handoff: Handoff,
     pick: u64,
 ) -> Res<()> {
-    let server = state
-        .settings
-        .lock()
-        .unwrap()
-        .server
-        .clone()
-        .ok_or("choose a server first")?;
+    let server = state.api_server().ok_or("choose a server first")?;
     let dir = match state.picked.lock().unwrap().take() {
         Some((n, p)) if n == pick => p,
         _ => return Err("choose the folder again".into()),

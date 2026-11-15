@@ -4,6 +4,9 @@
 const COMMANDS: &[&str] = &[
     "desktop_info",
     "set_server",
+    "use_this_computer",
+    "local_start",
+    "local_session",
     "sign_in",
     "cancel_sign_in",
     "set_close_to_tray",

@@ -6,6 +6,7 @@ use leptos::prelude::*;
 use notekpr_core::protocol::*;
 
 use crate::state::{self, Modal, Route, step, ui};
+use crate::views::dialogs::NeedsServer;
 use crate::views::icons::Icon;
 use crate::views::width::WidthSlider;
 use crate::{actions, api, views::avatar};
@@ -26,6 +27,10 @@ pub fn Settings(tab: String) -> impl IntoView {
         ];
         if crate::desktop::is_desktop() {
             t.insert(1, ("app", "Desktop app", "device"));
+        }
+        // Notes only on this computer: no sessions to see or end.
+        if crate::desktop::this_computer() {
+            t.retain(|(id, _, _)| *id != "sessions");
         }
         if is_admin {
             t.push(("admin", "Administration", "settings"));
@@ -50,6 +55,16 @@ pub fn Settings(tab: String) -> impl IntoView {
                 </nav>
                 <section class="settings-body">
                     {match tab.as_str() {
+                        "devices" if crate::desktop::this_computer() => view! {
+                            <h3>"Devices"</h3>
+                            <NeedsServer what="Opening your notes on your other devices"/>
+                        }.into_any(),
+                        "agents" if crate::desktop::this_computer() => view! {
+                            <h3>"AI agents"</h3>
+                            <NeedsServer what="Giving AI agents vaults of their own">
+                                <p class="muted small">"Here, an AI assistant can work with your notes through the Markdown folder (Settings → Desktop app)."</p>
+                            </NeedsServer>
+                        }.into_any(),
                         "devices" => view! { <Devices/> }.into_any(),
                         "sessions" => view! { <Sessions/> }.into_any(),
                         "security" => view! { <Security/> }.into_any(),
@@ -175,17 +190,25 @@ fn Account() -> impl IntoView {
             <button class="btn import-account" disabled=move || busy.get() on:click=import><Icon name="upload"/>" Import an export…"</button>
             <Show when=move || busy.get()><span class="spinner inline"></span></Show>
         </div>
-        <p class="muted small">"Moving to another notekpr server? Export here, sign up there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes and saved shapes join that account's — without history, comments or the people they were shared with: the new server starts fresh. Then delete your account here, if you like."</p>
+        {if crate::desktop::this_computer() {
+            view! { <p class="muted small">"Moving your notes to a notekpr server? Export here, choose the server under Settings → Desktop app, sign in there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes and saved shapes join that account's — without history or comments: the server starts fresh. An export is also a copy of your notes to keep: they are only on this computer."</p> }.into_any()
+        } else {
+            view! { <p class="muted small">"Moving to another notekpr server? Export here, sign up there and import the .zip under Settings → Account. The vaults come back named as they were, with their folders, files and icons, and your quick notes and saved shapes join that account's — without history, comments or the people they were shared with: the new server starts fresh. Then delete your account here, if you like."</p> }.into_any()
+        }}
         <div class="row">
             <button class="btn danger delete-account" on:click=move |_| ui.modal.set(Some(Modal::DeleteAccount))>"Delete my account…"</button>
         </div>
-        <h3>{util::capitalize(here)}</h3>
-        <p class="muted small">{format!("Signing out keeps {here} as one of your devices: it keeps its key and your unsent changes, so next time you only sign in and your notes open right away.")}</p>
-        <p class="muted small">{format!("On a shared or borrowed computer, forget {here} instead: it signs out, removes this device from your account and deletes its key, unsent changes and local copy of your notes. Signing in here again then needs approval from another device or your recovery key.")}</p>
-        <div class="row">
-            <button class="btn" on:click=move |_| leptos::task::spawn_local(state::sign_out())><Icon name="logout"/>" Sign out"</button>
-            <button class="btn danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>{format!("Forget {here}")}</button>
-        </div>
+        // Notes only on this computer: nothing to sign out of — the app would
+        // sign in again — and forgetting the computer would forget them.
+        {(!crate::desktop::this_computer()).then(|| view! {
+            <h3>{util::capitalize(here)}</h3>
+            <p class="muted small">{format!("Signing out keeps {here} as one of your devices: it keeps its key and your unsent changes, so next time you only sign in and your notes open right away.")}</p>
+            <p class="muted small">{format!("On a shared or borrowed computer, forget {here} instead: it signs out, removes this device from your account and deletes its key, unsent changes and local copy of your notes. Signing in here again then needs approval from another device or your recovery key.")}</p>
+            <div class="row">
+                <button class="btn" on:click=move |_| leptos::task::spawn_local(state::sign_out())><Icon name="logout"/>" Sign out"</button>
+                <button class="btn danger" on:click=move |_| leptos::task::spawn_local(state::forget_browser())>{format!("Forget {here}")}</button>
+            </div>
+        })}
         <h3>"Version"</h3>
         <p class="muted small app-version">{versions}</p>
     }
@@ -276,7 +299,7 @@ fn Devices() -> impl IntoView {
 }
 
 /// The desktop app's own settings ([`crate::desktop`]): the tray, starting
-/// at login, the Markdown folder and the server.
+/// at login, the Markdown folder and where the notes are.
 #[component]
 fn DesktopApp() -> impl IntoView {
     let ui = ui();
@@ -352,16 +375,30 @@ fn DesktopApp() -> impl IntoView {
             }
         });
     };
+    let here = crate::desktop::this_computer();
     let change_server = move |_| {
         leptos::task::spawn_local(async move {
-            let typed = ask::input("Use another server")
-                .label("The server's address")
-                .value(crate::desktop::server().unwrap_or_default())
-                .required()
-                .button("Continue")
-                .await;
+            let typed = ask::input(if here {
+                "Use a server"
+            } else {
+                "Use another server"
+            })
+            .label("The server's address")
+            .value(crate::desktop::chosen_server().unwrap_or_default())
+            .required()
+            .button("Continue")
+            .await;
             if let Some(url) = typed
                 && let Err(e) = crate::desktop::set_server(url.trim()).await
+                && e != "cancelled"
+            {
+                state::error(e);
+            }
+        });
+    };
+    let use_this_computer = move |_| {
+        leptos::task::spawn_local(async move {
+            if let Err(e) = crate::desktop::use_this_computer().await
                 && e != "cancelled"
             {
                 state::error(e);
@@ -418,11 +455,23 @@ fn DesktopApp() -> impl IntoView {
             }.into_any(),
         }}
 
-        <h3>"Server"</h3>
-        <p class="small">{crate::desktop::server().unwrap_or_default()}</p>
+        <h3>"Where your notes are"</h3>
+        <p class="small where-notes">{if here {
+            "Only on this computer".to_string()
+        } else {
+            format!("On {}", crate::desktop::server().unwrap_or_default())
+        }}</p>
         <div class="row">
-            <button class="btn" on:click=change_server>"Use another server…"</button>
+            <button class="btn" on:click=change_server>{if here { "Use a server…" } else { "Use another server…" }}</button>
+            {(!here).then(|| view! {
+                <button class="btn use-this-computer" on:click=use_this_computer>"Only on this computer…"</button>
+            })}
         </div>
+        <p class="muted small">{if here {
+            "Your notes exist only here: keep a copy, as a Markdown folder (which your backups copy) or an export now and then (Settings → Account)."
+        } else {
+            "Each place keeps its own notes: switching back finds them again. To take notes along, export them (Settings → Account) and import them on the other side."
+        }}</p>
         <h3>"Version"</h3>
         <p class="muted small">{move || info.get().map(|i| format!("notekpr desktop app {}", i.version))}</p>
     }

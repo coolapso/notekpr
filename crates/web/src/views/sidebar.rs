@@ -230,8 +230,11 @@ pub fn Sidebar() -> impl IntoView {
                             <button on:click=move |_| ui.modal.set(Some(Modal::Help))><Icon name="keyboard"/>" Keyboard shortcuts"</button>
                             <button on:click=move |_| state::set_ui_prefs(|p| p.theme = match p.theme.as_str() { "dark" => "light".into(), "light" => "system".into(), _ => "dark".into() })>
                                 <Icon name="moon"/>{move || format!(" Theme: {}", ui.ui_prefs.get().theme)}</button>
-                            <div class="menu-sep"></div>
-                            <button on:click=move |_| leptos::task::spawn_local(state::sign_out())><Icon name="logout"/>" Sign out"</button>
+                            // Notes only on this computer: nothing to sign out of.
+                            {(!crate::desktop::this_computer()).then(|| view! {
+                                <div class="menu-sep"></div>
+                                <button on:click=move |_| leptos::task::spawn_local(state::sign_out())><Icon name="logout"/>" Sign out"</button>
+                            })}
                         </div>
                     </Show>
                 </div>

@@ -48,6 +48,14 @@ pub async fn boot() {
                     ui.phase.set(Phase::Connect { error: None });
                     return;
                 }
+                // Notes only on this computer: the app's own server runs
+                // before anything asks it something.
+                if info.this_computer
+                    && let Err(e) = crate::desktop::local_start().await
+                {
+                    ui.phase.set(Phase::Fatal(e));
+                    return;
+                }
             }
             Err(e) => {
                 ui.phase
@@ -220,6 +228,14 @@ pub fn desktop_handoff(c: &Core) -> Option<crate::desktop::Handoff> {
 /// app ([`crate::desktop::sign_in`]).
 pub async fn desktop_sign_in() -> Result<(), String> {
     let s = crate::desktop::sign_in().await?;
+    signed_in(s).await;
+    Ok(())
+}
+
+/// Notes only on this computer: the app's own server gives the session
+/// ([`crate::desktop::local_session`]); there is nothing to sign in to.
+pub async fn desktop_local_sign_in() -> Result<(), String> {
+    let s = crate::desktop::local_session().await?;
     signed_in(s).await;
     Ok(())
 }

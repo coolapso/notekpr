@@ -32,12 +32,29 @@ pub fn Fatal(msg: String) -> impl IntoView {
             <h1>"Something went wrong"</h1>
             <p class="muted">{msg}</p>
             <button class="btn primary" on:click=move |_| { let _ = util::window().location().reload(); }>"Try again"</button>
+            <UseAServer/>
         </Card>
     }
 }
 
+/// Notes only on this computer, and stuck before they open (they can't be
+/// opened, or the keys are gone without the recovery key): the way to a
+/// server instead, which the app asks about in a system dialog. The notes
+/// here stay.
+#[component]
+fn UseAServer() -> impl IntoView {
+    crate::desktop::this_computer().then(|| {
+        view! {
+            <button class="btn ghost use-a-server" on:click=move |_| ui().phase.set(Phase::Connect { error: None })>"Use a server instead"</button>
+        }
+    })
+}
+
 #[component]
 pub fn Login(error: Option<String>) -> impl IntoView {
+    if crate::desktop::this_computer() {
+        return view! { <OnThisComputer error/> }.into_any();
+    }
     let ui = ui();
     let server = ui.server.get_untracked();
     let oidc = server.as_ref().map(|s| s.oidc_enabled).unwrap_or(false);
@@ -148,18 +165,75 @@ pub fn Login(error: Option<String>) -> impl IntoView {
             })}
         </Card>
     }
+    .into_any()
 }
 
-/// The desktop app's first screen: which server the notes are on
-/// ([`crate::desktop::set_server`]; the app checks it and starts again).
+thread_local! {
+    /// When the window last asked the app for a session ([`OnThisComputer`]).
+    static LAST_LOCAL_SESSION: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
+
+/// Notes only on this computer: nothing to sign in to — the window gets
+/// its session from the app ([`state::desktop_local_sign_in`]), again by
+/// itself after one ended. Not over and over, though: one that ended a
+/// moment after the last is shown, with a way to try again.
+#[component]
+fn OnThisComputer(error: Option<String>) -> impl IntoView {
+    let failed = RwSignal::new(None::<String>);
+    let open = move || {
+        LAST_LOCAL_SESSION.with(|t| t.set(js_sys::Date::now()));
+        failed.set(None);
+        leptos::task::spawn_local(async move {
+            if let Err(e) = state::desktop_local_sign_in().await {
+                failed.set(Some(e));
+            }
+        });
+    };
+    let just_now = LAST_LOCAL_SESSION.with(|t| js_sys::Date::now() - t.get() < 10_000.0);
+    if just_now {
+        failed.set(Some(error.unwrap_or_else(|| {
+            "Your notes on this computer couldn't be opened.".into()
+        })));
+    } else {
+        open();
+    }
+    view! {
+        <Show when=move || failed.get().is_some() fallback=|| view! { <Loading/> }>
+            <Card>
+                <h1>"Your notes on this computer"</h1>
+                <div class="alert error">{move || failed.get()}</div>
+                <button class="btn primary" on:click=move |_| open()>"Try again"</button>
+                <UseAServer/>
+            </Card>
+        </Show>
+    }
+}
+
+/// The desktop app's first screen: where the notes are — on a server
+/// ([`crate::desktop::set_server`]; the app checks it and starts again), or
+/// only on this computer ([`crate::desktop::use_this_computer`]).
 #[component]
 pub fn Connect(error: Option<String>) -> impl IntoView {
     let ui = ui();
-    let current = crate::desktop::server();
-    let url = RwSignal::new(current.clone().unwrap_or_default());
+    let here = crate::desktop::this_computer();
+    let chosen = crate::desktop::chosen_server();
+    let url = RwSignal::new(chosen.clone().unwrap_or_default());
     let busy = RwSignal::new(false);
     let err = RwSignal::new(error);
-    let had = current.is_some();
+    let had = here || chosen.is_some();
+    let local = move |_| {
+        busy.set(true);
+        err.set(None);
+        leptos::task::spawn_local(async move {
+            // The app starts again, on this computer.
+            match crate::desktop::use_this_computer().await {
+                Ok(()) => ui.phase.set(Phase::SignedOut { error: None }),
+                Err(e) if e == "cancelled" => {}
+                Err(e) => err.set(Some(e)),
+            }
+            busy.set(false);
+        });
+    };
     let submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         let u = url.get_untracked();
@@ -180,14 +254,21 @@ pub fn Connect(error: Option<String>) -> impl IntoView {
     };
     view! {
         <Card>
-            <h1>"Your notekpr server"</h1>
-            <p class="muted">"The address of the server your notes are on — the one you open notekpr at in a browser."</p>
+            <h1>"Where are your notes?"</h1>
             {move || err.get().map(|e| view! { <div class="alert error">{e}</div> })}
+            <h2>"On a notekpr server"</h2>
+            <p class="muted">"The address you open notekpr at in a browser. Your notes reach your other devices, and you can share them."</p>
             <form class="connect" on:submit=submit>
                 <input class="input server-address" type="url" inputmode="url" placeholder="https://notes.example.com"
                     use:focus_on_mount prop:value=move || url.get() on:input=move |ev| url.set(event_target_value(&ev))/>
                 <button class="btn primary" type="submit" disabled=move || busy.get()>"Connect"</button>
             </form>
+            <div class="divider"><span>"or"</span></div>
+            <h2>"Only on this computer"</h2>
+            <p class="muted">"No server and no account: your notes stay on this computer, encrypted. Other devices and sharing need a server."</p>
+            <button class="btn this-computer" disabled=move || busy.get() || here on:click=local>
+                {if here { "Your notes are on this computer" } else { "Keep them on this computer" }}
+            </button>
             {had.then(|| view! {
                 <button class="btn ghost" on:click=move |_| ui.phase.set(Phase::SignedOut { error: None })>"Back"</button>
             })}
@@ -286,20 +367,27 @@ pub fn Setup() -> impl IntoView {
         .get_untracked()
         .map(|u| u.display_name)
         .unwrap_or_default();
+    let here = crate::desktop::this_computer();
     view! {
         <Card>
             <h1>{format!("Welcome, {name}!")}</h1>
-            <p>"Before you start, notekpr creates your personal encryption keys on this device. Your notes are encrypted with them before anything is uploaded — not even the server administrator can read them."</p>
+            {if here {
+                view! { <p>"Before you start, notekpr creates your personal encryption keys on this computer. Your notes are kept encrypted with them, only here."</p> }.into_any()
+            } else {
+                view! { <p>"Before you start, notekpr creates your personal encryption keys on this device. Your notes are encrypted with them before anything is uploaded — not even the server administrator can read them."</p> }.into_any()
+            }}
             <ul class="bullets">
-                <li><Icon name="lock"/>" Keys are created and kept on your devices."</li>
+                <li><Icon name="lock"/>{if here { " Keys are created and kept on this computer." } else { " Keys are created and kept on your devices." }}</li>
                 <li><Icon name="key"/>" You'll get a recovery key to keep somewhere safe."</li>
-                <li><Icon name="device"/>" Add more devices later by approving them from this one."</li>
+                {(!here).then(|| view! { <li><Icon name="device"/>" Add more devices later by approving them from this one."</li> })}
             </ul>
             <button class="btn primary big" disabled=move || busy.get() on:click=move |_| {
                 busy.set(true);
                 leptos::task::spawn_local(async move { state::setup_keys().await; busy.set(false); });
             }>{move || if busy.get() { "Creating keys…" } else { "Create my keys" }}</button>
-            <button class="btn ghost" on:click=move |_| leptos::task::spawn_local(state::sign_out())>"Sign out"</button>
+            {(!here).then(|| view! {
+                <button class="btn ghost" on:click=move |_| leptos::task::spawn_local(state::sign_out())>"Sign out"</button>
+            })}
         </Card>
     }
 }
@@ -312,14 +400,18 @@ pub fn ShowRecovery(key: String) -> impl IntoView {
     view! {
         <Card>
             <h1>"Save your recovery key"</h1>
-            <p>"If you lose all your devices, this key is the only way to get your notes back. Nobody — including the server administrator — can reset it for you."</p>
+            {if crate::desktop::this_computer() {
+                "If the app loses the keys it keeps for its window, this key is the only way to open your notes again. Nobody can reset it for you."
+            } else {
+                "If you lose all your devices, this key is the only way to get your notes back. Nobody — including the server administrator — can reset it for you."
+            }}
             <div class="recovery-key" aria-label="Recovery key">{key.clone()}</div>
             <div class="row">
                 <button class="btn" on:click=move |_| { util::copy_to_clipboard(&k1); state::success("Copied to clipboard"); }><Icon name="copy"/>" Copy"</button>
                 <button class="btn" on:click=move |_| {
                     let text = format!("notekpr recovery key\n\nAccount: {}\nServer: {}\n\n{}\n\nKeep this somewhere safe and private (a password manager or a printed copy). Anyone with this key and access to your account can read your notes.\n",
                         ui().user.get_untracked().map(|u| u.display_name).unwrap_or_default(),
-                        util::window().location().host().unwrap_or_default(), k2);
+                        server_shown(), k2);
                     util::download("notekpr-recovery-key.txt", "text/plain", text.as_bytes());
                 }><Icon name="download"/>" Download"</button>
             </div>
@@ -338,7 +430,9 @@ pub fn ShowRecovery(key: String) -> impl IntoView {
 pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl IntoView {
     let key = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
-    let show_recovery = RwSignal::new(false);
+    // Notes only on this computer: no other device can approve this one.
+    let here = crate::desktop::this_computer();
+    let show_recovery = RwSignal::new(here);
     let has_pending = pending.is_some();
     view! {
         <Card>
@@ -350,6 +444,9 @@ pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl 
                     <div class="verify-code">{code}</div>
                     <p class="muted small"><span class="spinner inline"></span>" Waiting for approval…"</p>
                 }.into_any(),
+                None if here => view! {
+                    <p>"The keys the app kept for its window are gone, and your notes are encrypted with them. Your recovery key opens them again:"</p>
+                }.into_any(),
                 None => view! {
                     <p>"Your notes are encrypted with keys that live on your other devices. Choose how to unlock them here:"</p>
                     <button class="btn primary big" disabled=move || busy.get() on:click=move |_| {
@@ -358,7 +455,7 @@ pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl 
                     }><Icon name="device"/>" Approve from another device"</button>
                 }.into_any(),
             }}
-            <div class="divider"><span>"or"</span></div>
+            {(!here).then(|| view! { <div class="divider"><span>"or"</span></div> })}
             <Show when=move || show_recovery.get() fallback=move || view! {
                 <button class="btn ghost" on:click=move |_| show_recovery.set(true)><Icon name="key"/>" Use my recovery key"</button>
             }>
@@ -374,8 +471,22 @@ pub fn Enroll(pending: Option<(String, String)>, error: Option<String>) -> impl 
                 </form>
             </Show>
             {has_pending.then(|| view! { <p class="small muted">"Lost all your devices? Use your recovery key instead."</p> })}
-            <button class="btn ghost" on:click=move |_| leptos::task::spawn_local(state::sign_out())>"Sign out"</button>
+            {(!here).then(|| view! {
+                <button class="btn ghost" on:click=move |_| leptos::task::spawn_local(state::sign_out())>"Sign out"</button>
+            })}
+            <UseAServer/>
         </Card>
+    }
+}
+
+/// The server, as the recovery key's file names it.
+fn server_shown() -> String {
+    if crate::desktop::this_computer() {
+        "none, only on this computer (the desktop app)".into()
+    } else if let Some(s) = crate::desktop::server() {
+        s
+    } else {
+        util::window().location().host().unwrap_or_default()
     }
 }
 

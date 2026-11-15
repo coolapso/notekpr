@@ -13,6 +13,7 @@ pub mod auth;
 pub mod blobs;
 pub mod config;
 pub mod db;
+pub mod embedded;
 pub mod error;
 pub mod export;
 pub mod hub;
@@ -44,6 +45,13 @@ pub async fn build(
     config: Config,
     metrics: Option<PrometheusHandle>,
 ) -> anyhow::Result<(axum::Router, AppState)> {
+    let state = open(config, metrics).await?;
+    Ok((routes::router(state.clone()), state))
+}
+
+/// [`build`]'s state, before any route: [`build`] and the desktop app's own
+/// server ([`embedded`]) mount theirs.
+async fn open(config: Config, metrics: Option<PrometheusHandle>) -> anyhow::Result<AppState> {
     let path = config.db_path();
     let db = db::connect(&path).await?;
     db::migrate(&db, &path).await?;
@@ -57,7 +65,7 @@ pub async fn build(
         );
         tokio::spawn(take_over(state.clone()));
     }
-    Ok((routes::router(state.clone()), state))
+    Ok(state)
 }
 
 /// What a server writes before anything else, holding the writer lease.

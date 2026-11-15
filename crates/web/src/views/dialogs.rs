@@ -57,6 +57,20 @@ pub(crate) fn Dialog(
     }
 }
 
+/// Notes only on this computer (the desktop app's own server): what needs
+/// a server says so where it would be, and how to move there.
+#[component]
+pub(crate) fn NeedsServer(
+    what: &'static str,
+    #[prop(optional)] children: Option<Children>,
+) -> impl IntoView {
+    view! {
+        <p class="needs-server">{format!("{what} needs a notekpr server: your notes are only on this computer.")}</p>
+        {children.map(|c| c())}
+        <p class="muted small">"To move your notes to a server: export them under Settings → Account, choose the server under Settings → Desktop app, sign in there and import the export."</p>
+    }
+}
+
 /// Keep Tab and Shift+Tab inside the dialog.
 pub(super) fn trap_focus(root: &web_sys::HtmlElement, ev: &web_sys::KeyboardEvent) {
     use wasm_bindgen::JsCast;
@@ -132,6 +146,9 @@ pub fn ModalHost() -> impl IntoView {
             Modal::QuickSwitch => view! { <QuickSwitch/> }.into_any(),
             Modal::Search(q) => view! { <SearchDialog initial=q/> }.into_any(),
             Modal::NewVault => view! { <NewVault/> }.into_any(),
+            Modal::Share(_) | Modal::ShareNote(..) if crate::desktop::this_computer() => view! {
+                <Dialog title="Sharing"><NeedsServer what="Sharing"/></Dialog>
+            }.into_any(),
             Modal::Share(v) => view! { <Share vault=v/> }.into_any(),
             Modal::ShareNote(v, n) => view! { <ShareNote vault=v note=n/> }.into_any(),
             Modal::VaultSettings(v) => view! { <VaultSettings vault=v/> }.into_any(),

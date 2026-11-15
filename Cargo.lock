@@ -4044,6 +4044,7 @@ dependencies = [
  "glib",
  "notekpr-cli",
  "notekpr-core",
+ "notekpr-server",
  "reqwest",
  "serde",
  "serde_json",

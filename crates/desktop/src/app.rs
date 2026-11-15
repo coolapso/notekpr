@@ -38,9 +38,11 @@ pub struct AppState {
     pub local: Option<Local>,
     /// Cancels the sign-in in progress.
     pub sign_in: Mutex<Option<oneshot::Sender<()>>>,
-    /// The folder last picked in the system's dialog, by number
-    /// (`choose_folder`, `folder_start`).
-    pub picked: Mutex<Option<(u64, PathBuf)>>,
+    /// The folders last picked in the system's dialog, by number
+    /// (`choose_folder`, `folder_start`, `folder_bring`).
+    pub picked: Mutex<crate::commands::Picks>,
+    /// Cancels waiting for the CLI to stop (`folder_take_from_cli`).
+    pub cli_take: Mutex<Option<oneshot::Sender<()>>>,
     /// What starts this profile at login (the autostart entry's command).
     pub autostart_line: Vec<String>,
 }
@@ -111,10 +113,18 @@ impl AppState {
         }
     }
 
-    /// Stop what runs before the app quits or starts again: the Markdown
-    /// folder the way `notekpr sync` does, then the app's own server it
-    /// may still be sending to.
+    /// Stop what runs before the app quits or starts again: taking over
+    /// the CLI's folder cancelled (its background sync put back as it
+    /// was) and any change of folder let finish, the Markdown folder the
+    /// way `notekpr sync` does, then the app's own server it may still be
+    /// sending to.
     pub async fn stop(&self) {
+        if let Some(tx) = self.cli_take.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+        self.folder
+            .settled(std::time::Duration::from_secs(20))
+            .await;
         self.folder.stop().await;
         if let Some(local) = &self.local {
             local.stop().await;
@@ -332,7 +342,8 @@ pub fn run(args: Args) -> Result<()> {
         folder,
         local,
         sign_in: Mutex::new(None),
-        picked: Mutex::new(None),
+        picked: Mutex::new(Default::default()),
+        cli_take: Mutex::new(None),
         autostart_line: std::iter::once("notekpr-desktop".to_string())
             .chain(autostart_args.iter().cloned())
             .collect(),
@@ -370,6 +381,11 @@ pub fn run(args: Args) -> Result<()> {
             crate::commands::session_changed,
             crate::commands::signed_out,
             crate::commands::forget_computer,
+            crate::commands::folder_bring,
+            crate::commands::cli_folders,
+            crate::commands::folder_take_from_cli,
+            crate::commands::cancel_take,
+            crate::commands::setup_done,
             crate::commands::next_event,
         ])
         .setup(move |app| {

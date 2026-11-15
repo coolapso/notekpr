@@ -528,7 +528,20 @@ browser. What it adds to the above:
   never a path to name one), runs a program other than the default browser
   for a web or mail address, or adds a server or starts a Markdown folder
   without a yes in a system dialog, which a script in the window can't
-  give. Switching between the app's accounts (below) doesn't ask, and
+  give. Bringing notes into the Markdown folder (moving them into a
+  vault's folder there, or copying them from another folder) works only
+  in folders picked that way, after a yes in a system dialog that names
+  the folders, the vault as the app's own sync knows it (never as the
+  window names it) and how many others share it. Taking over the CLI's Markdown folder (desktop.md,
+  "From the CLI") is the one thing the app does outside folders picked:
+  only for a CLI profile of the account the window's device was handed
+  over for (its server and the user the server confirmed), after a yes
+  in a system dialog naming the folder and the profile, it stops and
+  disables that profile's `notekpr-sync@<profile>` through the system's
+  service manager (D-Bus; no program is started) and clears that
+  profile's folder setting while no CLI runs it, as `notekpr sync
+  --no-dir` does. The window may learn which of the CLI's profiles keep a
+  Markdown folder for the person, and where. Switching between the app's accounts (below) doesn't ask, and
   neither does adding *On this computer* (no server is involved): a
   script that switches gains nothing (it ends with its window, and the
   next account's window has storage of its own). Downloads (exports, attachments) go to the Downloads folder under

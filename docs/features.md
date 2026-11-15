@@ -307,6 +307,13 @@ notes](writing.md) and [Drawings](drawings.md).
   only on that computer, switched from the menu behind your name; each keeps
   its own sign-in, notes and Markdown folder. A server that can't be reached
   shows the list ([accounts](desktop.md#accounts)).
+* The desktop app's initial setup, after signing in: the Markdown folder
+  (notes already in it, an Obsidian vault say, brought in: moved into a
+  vault there or copied from elsewhere, as `notekpr setup` does), starting
+  at login and the tray. Coming from the CLI, it takes over the Markdown
+  folder the CLI keeps for that account in one click: stops the CLI's
+  background sync, which forgets the folder, and keeps it from then on
+  ([setup](desktop.md#getting-started), [from the CLI](desktop.md#from-the-cli)).
 * A command-line client (CLI) with a local encrypted copy, live sync, and a
   two-way folder of plain Markdown files for Obsidian, Neovim, VS Code or
   anything else ([how](own-editor.md)), for scripts, agents and computers

@@ -8,12 +8,15 @@ mod app;
 mod commands;
 pub mod flatpak;
 pub mod folder;
+pub mod from_cli;
 pub mod links;
 pub mod local;
 pub mod paths;
 pub mod settings;
 pub mod signin;
 pub mod status;
+#[cfg(all(test, target_os = "linux"))]
+mod testbus;
 
 use std::path::PathBuf;
 

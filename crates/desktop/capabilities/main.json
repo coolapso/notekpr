@@ -27,6 +27,11 @@
     "allow-session-changed",
     "allow-signed-out",
     "allow-forget-computer",
+    "allow-folder-bring",
+    "allow-cli-folders",
+    "allow-folder-take-from-cli",
+    "allow-cancel-take",
+    "allow-setup-done",
     "allow-next-event"
   ]
 }

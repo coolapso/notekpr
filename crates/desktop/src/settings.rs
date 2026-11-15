@@ -36,6 +36,10 @@ pub struct Account {
     /// Removed from the list; what the app keeps for it stays.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// Its initial setup was shown (docs/desktop.md "Getting started"):
+    /// false for accounts from before there was one, so they get it once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub set_up: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -63,6 +67,10 @@ pub struct Settings {
     /// in the Flatpak ([`crate::flatpak::request_autostart`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub autostart: bool,
+    /// The initial setup asked about the app's own settings (the tray,
+    /// starting at login): asked once, not for each account.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub background_asked: bool,
 }
 
 fn yes() -> bool {
@@ -78,6 +86,7 @@ impl Default for Settings {
             accounts: vec![],
             close_to_tray: true,
             autostart: false,
+            background_asked: false,
         }
     }
 }
@@ -132,6 +141,7 @@ impl Settings {
                     server,
                     name: None,
                     hidden: false,
+                    set_up: false,
                 });
                 id
             }
@@ -170,6 +180,7 @@ impl Settings {
             server,
             name: None,
             hidden: false,
+            set_up: false,
         });
         id
     }
@@ -189,6 +200,15 @@ impl Settings {
         }
         self.account = Some(id.to_string());
         true
+    }
+
+    /// The initial setup was shown for account `id`, and with it the
+    /// question about the app's own settings.
+    pub fn set_up(&mut self, id: &str) {
+        if let Some(a) = self.accounts.iter_mut().find(|a| a.id == id) {
+            a.set_up = true;
+        }
+        self.background_asked = true;
     }
 
     /// Take `id` off the list: never the open one, nor this computer's.
@@ -283,9 +303,11 @@ mod tests {
                 server: None,
                 name: Some("ana".into()),
                 hidden: false,
+                set_up: true,
             }],
             close_to_tray: false,
             autostart: true,
+            background_asked: true,
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), s);
@@ -419,9 +441,35 @@ mod tests {
             server: Some("https://x".into()),
             name: None,
             hidden: false,
+            set_up: false,
         });
         bad.settle(legacy);
         assert!(bad.get("../x").is_none());
+    }
+
+    #[test]
+    fn each_account_is_set_up_once_and_the_app_asked_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        // An account from before there was a setup: not set up yet.
+        std::fs::write(&path, br#"{"server":"https://a.example.com"}"#).unwrap();
+        std::fs::write(
+            accounts_file(&path),
+            br#"{"account":"a1","accounts":[{"id":"a1","server":"https://a.example.com"}]}"#,
+        )
+        .unwrap();
+        let mut s = Settings::load(&path).unwrap();
+        s.settle(legacy);
+        assert!(!s.get("a1").unwrap().set_up && !s.background_asked);
+        let b = s.add(Some("https://b.example.com".into()), || "b1".into());
+        assert!(!s.get(&b).unwrap().set_up);
+        s.set_up("a1");
+        s.save(&path).unwrap();
+        let s = Settings::load(&path).unwrap();
+        assert!(s.get("a1").unwrap().set_up);
+        // The app's own question is asked once; b's setup is still to come.
+        assert!(s.background_asked);
+        assert!(!s.get(&b).unwrap().set_up);
     }
 
     #[test]

@@ -58,6 +58,12 @@ pub enum Phase {
         pending: Option<(String, String)>,
         error: Option<String>,
     },
+    /// The desktop app's initial setup for the open account, before its
+    /// notes open (docs/desktop.md "Getting started"); `again` from
+    /// Settings, where it asks everything again.
+    DesktopSetup {
+        again: bool,
+    },
     Ready,
     Fatal(String),
 }

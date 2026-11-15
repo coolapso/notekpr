@@ -76,6 +76,20 @@ for the app.
    makes your keys and shows your recovery key; otherwise approve it from a
    device you already use, or unlock it with your recovery key
    ([Your other devices](getting-started.md#your-other-devices)).
+4. **Set it up.** Before your notes open, the app asks what you want of it
+   on this computer, as `notekpr setup` does for the CLI:
+   * **Your notes as Markdown files** too, for other editors and AI
+     agents: a folder to keep them in ([below](#the-markdown-folder)), or
+     not now. A folder that holds notes already (an Obsidian vault, say)
+     can have them brought in. If the CLI keeps a Markdown folder for this
+     account already, the app offers to [take it over](#from-the-cli).
+   * **In the background:** whether to start notekpr when you log in, and
+     to close it to the tray. Asked the first time only: these are the
+     app's, not an account's.
+
+   Each account is asked once, the first time it opens (accounts added
+   before there was this step too). *Settings → Desktop app → Set it up
+   again…* asks again.
 
 *Settings → Desktop app* holds the app's own settings: the tray, starting
 at login, the Markdown folder and your [accounts](#accounts).
@@ -138,8 +152,10 @@ add the server's account, sign in and import the export there.
 
 ## The Markdown folder
 
-*Settings → Desktop app → Markdown folder → Choose a folder…* and pick an
-empty folder (or one notekpr kept before). The app asks you, in a window of
+*Settings → Desktop app → Markdown folder → Choose a folder…* (or the
+[setup](#getting-started)) and pick a folder: an empty one, one notekpr
+kept before, or one that holds notes already
+([below](#notes-already-in-the-folder)). The app asks you, in a window of
 the system's, to confirm that it may write your notes there decrypted — any
 program you run can read them, and backup or cloud tools may copy them.
 Then each vault becomes a folder in it, and:
@@ -157,15 +173,14 @@ since it is the same code.
 
 *Stop…* stops it: the files stay where they are, and the app forgets its own
 copies for the folder. The folder follows the same rules as the CLI's: a
-folder the CLI already keeps in sync (or one in or around it), one inside
+folder the CLI already keeps in sync (unless the app [takes it
+over](#from-the-cli)) or one in or around it, one inside
 notekpr's own data or your home folder itself is refused — and the CLI
 refuses the app's folder in turn. A hidden file at the folder's top,
 `.notekpr-folder`, says which notekpr keeps it, so every copy of notekpr on
 the computer sees that, wherever it keeps its settings
 ([cli.md](cli.md#4-sync-and-the-markdown-mirror), "One keeper per
-folder"). Until the app can bring notes in, the
-folder must be empty, too; to bring notes from a folder in, use *Import
-notes* in the app or [`notekpr setup`](own-editor.md#coming-from-obsidian).
+folder").
 
 Each [account](#accounts) has a Markdown folder of its own (two can't
 share one): only the open account's is kept in sync, and switching back to
@@ -179,6 +194,54 @@ then forgets what it kept.
 
 Exports and attachments you download land in your Downloads folder, under
 a name of their own (never over another file).
+
+### Notes already in the folder
+
+A folder that holds notes of its own (an Obsidian vault, say) is offered
+what [`notekpr setup`](cli.md#all-of-it-at-once-notekpr-setup) offers:
+
+1. **Move them into a vault there.** Everything in the folder, hidden files
+   too (`.obsidian`, `.git`), moves as it is into a folder of its own,
+   `<folder>/<vault>/`: renamed, nothing copied or rewritten. From then on
+   it syncs. In Obsidian, open `<folder>/<vault>` as the vault: its
+   settings came along. Close Obsidian and other apps using the folder
+   first.
+2. **Copy them into a vault in another folder**, which you choose next:
+   that becomes the Markdown folder, and the first stays as it is.
+3. **Choose another folder.**
+
+The vault is one of yours by the name you give (the notes join what it
+has; others who share that vault see them too) or a new one, *My notes*
+unless you name another. The app's window of the system's says what moves
+or is copied where, and into which vault, before anything changes. The
+first sync takes the notes in exactly as they were, as the CLI does
+([Coming from Obsidian](own-editor.md#coming-from-obsidian)). A folder
+that holds other files but no notes is used as it is: those files stay,
+not synced.
+
+### From the CLI
+
+If the [CLI](cli.md) keeps a Markdown folder in sync for the same account
+on the same server, the setup and *Settings → Desktop app* offer to take it
+over: *Take over ~/Notes from the CLI*. After your yes in a window of the
+system's, the app:
+
+1. stops the CLI's background sync, `notekpr-sync@<profile>`, and turns it
+   off at login. The Flatpak can't: it shows the command to run instead
+   (`systemctl --user disable --now notekpr-sync@<profile>`) and goes on
+   once the CLI's sync has stopped — as for a `notekpr sync` you started
+   yourself (stop it with Ctrl-C);
+2. makes the CLI forget the folder, as `notekpr sync --no-dir` does. The
+   CLI stays signed in: its commands and its gateway still work, without
+   the folder;
+3. keeps the folder in sync itself, from where the CLI left it: the vaults'
+   folders and everything else in it stay as they are.
+
+A file changed in the moment between the CLI stopping and the app taking
+over is taken in as on any first sync: kept beside its note as a conflict
+copy when the two differ. To hand the folder back: *Stop…* here, then
+`notekpr sync --dir ~/Notes` and `systemctl --user enable --now
+notekpr-sync@<profile>`.
 
 ## The tray
 

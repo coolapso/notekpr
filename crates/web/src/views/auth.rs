@@ -463,6 +463,9 @@ pub fn phase_view(p: Phase) -> AnyView {
         Phase::Enroll { pending, error } => {
             view! { <Enroll pending=pending error=error/> }.into_any()
         }
+        Phase::DesktopSetup { again } => {
+            view! { <super::desktop_setup::DesktopSetup again/> }.into_any()
+        }
         Phase::Ready => view! { <crate::views::Shell/> }.into_any(),
     }
 }

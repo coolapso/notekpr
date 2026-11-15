@@ -16,6 +16,20 @@ pub struct Status {
     pub show_settings: u64,
     /// While signing in: the code the server's page shows, to compare.
     pub sign_in_code: Option<String>,
+    /// While taking over the CLI's Markdown folder: waiting for the CLI to
+    /// stop (docs/desktop.md "From the CLI").
+    pub cli_wait: Option<CliWait>,
+}
+
+/// The CLI still runs the profile whose folder is being taken over.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct CliWait {
+    /// The folder as people read it.
+    pub dir: String,
+    pub profile: String,
+    /// What stops its background sync, when the app couldn't (the
+    /// Flatpak): `systemctl --user disable --now notekpr-sync@<profile>`.
+    pub command: Option<String>,
 }
 
 /// The Markdown folder's sync. `dir` is the folder as people read it

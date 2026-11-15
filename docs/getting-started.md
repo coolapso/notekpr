@@ -191,7 +191,9 @@ download it. More in [Writing notes](writing.md#pictures-video-sound-and-files).
 * **On your computer**: the [desktop app](desktop.md) is notekpr in a
   window of its own that stays in the tray, and it can keep your notes in
   a folder of plain Markdown files too, for Obsidian, VS Code or any
-  editor (*Settings → Desktop app*; [more](own-editor.md)). It can also
+  editor, notes already in it brought in — the first time it opens, it
+  asks; later *Settings → Desktop app* ([more](own-editor.md)). If the
+  CLI keeps such a folder already, it takes it over. It can also
   keep your notes [only on that computer](desktop.md#only-on-this-computer),
   with no server and no account, and have [accounts](desktop.md#accounts)
   on several servers: switch between them from the menu behind your name.

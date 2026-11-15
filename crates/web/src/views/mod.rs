@@ -3,6 +3,7 @@ pub mod ask;
 pub mod attachment;
 pub mod auth;
 pub mod comments;
+pub mod desktop_setup;
 pub mod dialogs;
 pub mod drawing;
 pub mod graph;

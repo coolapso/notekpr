@@ -31,12 +31,16 @@ the server accepts — the server never takes plaintext.
 
 ## Set it up
 
-**With the desktop app**: *Settings → Desktop app → Markdown folder →
-Choose a folder…*, an empty one. It keeps the folder in sync while the app
-runs, in the tray too ([desktop.md](desktop.md#the-markdown-folder)). The
-rest of this page is about the CLI, which does the same where there is no
-desktop app — a server, a computer without a screen — and brings the notes
-of a folder you already have along.
+**With the desktop app**: its setup asks the first time it opens, or later
+*Settings → Desktop app → Markdown folder → Choose a folder…*. An empty
+folder, or one with notes already (an Obsidian vault): the app moves them
+into a vault there, or copies them from elsewhere, as `notekpr setup` does
+([below](#coming-from-obsidian)). It keeps the folder in sync while the app
+runs, in the tray too ([desktop.md](desktop.md#the-markdown-folder)). If the
+CLI keeps your folder now, the app takes it over
+([desktop.md](desktop.md#from-the-cli)). The rest of this page is about the
+CLI, which does the same where there is no desktop app — a server, a
+computer without a screen.
 
 **With the CLI**: install it ([cli.md §1](cli.md#1-install--build)), then:
 
@@ -95,13 +99,15 @@ The Markdown folder is a level above: it holds one folder per vault
 (`~/Notes/My notes/`, `~/Notes/Family/`) and your quick notes. What you open
 in Obsidian is a vault's folder.
 
-If your Obsidian vault is where you want your notes, `~/Notes` say, run
-`notekpr setup` and choose that folder. It offers to move everything in it,
+If your Obsidian vault is where you want your notes, `~/Notes` say, choose
+that folder in the desktop app, or run `notekpr setup` and choose it there.
+Either offers to move everything in it,
 as it is, into `~/Notes/My notes/` (or the vault name you give), which then
 syncs. `.obsidian` moves along, so open `~/Notes/My notes` in Obsidian
 (**Open folder as vault**) and your settings, themes and plugins are there.
 Or let it copy your notes into another folder and keep the old one as it is.
-Details: [cli.md §2](cli.md#all-of-it-at-once-notekpr-setup).
+Details: [desktop.md](desktop.md#notes-already-in-the-folder),
+[cli.md §2](cli.md#all-of-it-at-once-notekpr-setup).
 
 Drawings stay Obsidian's: its Excalidraw plugin's drawings (the notes its
 front matter marks, `.excalidraw.md` or renamed to any `.md`) and

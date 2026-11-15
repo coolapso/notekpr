@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """The desktop app (crates/desktop, docs/desktop.md), driven by WebKitGTK's
 WebDriver in a headless sway: choosing the server, signing in, its own
-settings, the Markdown folder both ways, starting again, signing out and
-forgetting the computer — against a development server. Then notes only on
-this computer: the app's own server, the folder following its new address
-at each start, and switching to the server and back.
+settings, its initial setup, the Markdown folder both ways, starting again,
+signing out and forgetting the computer — against a development server.
+Then notes only on this computer: notes already in the folder brought in,
+the app's own server, the folder following its new address at each start,
+and switching to the server and back, where the setup takes over the
+Markdown folder a running CLI keeps for that account.
 
     python3 tests/e2e/desktop.py --server target/debug/notekpr-server \
         --app target/debug/notekpr-desktop
@@ -182,6 +184,15 @@ def main():
         """An account's Markdown folder's profile (one per account)."""
         return f"{desk_data}/{p}/folders/{account}/config/profiles/folder.json"
 
+    def through_setup(a, background):
+        """An account's initial setup, all left for later: then its notes."""
+        a.find_text(".desktop-setup h1", "Your notes as Markdown files", 20)
+        a.click(".desktop-setup .not-now")
+        if background:
+            a.find_text(".desktop-setup h1", "In the background", 10)
+            a.click(".desktop-setup .setup-done")
+        a.find(".ed .ln", 20)
+
     a = None
     try:
         # ---- the server: chosen once, then the app starts again
@@ -207,8 +218,21 @@ def main():
         a.find(".recovery-key", 15)
         a.click(".check input")
         a.click_el(a.find_text(".auth-card button", "Continue"))
-        a.find(".ed .ln", 20)
         check(True, "signed in through the server's API from the app's own page (CORS), keys made")
+
+        # ---- the initial setup: once for the account, before its notes
+        a.find_text(".desktop-setup h1", "Your notes as Markdown files", 20)
+        check(a.js("return !!document.querySelector('.desktop-setup .choose-folder')"),
+              "the account's setup offers a Markdown folder first")
+        a.click(".desktop-setup .not-now")
+        a.find_text(".desktop-setup h1", "In the background", 10)
+        check(a.js("return !!document.querySelector('.desktop-setup .autostart')"),
+              "then, the first time, starting at login and the tray")
+        a.click(".desktop-setup .setup-done")
+        a.find(".ed .ln", 20)
+        mine = settings_of(profile)
+        check(next(x for x in mine["accounts"] if x["id"] == mine["account"]).get("set_up")
+              and mine.get("background_asked"), "each left for later, and not asked again by itself")
 
         # ---- the window names itself as its desktop entry is named
         # (packaging/desktop): how a desktop finds its name and icon.
@@ -233,6 +257,8 @@ def main():
         r = invoke("folder_start", {"handoff": {"user_id": "x", "display_name": "x", "device_id": "x", "device_secret": "",
                                                 "account": "", "token": "x", "expires_at": 0}, "pick": 7})
         check("err" in r and "choose the folder again" in r["err"], f"no folder without the system's picker ({r})")
+        r = invoke("cli_folders", {"token": "not-a-session"})
+        check("err" in r, f"which folders the CLI keeps, only for the person the server says the window is ({r})")
         r = invoke("plugin:dialog|open", {"options": {}})
         check("err" in r, f"none of the plugins' own commands ({r})")
 
@@ -376,7 +402,7 @@ def main():
         a.find(".recovery-key", 15)
         a.click(".check input")
         a.click_el(a.find_text(".auth-card button", "Continue"))
-        a.find(".ed .ln", 20)
+        through_setup(a, background=True)
         check(True, "notes only on this computer: keys made, a recovery key shown, the notes open")
         info = invoke("desktop_info", {})["ok"]
         own = info["server"]
@@ -399,19 +425,33 @@ def main():
         check(not a.js("return [...document.querySelectorAll('.settings-body button')].some(b => /Sign out|Forget this/.test(b.textContent))"),
               "other devices need a server, and there is nothing to sign out of")
 
-        # ---- the Markdown folder, at the server's new address each start
+        # ---- the Markdown folder, with notes in it already (an Obsidian vault)
         a.route("/settings/app")
         a.find_text(".accounts .account.open", "On this computer", 10)
+        with open(f"{notes}/Ideas.md", "w") as f:
+            f.write("# Ideas\n\nFrom Obsidian.\n")
+        os.makedirs(f"{notes}/.obsidian")
+        with open(f"{notes}/.obsidian/app.json", "w") as f:
+            f.write("{}\n")
         a.click_el(a.find_text(".settings-body button", "Choose a folder", 10))
+        a.find_text(".bring-in .folder-notes", "holds notes already", 10)
+        said = a.js("return document.querySelector('.bring-in .folder-notes').textContent")
+        check("1 note" in said and ".obsidian" in said, f"a folder with notes: what it holds, and what to do with them ({said})")
+        a.click(".bring-in .bring-in-button")
         wait_for("the folder to sync", lambda: "Keeping" in a.folder_status())
         welcome = f"{notes}/My notes/Welcome.md"
         wait_for("Welcome.md", lambda: os.path.exists(welcome))
+        check(os.path.exists(f"{notes}/My notes/Ideas.md") and os.path.exists(f"{notes}/My notes/.obsidian/app.json")
+              and not os.path.exists(f"{notes}/Ideas.md"),
+              "its notes moved as they were, hidden files too, into the vault's folder there")
         check(True, "the Markdown folder works with notes only on this computer")
         a.quit()
         a = App(app_bin, here)
         a.find(".ed .ln", 20)
         again = invoke("desktop_info", {})["ok"]["server"]
         check(again != own, f"another port at each start ({own} → {again})")
+        a.find_text(".tree-item", "Ideas", 20)
+        check(True, "the notes brought in are the vault's")
         a.click_el(a.find_text(".tree-item", "Welcome", 10))
         a.find(".ed .ln", 10)
         with open(f"{notes}/My notes/Kept here.md", "w") as f:
@@ -438,10 +478,55 @@ def main():
         a.click(".dev-box button[type=submit]")
         a.click_el(a.find_text(".auth-card button", "Create my keys", 15))
         a.find(".recovery-key", 15)
+        check(True, "the account on the server: signed in there, with keys of its own")
+
+        # ---- coming from the CLI: it keeps a Markdown folder for this
+        # account, in the background; the setup takes it over
+        with open(f"{home}/ines.key", "w") as f:
+            f.write(a.js("return document.querySelector('.recovery-key').textContent"))
+        henv = {k: v for k, v in os.environ.items() if not k.startswith("NOTEKPR_")}
+        henv.update(HOME=f"{home}/home", XDG_CONFIG_HOME=f"{home}/home/.config",
+                    XDG_DATA_HOME=f"{home}/home/.local/share")
+        cli_bin = os.path.abspath(a_cli)
+        r = subprocess.run([cli_bin, "login", "--server", url, "--dev-user", name2,
+                            "--recovery-key-file", f"{home}/ines.key"], env=henv, capture_output=True, text=True,
+                           timeout=60)
+        check(r.returncode == 0, f"the CLI is signed in as the same person on this computer ({r.stderr.strip()[-200:]})")
+        cli_notes = f"{home}/home/CliNotes"
+        cli_profile = f"{home}/home/.config/notekpr/profiles/default.json"
+        cli_sync = start([cli_bin, "sync", "--dir", cli_notes, "--plaintext-ok"], env=henv, log="cli-sync.log")
+        wait_for("the CLI to keep its folder", lambda: os.path.exists(f"{cli_notes}/.notekpr-folder"))
         a.click(".check input")
         a.click_el(a.find_text(".auth-card button", "Continue"))
+        cli_welcome = f"{cli_notes}/My notes/Welcome.md"
+        wait_for("the CLI to write the first vault", lambda: os.path.exists(cli_welcome), 30)
+        a.find_text(".desktop-setup .cli-offer", "The CLI keeps ~/CliNotes in sync for you", 20)
+        check(True, "the setup finds the CLI's folder for this account, and offers to take it over")
+        a.click(".desktop-setup .take-over")
+        a.find_text(".desktop-setup .cli-wait .cli-command", "systemctl --user disable --now notekpr-sync@default", 20)
+        check(True, "where it can't stop the CLI's background sync itself, it says how, and waits")
+        check(json.load(open(cli_profile))["sync"].get("mirror_dir") == cli_notes,
+              "nothing changes while the CLI still runs")
+        os.killpg(cli_sync.pid, signal.SIGTERM)
+        cli_sync.wait(30)
+        wait_for("the app to keep it", lambda: "Keeping" in a.folder_status(), 60)
+        check("mirror_dir" not in json.load(open(cli_profile))["sync"],
+              "once the CLI stopped: it forgot the folder, as `sync --no-dir` does")
+        marker = json.load(open(f"{cli_notes}/.notekpr-folder"))
+        check(marker["by"].startswith("the desktop app (development "), f"and the app keeps it ({marker['by']})")
+        names = [n for _, ds, fs in os.walk(cli_notes) for n in ds + fs]
+        check(os.path.exists(cli_welcome) and not any("(" in n or "conflict" in n.lower() for n in names),
+              f"the vaults' folders and files taken over as they were: no second copy, no conflict ({sorted(names)})")
+        r = subprocess.run([cli_bin, "sync", "--dir", cli_notes, "--once", "--plaintext-ok"], env=henv,
+                           capture_output=True, text=True, timeout=60)
+        check(r.returncode != 0 and "the desktop app" in r.stderr, "the CLI is refused it from then on")
+        with open(cli_welcome, "a") as f:
+            f.write("\nEdited after the app took over.\n")
+        a.click(".desktop-setup .setup-next")
         a.find(".ed .ln", 20)
-        check(True, "the account on the server: signed in there, with keys of its own")
+        a.wait("return document.querySelector('.ed').textContent.includes('Edited after the app took over.')", 20,
+               "the file's edit in the window")
+        check(True, "the app keeps the folder in sync: an edit there reaches the window")
         # (Development sign-in names people with a capital.)
         wait_for("its name in the list", lambda: any(x.get("server") == url and (x.get("name") or "").lower() == name2
                                                      for x in settings_of(here)["accounts"]))

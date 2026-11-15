@@ -559,9 +559,13 @@ pub async fn setup_keys() {
 /// After the recovery key was saved: create a first vault with a welcome note.
 pub async fn finish_setup() {
     storage::clear_pending_recovery(&step(|c| c.user_id.clone()));
-    enter_ready().await;
-    // The quick notes are no vault to the person, and may be made meanwhile
-    // (`refresh_vaults` starts that): the first vault is still to come.
+    enter(true).await;
+}
+
+/// A new account's first vault, with a note of things to try. The quick
+/// notes are no vault to the person, and may be made meanwhile
+/// (`refresh_vaults` starts that).
+async fn first_vault() {
     if step(|c| c.replicas.keys().all(|v| c.is_quick_notes(v)))
         && let Some(v) = crate::actions::create_vault("My notes".into()).await
     {
@@ -790,6 +794,13 @@ pub async fn delete_account() -> Result<(), String> {
 }
 
 pub(super) async fn enter_ready() {
+    enter(false).await
+}
+
+/// Into the app, once signed in with this device's keys; `first`: a new
+/// account, whose first vault is made before anything shows it — before
+/// the desktop app's setup, which may bring notes into it.
+async fn enter(first: bool) {
     let ui = ui();
     let device_id = step(|c| c.device_id.clone());
     if let Some(d) = device_id
@@ -808,14 +819,36 @@ pub(super) async fn enter_ready() {
     refresh_vaults().await;
     refresh_shares().await;
     connect_socket();
-    ui.phase.set(Phase::Ready);
+    if first {
+        first_vault().await;
+    }
+    // The desktop app: an account's setup first, once.
+    if crate::desktop::needs_setup() {
+        ui.phase.set(Phase::DesktopSetup { again: false });
+    } else {
+        ui.phase.set(Phase::Ready);
+        go_to_last_location();
+    }
     // The desktop app's list of accounts shows whose this one is.
     if let Some(u) = ui.user.get_untracked() {
         crate::desktop::account_seen(&u.display_name);
     }
-    go_to_last_location();
     refresh_pending_devices().await;
     offline::ensure_worker().await;
+}
+
+/// The desktop app's initial setup is done (or skipped): not shown again
+/// by itself, and the notes open.
+pub async fn finish_desktop_setup() {
+    if let Err(e) = crate::desktop::setup_done().await {
+        util::warn(&format!("setup_done: {e}"));
+    }
+    let _ = crate::desktop::refresh().await;
+    let ui = ui();
+    if matches!(ui.phase.get_untracked(), Phase::DesktopSetup { .. }) {
+        ui.phase.set(Phase::Ready);
+        go_to_last_location();
+    }
 }
 
 /// On the home page after a start: go back to where this person last was.

@@ -448,6 +448,18 @@ impl FolderClaim {
     pub fn holds(&self) -> bool {
         self.lock.holds(&self.root)
     }
+
+    /// Taken, but nothing came of it (what was to follow failed, before the
+    /// profile remembered the folder): the marker goes at once, while the
+    /// folder is still locked, so that choosing it again isn't refused as
+    /// someone else's.
+    pub fn abandon(self) {
+        if self.lock.holds(&self.root)
+            && matches!(read_marker(&self.root), Found::Marker { ref id, .. } if *id == self.id)
+        {
+            let _ = std::fs::remove_file(self.root.join(MARKER));
+        }
+    }
 }
 
 /// Give a folder back (the profile in `store` stops keeping it, or goes):
@@ -679,6 +691,20 @@ mod tests {
         assert!(root.join(MARKER).exists());
         release(&alice);
         assert!(!root.join(MARKER).exists());
+    }
+
+    #[test]
+    fn a_claim_nothing_came_of_leaves_nothing_behind() {
+        let (_tmp, dirs, root) = setup();
+        let alice = profile(&dirs, "alice");
+        let claim = FolderClaim::take(&root, &alice, &cli_label("alice"), false).unwrap();
+        assert!(root.join(MARKER).exists());
+        claim.abandon();
+        assert!(!root.join(MARKER).exists());
+        // Another profile may take it then.
+        let bob = profile(&dirs, "bob");
+        check(&root, &bob, false).unwrap();
+        drop(FolderClaim::take(&root, &bob, &cli_label("bob"), false).unwrap());
     }
 
     /// Where the folder itself can't be locked: the lock file gone (a cloud

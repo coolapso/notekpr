@@ -247,6 +247,22 @@ textarea.input { resize: vertical; }
 .recovery-key { font-family: var(--mono); font-size: 16px; line-height: 1.7; padding: 14px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--border-strong); word-spacing: 6px; text-align: center; user-select: all; overflow-wrap: anywhere; }
 .verify-code { font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: 0.08em; text-align: center; padding: 14px; border-radius: 10px; background: var(--accent-bg); color: var(--accent); }
 .divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+/* The desktop app's Markdown folder: its setup, and Settings → Desktop app
+   (views/desktop_setup.rs). */
+.desktop-setup .row { flex-wrap: wrap; }
+.bring-in { display: flex; flex-direction: column; gap: 10px; }
+.bring-in .folder-notes { color: var(--fg); }
+.bring-in .choices { display: flex; flex-direction: column; gap: 6px; }
+.bring-in .choices .check { margin: 0; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.bring-in .choices .check:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: var(--accent-bg); }
+.bring-in .choices .check input { margin-top: 3px; }
+.bring-in .choices .check > span { display: flex; flex-direction: column; gap: 2px; }
+.bring-in .field { max-width: 420px; }
+.cli-offer, .cli-wait { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); background: var(--accent-bg); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px; max-width: 520px; }
+.cli-offer-title { display: flex; gap: 6px; align-items: center; font-weight: 600; color: var(--accent); }
+.cli-offer p, .cli-wait p { margin: 0; }
+.cli-command-row { align-items: center; gap: 8px; }
+.cli-command { font-size: 12.5px; padding: 6px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); overflow-wrap: anywhere; user-select: all; }
 .divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 
 /* ---------------------------------------------------------- shell */

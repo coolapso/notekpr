@@ -19,7 +19,8 @@ use notekpr_cli::hub::{Hub, HubOptions};
 use notekpr_cli::mirror::{Mirror, MirrorOptions};
 use notekpr_cli::profile::{Dirs, Profile, ProfileLock, ProfileStore};
 use notekpr_cli::session::Session;
-use notekpr_cli::{livesync, setup};
+use notekpr_cli::setup::{Contents, Target};
+use notekpr_cli::{fsutil, livesync, manage, mirror, setup};
 use tokio::sync::{Mutex, watch};
 use tokio::task::JoinHandle;
 
@@ -47,10 +48,13 @@ pub struct Folder {
     label: String,
     updates: Arc<Updates>,
     running: Mutex<Option<Running>>,
+    /// One change of folder at a time (choosing one, bringing notes in,
+    /// taking the CLI's over), however long it waits for the person.
+    changing: Mutex<()>,
 }
 
 /// Whether two addresses are one server's, as the CLI writes them.
-fn same_server(a: &str, b: &str) -> bool {
+pub(crate) fn same_server(a: &str, b: &str) -> bool {
     let n = |s: &str| notekpr_cli::profile::normalize_server_url(s, true).ok();
     n(a).is_some() && n(a) == n(b)
 }
@@ -110,6 +114,56 @@ pub struct Check {
     /// A cloud drive syncs it (Dropbox, …): asked before going on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloud: Option<String>,
+    /// Notes of its own (outside vaults' folders: an Obsidian vault, say):
+    /// brought in, or another folder chosen
+    /// (docs/desktop.md "Notes already in the folder").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Holds>,
+}
+
+/// What a folder holds, as the window shows it.
+#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct Holds {
+    pub notes: usize,
+    /// "12 notes, 3 folders and .obsidian".
+    pub described: String,
+}
+
+/// Notes to bring into a vault's folder in the Markdown folder: moved from
+/// it (`from` is `root`), or copied from another folder.
+#[derive(Debug)]
+pub struct Bring {
+    /// The Markdown folder.
+    pub root: PathBuf,
+    /// Where the notes are.
+    pub from: PathBuf,
+    pub contents: Contents,
+    pub target: Target,
+    /// The vault's folder, `<root>/<vault>`.
+    pub dest: PathBuf,
+    /// The people the vault is shared with, besides the person: they see
+    /// the notes too.
+    pub others: usize,
+}
+
+impl Bring {
+    pub fn copy(&self) -> bool {
+        self.from != self.root
+    }
+}
+
+/// What a folder holds of its own, outside vaults' folders: notes there
+/// (none in a folder notekpr kept, which has vaults' folders).
+fn holds(dir: &Path) -> Result<Option<(Contents, Holds)>> {
+    let c = setup::inspect(dir)?;
+    if c.vault_folders > 0 || c.notes == 0 {
+        return Ok(None);
+    }
+    let h = Holds {
+        notes: c.notes,
+        described: setup::describe(&c),
+    };
+    Ok(Some((c, h)))
 }
 
 impl Folder {
@@ -120,6 +174,7 @@ impl Folder {
             label,
             updates,
             running: Mutex::new(None),
+            changing: Mutex::new(()),
         }
     }
 
@@ -149,18 +204,22 @@ impl Folder {
     }
 
     /// Whether `dir` can become the Markdown folder: the rules the CLI's
-    /// `setup` and `sync --dir` follow too ([`setup::check_new_folder`]),
-    /// and — until the app brings notes in, as `notekpr setup` does —
-    /// empty.
+    /// `setup` and `sync --dir` follow too ([`setup::check_new_folder`]);
+    /// and what it holds, as `notekpr setup` asks: notes of its own are
+    /// brought in ([`Folder::bring`]), other files stay as they are.
     pub fn check(&self, dir: &Path) -> Check {
-        match self.refusal(dir) {
+        let r = self
+            .refusal(dir)
+            .and_then(|()| holds(dir).map(|h| h.map(|(_, h)| h)));
+        match r {
             Err(e) => Check {
                 refused: Some(format!("{e:#}")),
-                cloud: None,
+                ..Check::default()
             },
-            Ok(()) => Check {
+            Ok(notes) => Check {
                 refused: None,
                 cloud: setup::cloud_synced(dir).map(str::to_string),
+                notes,
             },
         }
     }
@@ -169,21 +228,29 @@ impl Folder {
         if !dir.is_absolute() {
             bail!("choose a folder by its full path");
         }
-        setup::check_new_folder(dir, &self.dirs, PROFILE, false)?;
-        let c = setup::inspect(dir)?;
-        if c.notes + c.files + c.folders > 0 {
-            bail!(
-                "{} already holds files: choose an empty folder (or one notekpr kept before). To bring \
-                 notes in, import them in the app, or use `notekpr setup`",
-                dir.display()
-            );
-        }
-        Ok(())
+        setup::check_new_folder(dir, &self.dirs, PROFILE, false)
     }
 
-    /// Hand over the window's device and session (see the module docs),
-    /// remember `dir` and start keeping it in sync.
-    pub async fn adopt_and_start(&self, a: Adopt, dir: PathBuf) -> Result<()> {
+    /// Hold while changing which folder this is: an error if another
+    /// change is under way.
+    pub fn changing(&self) -> Result<tokio::sync::MutexGuard<'_, ()>> {
+        self.changing
+            .try_lock()
+            .map_err(|_| anyhow!("the Markdown folder is being set up already"))
+    }
+
+    /// Once no change of folder is under way (waiting at most `within`, for
+    /// one that waits for the person): before the app quits or switches.
+    pub async fn settled(&self, within: Duration) {
+        let _ = tokio::time::timeout(within, self.changing.lock()).await;
+    }
+
+    /// Hand over the window's device and session (see the module docs):
+    /// the folder's profile is this account's from then on, whatever it
+    /// kept running stopped. True when the profile was made now (nothing
+    /// was kept for this account): if no folder comes of it,
+    /// [`Folder::unadopt`] takes it away again.
+    pub async fn adopt(&self, a: Adopt) -> Result<bool> {
         if !self
             .server
             .as_deref()
@@ -193,25 +260,194 @@ impl Folder {
         }
         let mut running = self.running.lock().await;
         self.stop_locked(&mut running).await;
-        // Another account (or server) than the folder had: start afresh.
+        let mut fresh = true;
         if let Some(p) = self.store()?.load()?
             && p.user_id.is_some()
-            && (p.user_id.as_deref() != Some(a.user_id.as_str())
+        {
+            // Another account (or server) than the folder had: start afresh
+            // — once the server says the session handed over is that
+            // person's, on this device; the window's word alone deletes
+            // nothing here.
+            if p.user_id.as_deref() != Some(a.user_id.as_str())
                 || notekpr_cli::profile::normalize_server_url(&a.server, false)
                     .ok()
                     .as_deref()
-                    != Some(p.server.as_str()))
-        {
-            account::forget_locally(&self.dirs, PROFILE)?;
+                    != Some(p.server.as_str())
+            {
+                let me = Api::new(&a.server, Credentials::Session(a.token.clone()))?
+                    .me()
+                    .await
+                    .context("checking the session")?;
+                if me.user.id != a.user_id
+                    || me.session.device_id.as_deref() != Some(a.device_id.as_str())
+                {
+                    bail!("the session isn't this device's");
+                }
+                account::forget_locally(&self.dirs, PROFILE)?;
+            } else {
+                fresh = false;
+            }
         }
         account::adopt(&self.dirs, PROFILE, a).await?;
+        Ok(fresh)
+    }
+
+    /// The profile [`Folder::adopt`] made, gone again when no folder came
+    /// of it: nothing of the account stays here that *Forget this
+    /// computer* wouldn't find.
+    pub async fn unadopt(&self) -> Result<()> {
+        let _running = self.running.lock().await;
+        if self.kept().is_some() {
+            return Ok(());
+        }
+        account::forget_locally(&self.dirs, PROFILE)
+    }
+
+    /// Hand over the window's device and session, remember `dir` and start
+    /// keeping it in sync.
+    pub async fn adopt_and_start(&self, a: Adopt, dir: PathBuf) -> Result<()> {
+        let fresh = self.adopt(a).await?;
+        let r = self.take_and_start(dir).await;
+        if r.is_err() && fresh {
+            let _ = self.unadopt().await;
+        }
+        r
+    }
+
+    /// Take `dir` for this profile, remember it and start keeping it in
+    /// sync: after [`Folder::adopt`].
+    pub async fn take_and_start(&self, dir: PathBuf) -> Result<()> {
+        let mut running = self.running.lock().await;
+        self.stop_locked(&mut running).await;
         // Taken before it is remembered: of two choosing it at once, one
         // stops here, its folder setting untouched.
         let claim = FolderClaim::take(&dir, &self.store()?, &self.label, false)?;
+        if let Err(e) = self.remember(&dir) {
+            claim.abandon();
+            return Err(e);
+        }
+        self.start_with(&mut running, Some(Arc::new(claim)))
+    }
+
+    fn remember(&self, dir: &Path) -> Result<()> {
         self.store()?.update(|p| {
-            p.sync.confirm_plaintext(&dir);
-            p.sync.mirror_dir = Some(dir.clone());
+            p.sync.confirm_plaintext(dir);
+            p.sync.mirror_dir = Some(dir.to_path_buf());
         })?;
+        Ok(())
+    }
+
+    /// What bringing the notes in `from` into the vault `vault` (one of the
+    /// account's by that name, or a new one) in the Markdown folder `root`
+    /// means — asked of the server through this profile, after
+    /// [`Folder::adopt`]: for the person to say yes to. A move when `from`
+    /// is `root`.
+    pub async fn plan_bring(&self, root: &Path, from: &Path, vault: &str) -> Result<Bring> {
+        let contents = if from == root {
+            holds(root)?.map(|(c, _)| c).ok_or_else(|| {
+                anyhow!(
+                    "{} holds no notes of its own to move in",
+                    setup::shown(root)
+                )
+            })?
+        } else {
+            setup::check_copy(from, root)?
+        };
+        let _running = self.running.lock().await;
+        let _lock = ProfileLock::try_acquire(&self.dirs, PROFILE)?
+            .ok_or_else(|| anyhow!("the Markdown folder is already being kept in sync"))?;
+        let session = Arc::new(Session::open(&self.dirs, PROFILE)?);
+        let hub = Hub::start(
+            session.clone(),
+            HubOptions {
+                vaults: vec![],
+                read_only: false,
+                offline_ok: false,
+                catch_up: true,
+                detached: false,
+                quick_notes: false,
+            },
+        )
+        .await?;
+        let vaults: Vec<_> = hub
+            .summaries()
+            .await
+            .into_iter()
+            .filter(|s| !s.kind.is_section())
+            .collect();
+        let (target, dest) = setup::target_named(vault, &vaults, root)?;
+        let others = match &target {
+            Target::Existing { id, .. } => match hub.get(id) {
+                Some(v) => manage::members(&session, &v)
+                    .await?
+                    .iter()
+                    .filter(|m| m.member.user.id != session.user_id)
+                    .count(),
+                None => 0,
+            },
+            Target::New(_) => 0,
+        };
+        hub.save_all().await;
+        Ok(Bring {
+            root: root.to_path_buf(),
+            from: from.to_path_buf(),
+            contents,
+            target,
+            dest,
+            others,
+        })
+    }
+
+    /// Bring the notes in as `b` says, once the person said yes — the order
+    /// `notekpr setup` keeps: the folder taken, the vault made if it is
+    /// new, the notes moved or copied into its folder there (which the
+    /// first sync adopts and takes in as they are), the folder remembered
+    /// and started.
+    pub async fn bring(&self, b: Bring) -> Result<()> {
+        let mut running = self.running.lock().await;
+        self.stop_locked(&mut running).await;
+        // Still what the person said yes to.
+        let now = if b.copy() {
+            setup::check_copy(&b.from, &b.root)?
+        } else {
+            holds(&b.root)?.map(|(c, _)| c).unwrap_or_default()
+        };
+        if now != b.contents || b.dest.symlink_metadata().is_ok() {
+            bail!(
+                "{} changed meanwhile: nothing was moved or copied. Choose it again",
+                setup::shown(&b.from)
+            );
+        }
+        fsutil::create_private_dir(&b.root)?;
+        let claim = FolderClaim::take(&b.root, &self.store()?, &self.label, false)?;
+        // Until the folder is remembered, a failure gives it up again: its
+        // marker never outlives what was to follow.
+        let brought = async {
+            let id = {
+                let _lock = ProfileLock::try_acquire(&self.dirs, PROFILE)?
+                    .ok_or_else(|| anyhow!("the Markdown folder is already being kept in sync"))?;
+                match &b.target {
+                    Target::Existing { id, .. } => id.clone(),
+                    Target::New(name) => {
+                        let session = Session::open(&self.dirs, PROFILE)?;
+                        manage::create_vault(&session, name).await?.id().to_string()
+                    }
+                }
+            };
+            if b.copy() {
+                setup::copy_into(&b.from, &b.dest)?;
+            } else {
+                setup::move_into(&b.root, &b.dest)?;
+            }
+            mirror::mark_vault_folder(&b.dest, &id)
+                .with_context(|| format!("marking {} as the vault's folder", b.dest.display()))?;
+            self.remember(&b.root)
+        }
+        .await;
+        if let Err(e) = brought {
+            claim.abandon();
+            return Err(e);
+        }
         self.start_with(&mut running, Some(Arc::new(claim)))
     }
 
@@ -609,6 +845,47 @@ mod tests {
         // An account with a folder already keeps it.
         kept(&legacy, "https://a.example.com");
         assert!(!take_legacy(&legacy, &to("a"), Some("https://a.example.com")).unwrap());
+    }
+
+    #[tokio::test]
+    async fn the_window_s_word_alone_deletes_nothing_kept_here() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A server that doesn't answer: nothing can confirm the session.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let server = format!("http://127.0.0.1:{port}");
+        let dirs = Dirs::under(&tmp.path().join("folders/a"));
+        let mut p = Profile::new(&server, PrincipalKind::Human, false);
+        p.user_id = Some("u1".into());
+        p.device_id = Some("d1".into());
+        ProfileStore::new(&dirs, PROFILE).unwrap().save(&p).unwrap();
+        let folder = Folder::new(
+            dirs,
+            Some(server.clone()),
+            "the desktop app".into(),
+            Arc::new(Updates::default()),
+        );
+        let someone_else = Adopt {
+            server,
+            user_id: "u2".into(),
+            display_name: "x".into(),
+            device_id: "d2".into(),
+            device_name: None,
+            device_secret: zeroize::Zeroizing::new([7; 32]),
+            account_public: notekpr_core::keys::AccountPublic {
+                sign_public: [1; 32],
+                enc_public: [2; 32],
+            },
+            token: "t".into(),
+            expires_at: 0,
+        };
+        assert!(folder.adopt(someone_else).await.is_err());
+        let kept = folder.store().unwrap().load().unwrap().unwrap();
+        assert_eq!(kept.user_id.as_deref(), Some("u1"));
+        assert_eq!(kept.device_id.as_deref(), Some("d1"));
     }
 
     #[tokio::test]

@@ -23,6 +23,11 @@ const COMMANDS: &[&str] = &[
     "session_changed",
     "signed_out",
     "forget_computer",
+    "folder_bring",
+    "cli_folders",
+    "folder_take_from_cli",
+    "cancel_take",
+    "setup_done",
     "next_event",
 ];
 

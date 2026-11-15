@@ -166,7 +166,9 @@ crates/desktop  the desktop app (`notekpr-desktop`): Tauri 2 around crates/web, 
                 (window, tray, close to tray, single instance) · commands.rs (the IPC the
                 window may call: capabilities/main.json, build.rs) · signin.rs (system
                 browser, loopback + PKCE) · folder.rs (the Markdown folder: the CLI's
-                library with this computer's device) · paths.rs, settings.rs, status.rs
+                library with this computer's device; notes brought in) · from_cli.rs
+                (taking over the CLI's folder: systemd over D-Bus) · paths.rs,
+                settings.rs, status.rs
 crates/load     load test (`task load`): simulated people = real clients (the CLI's
                 library) against the server image with CPU/memory limits; crash,
                 check, report. load-events: what it streams; load-ui: its live
@@ -400,7 +402,9 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   must be safe under someone else's script. Files only through the system's
   picker (the window gets a number, never names a path); a new server and a
   Markdown folder only after a yes in a system dialog (switching between
-  the accounts already added doesn't ask). A new command
+  the accounts already added doesn't ask). Taking over the folder the CLI
+  keeps for the same person (`from_cli.rs`) is the one thing done outside
+  folders picked: after a yes too. A new command
   goes into `build.rs` and `capabilities/main.json`, nowhere else.
 - The account secret never crosses IPC: the folder gets the device key and
   the pinned account key, and unwraps the secret itself

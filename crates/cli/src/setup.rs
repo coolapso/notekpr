@@ -392,7 +392,7 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 /// "2 notes, 1 folder and .obsidian": what is there, nothing of what isn't.
-fn describe(c: &Contents) -> String {
+pub fn describe(c: &Contents) -> String {
     let mut parts = vec![plural(c.notes, "note", "notes")];
     if c.files > 0 {
         parts.push(plural(c.files, "other file", "other files"));
@@ -730,7 +730,7 @@ fn folder_plan(
 
 /// Notes in `src` can be copied into a vault's folder in `root`: what is in
 /// `src`.
-fn check_copy(src: &Path, root: &Path) -> Result<Contents> {
+pub fn check_copy(src: &Path, root: &Path) -> Result<Contents> {
     if !src.is_dir() {
         bail!("{} is not a folder", shown(src));
     }
@@ -760,13 +760,13 @@ fn check_copy(src: &Path, root: &Path) -> Result<Contents> {
 
 /// The vault the notes go into.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Target {
+pub enum Target {
     Existing { id: String, name: String },
     New(String),
 }
 
 impl Target {
-    fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         match self {
             Target::Existing { name, .. } | Target::New(name) => name,
         }
@@ -775,7 +775,7 @@ impl Target {
 
 /// The vault called `name`: one of `vaults` (it must be writable), or a new
 /// one. Its folder in `root` must not be there yet.
-fn target_named(name: &str, vaults: &[VaultSummary], root: &Path) -> Result<(Target, PathBuf)> {
+pub fn target_named(name: &str, vaults: &[VaultSummary], root: &Path) -> Result<(Target, PathBuf)> {
     let name = name.trim();
     if name.is_empty() {
         bail!("a vault needs a name");

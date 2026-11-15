@@ -57,6 +57,9 @@ pub struct Info {
     /// A tray icon could be shown: closing to it is possible.
     pub tray: bool,
     pub autostart: bool,
+    /// The initial setup asked about the tray and starting at login.
+    #[serde(default)]
+    pub background_asked: bool,
     pub status_version: u64,
     pub status: Status,
 }
@@ -70,6 +73,9 @@ pub struct Account {
     /// What its window last showed: a label beside the server.
     pub name: Option<String>,
     pub open: bool,
+    /// Its initial setup was shown.
+    #[serde(default)]
+    pub set_up: bool,
 }
 
 impl Account {
@@ -104,6 +110,7 @@ mod tests {
             server: server.map(Into::into),
             name: name.map(Into::into),
             open: false,
+            set_up: false,
         };
         assert_eq!(
             a(Some("https://notes.example.com"), Some("ana")).label(),
@@ -129,6 +136,37 @@ pub struct Status {
     /// While signing in: the code the server's page shows, to compare.
     #[serde(default)]
     pub sign_in_code: Option<String>,
+    /// While taking over the CLI's Markdown folder: a CLI still runs it.
+    #[serde(default)]
+    pub cli_wait: Option<CliWait>,
+}
+
+/// Waiting for the CLI to stop ([`folder_take_from_cli`]).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct CliWait {
+    pub dir: String,
+    pub profile: String,
+    /// What stops its background sync, where the app couldn't.
+    #[serde(default)]
+    pub command: Option<String>,
+}
+
+/// A Markdown folder the CLI keeps for this account ([`cli_folders`]).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct CliFolder {
+    pub profile: String,
+    pub shown: String,
+    /// A CLI runs it now.
+    pub running: bool,
+    /// Its background sync; none where the app can't ask.
+    #[serde(default)]
+    pub service: Option<Service>,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Service {
+    pub active: bool,
+    pub enabled: bool,
 }
 
 /// The Markdown folder's sync; `dir` as people read it (`~/Notes`).
@@ -151,13 +189,23 @@ pub enum FolderStatus {
 }
 
 /// A folder picked in the system's dialog.
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, PartialEq)]
 pub struct Picked {
     pub pick: u64,
     pub shown: String,
     /// Why it can't be used.
     #[serde(default)]
     pub refused: Option<String>,
+    /// Notes of its own, to bring in (or choose another folder).
+    #[serde(default)]
+    pub notes: Option<Holds>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Holds {
+    pub notes: usize,
+    /// "12 notes, 3 folders and .obsidian".
+    pub described: String,
 }
 
 /// What the window hands the app for the Markdown folder: this device as
@@ -317,6 +365,53 @@ pub async fn folder_start(handoff: Handoff, pick: u64) -> Result<(), String> {
         json!({ "handoff": serde_json::to_value(handoff).unwrap_or_default(), "pick": pick }),
     )
     .await
+}
+
+/// Bring the notes in the folder picked as `pick` into the vault named
+/// `vault` (one of yours, or a new one): moved into its folder there, or
+/// copied into one in the folder picked as `copy_to`. The app asks first.
+pub async fn folder_bring(
+    handoff: Handoff,
+    pick: u64,
+    copy_to: Option<u64>,
+    vault: &str,
+) -> Result<(), String> {
+    invoke(
+        "folder_bring",
+        json!({ "handoff": serde_json::to_value(handoff).unwrap_or_default(), "pick": pick,
+                "copy_to": copy_to, "vault": vault }),
+    )
+    .await
+}
+
+/// The Markdown folders the CLI keeps for the person whose session `token`
+/// is, on this account's server.
+pub async fn cli_folders(token: &str) -> Result<Vec<CliFolder>, String> {
+    invoke("cli_folders", json!({ "token": token })).await
+}
+
+/// Take over the CLI's folder of `profile` (the app asks first); ends once
+/// the app keeps it, or when cancelled ([`cancel_take`]).
+pub async fn folder_take_from_cli(handoff: Handoff, profile: &str) -> Result<(), String> {
+    invoke(
+        "folder_take_from_cli",
+        json!({ "handoff": serde_json::to_value(handoff).unwrap_or_default(), "profile": profile }),
+    )
+    .await
+}
+
+pub fn cancel_take() {
+    fire("cancel_take", json!({}));
+}
+
+/// The open account's initial setup was shown.
+pub async fn setup_done() -> Result<(), String> {
+    invoke("setup_done", json!({})).await
+}
+
+/// Whether the open account still has its initial setup to see.
+pub fn needs_setup() -> bool {
+    is_desktop() && accounts().iter().any(|a| a.open && !a.set_up)
 }
 
 pub async fn folder_off() -> Result<(), String> {

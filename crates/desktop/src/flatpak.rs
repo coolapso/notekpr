@@ -176,13 +176,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     mod portal {
         use std::collections::HashMap;
-        use std::io::{BufRead, BufReader};
-        use std::process::{Child, Command, Stdio};
         use std::time::Duration;
 
         use zbus::names::BusName;
         use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
         use zbus::{Connection, connection, interface, message::Header};
+
+        use crate::testbus::Bus;
 
         const NAME: &str = "org.freedesktop.portal.Desktop";
 
@@ -254,37 +254,12 @@ mod tests {
             }
         }
 
-        /// A bus of its own: dbus-daemon, stopped with it.
-        struct Bus(Child, String);
-
-        impl Bus {
-            fn start() -> Bus {
-                let mut daemon = Command::new("dbus-daemon")
-                    .args(["--session", "--nofork", "--print-address=1"])
-                    .stdout(Stdio::piped())
-                    .spawn()
-                    .expect("dbus-daemon (the dbus package)");
-                let mut address = String::new();
-                BufReader::new(daemon.stdout.take().unwrap())
-                    .read_line(&mut address)
-                    .unwrap();
-                Bus(daemon, address.trim().to_string())
-            }
-        }
-
-        impl Drop for Bus {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-
         /// Ask a portal answering `answer` (none: a desktop without the
         /// Background portal) to turn starting at login `on`; a test fails
         /// rather than wait for ever.
         pub fn ask(answer: Option<Answer>, on: bool) -> anyhow::Result<bool> {
             let bus = Bus::start();
-            let address = bus.1.clone();
+            let address = bus.address().to_string();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 let r = futures_lite::future::block_on(async {

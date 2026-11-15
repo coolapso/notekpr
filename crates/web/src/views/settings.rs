@@ -324,34 +324,9 @@ fn DesktopApp() -> impl IntoView {
             reload();
         });
     };
-    let busy = RwSignal::new(false);
-    let choose = move |_| {
-        busy.set(true);
-        leptos::task::spawn_local(async move {
-            let r: Result<bool, String> = async {
-                let Some(p) = crate::desktop::choose_folder().await? else {
-                    return Ok(false);
-                };
-                if let Some(why) = p.refused {
-                    return Err(why);
-                }
-                let handoff = step(|c| state::desktop_handoff(c))
-                    .ok_or("This computer isn't set up as one of your devices yet.")?;
-                crate::desktop::folder_start(handoff, p.pick).await?;
-                Ok(true)
-            }
-            .await;
-            match r {
-                Ok(true) => {
-                    state::success("Your notes are being written into the Markdown folder.")
-                }
-                Ok(false) => {}
-                Err(e) if e == "cancelled" => {}
-                Err(e) => state::error(e),
-            }
-            busy.set(false);
-        });
-    };
+    let chosen = Callback::new(|()| {
+        state::success("Your notes are being written into the Markdown folder.")
+    });
     let stop = move |_| {
         leptos::task::spawn_local(async move {
             match crate::desktop::folder_off().await {
@@ -376,6 +351,9 @@ fn DesktopApp() -> impl IntoView {
         });
     };
     use crate::desktop::FolderStatus;
+    // Only the folder's own changes re-draw it (not, say, waiting for the
+    // CLI, which its offer shows itself).
+    let folder = Memo::new(move |_| ui.desktop.get().folder);
     view! {
         <h3>"In the background"</h3>
         <label class="check">
@@ -398,13 +376,10 @@ fn DesktopApp() -> impl IntoView {
 
         <h3>"Markdown folder"</h3>
         <p class="muted small">"Keep your notes as a folder of ordinary Markdown files as well, synced both ways while notekpr runs: edit them with any editor — Obsidian, VS Code, Neovim — and changes reach everyone. Each vault is a folder in it."</p>
-        {move || match ui.desktop.get().folder {
+        {move || match folder.get() {
             FolderStatus::Off => view! {
-                <div class="row">
-                    <button class="btn choose-folder" disabled=move || busy.get() on:click=choose><Icon name="folder"/>" Choose a folder…"</button>
-                    <Show when=move || busy.get()><span class="spinner inline"></span></Show>
-                </div>
-                <p class="muted small">"An empty folder, or one notekpr kept before. The files in it are decrypted: readable by any program you run on this computer."</p>
+                <super::desktop_setup::CliOffer done=chosen/>
+                <super::desktop_setup::FolderChooser done=chosen/>
             }.into_any(),
             FolderStatus::Starting { dir } => view! {
                 <p class="folder-status">{format!("Starting {dir}…")}</p>
@@ -430,6 +405,11 @@ fn DesktopApp() -> impl IntoView {
         <super::accounts::AccountsList/>
         <div class="row">
             <button class="btn add-account" on:click=move |_| ui.modal.set(Some(Modal::Accounts))><Icon name="plus"/>" Add an account…"</button>
+        </div>
+        <h3>"Setup"</h3>
+        <p class="muted small">"What the app asked when this account first opened: the Markdown folder, the tray and starting at login."</p>
+        <div class="row">
+            <button class="btn setup-again" on:click=move |_| super::desktop_setup::again()>"Set it up again…"</button>
         </div>
         <h3>"Version"</h3>
         <p class="muted small">{move || info.get().map(|i| format!("notekpr desktop app {}", i.version))}</p>

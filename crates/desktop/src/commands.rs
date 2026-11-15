@@ -3,10 +3,13 @@
 //! safe for a window running someone else's script (an XSS through a
 //! note): nothing here reads or writes a file the person didn't choose in
 //! the system's own dialog, starts a program other than the default
-//! browser for a web or mail address, adds a server or starts a Markdown
-//! folder without the person's yes in a system dialog. Switching between
-//! accounts already added doesn't ask: the next one's window has storage of
-//! its own.
+//! browser for a web or mail address, adds a server, starts a Markdown
+//! folder or brings notes into one without the person's yes in a system
+//! dialog. Switching between accounts already added doesn't ask: the next
+//! one's window has storage of its own. The one thing done outside folders
+//! picked is taking over a Markdown folder the CLI keeps for the same
+//! account ([`folder_take_from_cli`], docs/desktop.md "From the CLI"),
+//! after a yes too.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,8 +27,9 @@ use zeroize::Zeroizing;
 
 use crate::app::{AppState, show_window};
 use crate::folder::Check;
+use crate::from_cli::{self, Service, Systemd};
 use crate::links;
-use crate::status::Status;
+use crate::status::{CliWait, Status};
 
 type Res<T> = Result<T, String>;
 
@@ -91,6 +95,8 @@ pub struct Info {
     /// A tray icon could be shown: closing to it is possible.
     pub tray: bool,
     pub autostart: bool,
+    /// The initial setup asked about the tray and starting at login.
+    pub background_asked: bool,
     pub status_version: u64,
     pub status: Status,
 }
@@ -103,6 +109,8 @@ pub struct AccountInfo {
     /// What its window last reported (a label).
     pub name: Option<String>,
     pub open: bool,
+    /// Its initial setup was shown.
+    pub set_up: bool,
 }
 
 #[tauri::command]
@@ -122,9 +130,11 @@ pub fn desktop_info(app: AppHandle, state: State<'_, Arc<AppState>>) -> Res<Info
                 server: a.server.clone(),
                 name: a.name.clone(),
                 open: Some(a.id.as_str()) == open,
+                set_up: a.set_up,
             })
             .collect(),
         close_to_tray: s.close_to_tray,
+        background_asked: s.background_asked,
         tray: crate::app::tray_available(),
         autostart: if crate::flatpak::inside() {
             s.autostart
@@ -440,9 +450,41 @@ pub fn open_external(url: String) -> Res<()> {
     tauri_plugin_opener::open_url(url.as_str(), None::<&str>).map_err(text)
 }
 
+/// The folders last picked in the system's dialog, by number: each used
+/// once (`folder_start`, `folder_bring`).
+#[derive(Default)]
+pub struct Picks {
+    last: u64,
+    kept: Vec<(u64, std::path::PathBuf)>,
+}
+
+impl Picks {
+    /// A few are kept: a copy uses two (where the notes are, and the new
+    /// Markdown folder).
+    const KEPT: usize = 4;
+
+    fn put(&mut self, dir: std::path::PathBuf) -> u64 {
+        self.last += 1;
+        self.kept.push((self.last, dir));
+        if self.kept.len() > Self::KEPT {
+            self.kept.remove(0);
+        }
+        self.last
+    }
+
+    fn take(&mut self, n: u64) -> Res<std::path::PathBuf> {
+        let i = self
+            .kept
+            .iter()
+            .position(|(k, _)| *k == n)
+            .ok_or("choose the folder again")?;
+        Ok(self.kept.remove(i).1)
+    }
+}
+
 /// A folder picked in the system's dialog, as the window may know it: a
-/// number to start with, the folder as people read it, and whether it can
-/// be used. The window never names a folder itself.
+/// number to start with, the folder as people read it, whether it can be
+/// used, and the notes it holds. The window never names a folder itself.
 #[derive(Serialize)]
 pub struct Picked {
     pub pick: u64,
@@ -473,9 +515,7 @@ pub async fn choose_folder(app: AppHandle, state: State<'_, Arc<AppState>>) -> R
     };
     let check = state.folder.check(&dir);
     let shown = notekpr_cli::setup::shown(&dir);
-    let mut picked = state.picked.lock().unwrap();
-    let pick = picked.as_ref().map_or(1, |(n, _)| n + 1);
-    *picked = Some((pick, dir));
+    let pick = state.picked.lock().unwrap().put(dir);
     Ok(Some(Picked { pick, shown, check }))
 }
 
@@ -533,35 +573,26 @@ pub async fn folder_start(
     pick: u64,
 ) -> Res<()> {
     let server = state.api_server().ok_or("choose a server first")?;
-    let dir = match state.picked.lock().unwrap().take() {
-        Some((n, p)) if n == pick => p,
-        _ => return Err("choose the folder again".into()),
-    };
+    let _changing = state.folder.changing().map_err(chain)?;
+    let dir = state.picked.lock().unwrap().take(pick)?;
     let check = state.folder.check(&dir);
     if let Some(why) = check.refused {
         return Err(why);
     }
     let shown = notekpr_cli::setup::shown(&dir);
-    let mut text = format!(
-        "notekpr will write your notes into {shown} as ordinary Markdown files, decrypted, and keep them in \
-         sync both ways while the app runs.\n\nThose files are protected only by your account on this \
-         computer and its disk encryption: any program you run can read them, and backup or cloud tools may \
-         copy them. Everything on the server stays end-to-end encrypted."
-    );
-    if let Some(cloud) = &check.cloud {
-        text.push_str(&format!(
-            "\n\n{shown} is synced by {cloud}: it would upload the decrypted notes, and two tools syncing \
-             the same files fight over them."
+    if check.notes.is_some() {
+        return Err(format!(
+            "{shown} holds notes: bring them in, or choose another folder"
         ));
     }
-    let kind = if check.cloud.is_some() {
-        MessageDialogKind::Warning
-    } else {
-        MessageDialogKind::Info
-    };
+    let mut text = format!(
+        "notekpr will write your notes into {shown} as ordinary Markdown files, decrypted, and keep them in \
+         sync both ways while the app runs."
+    );
+    text.push_str(&plaintext_note(&dir, check.cloud.as_deref()));
     if !confirm(
         &app,
-        kind,
+        dialog_kind(&check),
         "Keep a Markdown folder?",
         &text,
         "Keep it in sync",
@@ -570,9 +601,13 @@ pub async fn folder_start(
     {
         return Err("cancelled".into());
     }
-    // Still fine after the person was asked (still empty, say).
-    if let Some(why) = state.folder.check(&dir).refused {
+    // Still fine after the person was asked (no notes put there meanwhile).
+    let check = state.folder.check(&dir);
+    if let Some(why) = check.refused {
         return Err(why);
+    }
+    if check.notes.is_some() {
+        return Err(format!("{shown} changed meanwhile: choose it again"));
     }
     let adopt = adopt_from(server, handoff)?;
     state
@@ -580,6 +615,339 @@ pub async fn folder_start(
         .adopt_and_start(adopt, dir)
         .await
         .map_err(chain)
+}
+
+/// What the person agrees to with a Markdown folder in `dir`, for a system
+/// dialog.
+fn plaintext_note(dir: &std::path::Path, cloud: Option<&str>) -> String {
+    let shown = notekpr_cli::setup::shown(dir);
+    let mut text = "\n\nThose files are protected only by your account on this computer and its disk \
+                    encryption: any program you run can read them, and backup or cloud tools may copy them. \
+                    Everything on the server stays end-to-end encrypted."
+        .to_string();
+    if let Some(cloud) = cloud {
+        text.push_str(&format!(
+            "\n\n{shown} is synced by {cloud}: it would upload the decrypted notes, and two tools syncing \
+             the same files fight over them."
+        ));
+    }
+    text
+}
+
+fn dialog_kind(check: &Check) -> MessageDialogKind {
+    if check.cloud.is_some() {
+        MessageDialogKind::Warning
+    } else {
+        MessageDialogKind::Info
+    }
+}
+
+/// Bring the notes in a folder into a vault (docs/desktop.md "Notes
+/// already in the folder"): those in the folder picked as `pick` moved
+/// into the vault's folder there, or — with `copy_to`, another folder
+/// picked — copied into one there, which becomes the Markdown folder. The
+/// vault is the account's of that name, or a new one: what it is, and who
+/// else sees it, is said in the system dialog as this app's own sync knows
+/// it, never as the window says.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn folder_bring(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    handoff: Handoff,
+    pick: u64,
+    copy_to: Option<u64>,
+    vault: String,
+) -> Res<()> {
+    let server = state.api_server().ok_or("choose a server first")?;
+    let _changing = state.folder.changing().map_err(chain)?;
+    // Nothing that runs is stopped, nor anything kept changed, before the
+    // person's yes.
+    if state.folder.kept().is_some() {
+        return Err("this account has a Markdown folder already: stop it first".into());
+    }
+    let (from, root) = {
+        let mut picks = state.picked.lock().unwrap();
+        let from = picks.take(pick)?;
+        let root = match copy_to {
+            Some(n) => picks.take(n)?,
+            None => from.clone(),
+        };
+        (from, root)
+    };
+    let check = state.folder.check(&root);
+    if let Some(why) = check.refused {
+        return Err(why);
+    }
+    let fresh = state
+        .folder
+        .adopt(adopt_from(server, handoff)?)
+        .await
+        .map_err(chain)?;
+    let r = async {
+        let plan = state
+            .folder
+            .plan_bring(&root, &from, &vault)
+            .await
+            .map_err(chain)?;
+        let shown = notekpr_cli::setup::shown;
+        let into = match &plan.target {
+            notekpr_cli::setup::Target::Existing { name, .. } => format!("your vault '{name}'"),
+            notekpr_cli::setup::Target::New(name) => format!("a new vault '{name}'"),
+        };
+        let what = notekpr_cli::setup::describe(&plan.contents);
+        let mut text = if plan.copy() {
+            format!(
+                "notekpr will copy everything in {} ({what}) into {}, {into}, and keep {} in sync as your \
+                 Markdown folder: your notes as ordinary Markdown files, decrypted, synced both ways while \
+                 the app runs. {} stays as it is.",
+                shown(&plan.from),
+                shown(&plan.dest),
+                shown(&plan.root),
+                shown(&plan.from),
+            )
+        } else {
+            format!(
+                "notekpr will move everything in {} ({what}), hidden files too, into {}, {into}, and keep \
+                 {} in sync as your Markdown folder: your notes as ordinary Markdown files, decrypted, synced \
+                 both ways while the app runs. Close Obsidian and other apps using {} first.",
+                shown(&plan.root),
+                shown(&plan.dest),
+                shown(&plan.root),
+                shown(&plan.root),
+            )
+        };
+        if plan.others > 0 {
+            text.push_str(&format!(
+                "\n\n{} other {} this vault: they will see these notes too.",
+                plan.others,
+                if plan.others == 1 { "person shares" } else { "people share" }
+            ));
+        }
+        text.push_str(&plaintext_note(&plan.root, check.cloud.as_deref()));
+        let kind = if plan.others > 0 {
+            MessageDialogKind::Warning
+        } else {
+            dialog_kind(&check)
+        };
+        let (title, ok) = if plan.copy() {
+            ("Copy your notes in?", "Copy them")
+        } else {
+            ("Move your notes in?", "Move them")
+        };
+        if !confirm(&app, kind, title, &text, ok).await {
+            return Err("cancelled".to_string());
+        }
+        state.folder.bring(plan).await.map_err(chain)
+    }
+    .await;
+    if r.is_err() && fresh {
+        let _ = state.folder.unadopt().await;
+    }
+    r
+}
+
+/// A Markdown folder the CLI keeps for the open account, as the window
+/// may know it.
+#[derive(Serialize)]
+pub struct CliFolder {
+    pub profile: String,
+    /// The folder as people read it.
+    pub shown: String,
+    /// A CLI runs the profile now.
+    pub running: bool,
+    /// Its background sync; none where the app can't ask (the Flatpak).
+    pub service: Option<Service>,
+}
+
+/// The Markdown folders the CLI keeps for the person whose session `token`
+/// is (the server says whose: never another's, whatever the window says)
+/// on the open account's server.
+#[tauri::command]
+pub async fn cli_folders(state: State<'_, Arc<AppState>>, token: String) -> Res<Vec<CliFolder>> {
+    let Some(server) = state.open.as_ref().and_then(|a| a.server.clone()) else {
+        return Ok(vec![]);
+    };
+    let me = Api::new(&server, Credentials::Session(token))
+        .map_err(text)?
+        .me()
+        .await
+        .map_err(|e| format!("checking your session: {e}"))?;
+    let found = from_cli::find(&from_cli::configurations(), &server, &me.user.id);
+    if found.is_empty() {
+        return Ok(vec![]);
+    }
+    let systemd = Systemd::connect().await;
+    let mut v = vec![];
+    for f in found {
+        let service = match &systemd {
+            Some(s) => s.state(&f.unit()).await.ok(),
+            None => None,
+        };
+        v.push(CliFolder {
+            shown: notekpr_cli::setup::shown(&f.dir),
+            running: f.running(),
+            service,
+            profile: f.profile,
+        });
+    }
+    Ok(v)
+}
+
+/// Take over the Markdown folder the CLI's `profile` keeps for this
+/// account (docs/desktop.md "From the CLI"), once the person said yes in a
+/// system dialog: its background sync stopped and turned off at login (or,
+/// where the app can't, the person shown how and waited for), the folder
+/// given back on the CLI's side while no CLI runs the profile, then taken
+/// and kept by the app.
+#[tauri::command]
+pub async fn folder_take_from_cli(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    handoff: Handoff,
+    profile: String,
+) -> Res<()> {
+    let server = state
+        .open
+        .as_ref()
+        .and_then(|a| a.server.clone())
+        .ok_or("your notes are only on this computer: the CLI keeps none of them")?;
+    let _changing = state.folder.changing().map_err(chain)?;
+    if state.folder.kept().is_some() {
+        return Err("this account has a Markdown folder already: stop it first".into());
+    }
+    // Whose session this is, as the server says: the CLI's profile must be
+    // the same person's (and checked again as it lets the folder go).
+    let me = Api::new(&server, Credentials::Session(handoff.token.clone()))
+        .map_err(text)?
+        .me()
+        .await
+        .map_err(|e| format!("checking your session: {e}"))?;
+    let user_id = me.user.id.clone();
+    let found = from_cli::find(&from_cli::configurations(), &server, &user_id)
+        .into_iter()
+        .find(|f| f.profile == profile)
+        .ok_or("the CLI keeps no Markdown folder for you in that profile")?;
+    let shown = notekpr_cli::setup::shown(&found.dir);
+    let systemd = Systemd::connect().await;
+    let was = match &systemd {
+        Some(s) => s.state(&found.unit()).await.ok(),
+        None => None,
+    };
+    let mut text = format!(
+        "notekpr will take over {shown} from the CLI (its profile '{profile}'): it stops the CLI's background \
+         sync, {}, and turns it off at login; the CLI forgets the folder and stays signed in. Then the app \
+         keeps {shown} in sync both ways while it runs: your notes as ordinary Markdown files, decrypted.",
+        found.unit().trim_end_matches(".service"),
+    );
+    text.push_str(&plaintext_note(
+        &found.dir,
+        notekpr_cli::setup::cloud_synced(&found.dir),
+    ));
+    if !confirm(
+        &app,
+        MessageDialogKind::Info,
+        "Take over the CLI's Markdown folder?",
+        &text,
+        "Take it over",
+    )
+    .await
+    {
+        return Err("cancelled".into());
+    }
+    let fresh = state
+        .folder
+        .adopt(adopt_from(server.clone(), handoff)?)
+        .await
+        .map_err(chain)?;
+    let r = take_from_cli(&state, &found, &server, &user_id, systemd.as_ref(), was).await;
+    if r.is_err() && fresh {
+        let _ = state.folder.unadopt().await;
+    }
+    r
+}
+
+async fn take_from_cli(
+    state: &AppState,
+    found: &from_cli::Found,
+    server: &str,
+    user_id: &str,
+    systemd: Option<&Systemd>,
+    was: Option<Service>,
+) -> Res<()> {
+    let unit = found.unit();
+    // Its background sync, stopped and off at login: put back as it was if
+    // nothing comes of it before the CLI lets the folder go — also when
+    // only half of stopping it worked.
+    let stopped = match (systemd, was) {
+        (Some(s), Some(w)) if w.active || w.enabled => {
+            if let Err(e) = s.stop(&unit, w).await {
+                return Err(from_cli::put_back(Some(s), Some(w), &unit, chain(e)).await);
+            }
+            Some(w)
+        }
+        _ => None,
+    };
+    let (cancel_tx, cancel) = oneshot::channel();
+    if let Some(previous) = state.cli_take.lock().unwrap().replace(cancel_tx) {
+        let _ = previous.send(());
+    }
+    // Shown while a CLI still runs the profile: what to do, where the app
+    // couldn't stop it.
+    let shown = notekpr_cli::setup::shown(&found.dir);
+    state.updates.update(|s| {
+        s.cli_wait = Some(CliWait {
+            dir: shown.clone(),
+            profile: found.profile.clone(),
+            command: systemd.is_none().then(|| found.command()),
+        })
+    });
+    let lock = found.wait_until_free(cancel).await;
+    state.updates.update(|s| s.cli_wait = None);
+    state.cli_take.lock().unwrap().take();
+    let lock = match lock {
+        Ok(Some(l)) => l,
+        Ok(None) => {
+            return Err(from_cli::put_back(systemd, stopped, &unit, "cancelled".into()).await);
+        }
+        Err(e) => return Err(from_cli::put_back(systemd, stopped, &unit, chain(e)).await),
+    };
+    if let Err(e) = found.give_back(server, user_id, &lock) {
+        return Err(from_cli::put_back(systemd, stopped, &unit, chain(e)).await);
+    }
+    let r = state.folder.take_and_start(found.dir.clone()).await;
+    drop(lock);
+    r.map_err(|e| {
+        format!(
+            "The CLI no longer keeps {shown}, but the app couldn't take it over: {e:#}. Choose it again here, or \
+             give it back to the CLI (notekpr --profile {} sync --dir {shown})",
+            found.profile
+        )
+    })
+}
+
+/// Stop waiting for the CLI ([`folder_take_from_cli`]): nothing is taken
+/// over, and its background sync is as it was.
+#[tauri::command]
+pub fn cancel_take(state: State<'_, Arc<AppState>>) {
+    if let Some(tx) = state.cli_take.lock().unwrap().take() {
+        let _ = tx.send(());
+    }
+}
+
+/// The open account's initial setup was shown (and with it the question
+/// about the tray and starting at login): not shown again by itself. A
+/// script saying so only hides a screen.
+#[tauri::command]
+pub fn setup_done(state: State<'_, Arc<AppState>>) -> Res<()> {
+    let Some(open) = &state.open else {
+        return Ok(());
+    };
+    if state.switching.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    let mut s = state.settings.lock().unwrap();
+    s.set_up(&open.id);
+    s.save(&state.paths.settings_file()).map_err(chain)
 }
 
 /// Stop keeping the folder in sync, once the person said yes: the app

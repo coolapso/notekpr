@@ -538,18 +538,18 @@ browser. What it adds to the above:
   freezing is on.
 * **Accounts** ([desktop.md](desktop.md#accounts)): the app keeps one
   account per server added after that yes (the app asks before it
-  contacts a new address at all), and *On this computer* if chosen. Each
-  account has a random id, and under it a webview profile and a Markdown
-  folder profile of its own, so nothing of one server's session ever goes
-  to another. Accounts from 0.17.0, before there were accounts, keep
-  their webview profile's name (the host and 48 bits of the address's
-  hash): the account open at the upgrade keeps it, and a server used
-  before that and added again finds it only if its address has no path
-  and that name holds its host in full. Only the open account's window
-  and folder run, the open account is fixed when the app starts, and
-  switching starts the app again with the other's. A folder profile runs
-  only for the server its account names. The list is in the app's
-  settings, nothing secret: each
+  contacts a new address at all, and doesn't follow it if it redirects
+  elsewhere), and *On this computer* if chosen. Each account has a random
+  id, and under it a webview profile and a Markdown folder profile of its
+  own, so nothing of one server's session ever goes to another. Accounts
+  from 0.17.0, before there were accounts, keep their webview profile's
+  name (the host and 48 bits of the address's hash): the account open at
+  the upgrade keeps it, and a server used before that and added again
+  finds it only if its address has no path and that name holds its host
+  in full. Only the open account's window and folder run, the open
+  account is fixed when the app starts, and switching starts the app
+  again with the other's. A folder profile runs only for the server its
+  account names. The list is in the app's settings, nothing secret: each
   account's id and address (which the app shows as it knows it), and the
   name its window last reported, which is only a label beside that
   address. Removing an account asks in a system dialog and only hides it:

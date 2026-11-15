@@ -42,6 +42,12 @@ impl ApiError {
         matches!(self, ApiError::Network(_))
     }
 
+    /// The server sent the request elsewhere (with
+    /// [`Api::without_redirects`]: not followed).
+    pub fn is_redirect(&self) -> bool {
+        self.status().is_some_and(|s| (300..400).contains(&s))
+    }
+
     /// The server cannot be used right now: unreachable, or answering with a
     /// server error (a reverse proxy's 502/503/504 while it restarts). Work
     /// offline and retry later, as for a network failure.
@@ -169,6 +175,22 @@ pub fn app() -> String {
 impl Api {
     /// `server` is the origin as stored in the profile (see `normalize_server_url`).
     pub fn new(server: &str, creds: Credentials) -> ApiResult<Api> {
+        Api::build(server, creds, reqwest::redirect::Policy::default())
+    }
+
+    /// For an address the person has only just given (the desktop app's
+    /// *Add an account*): contacted there only. A redirect is an error
+    /// ([`ApiError::is_redirect`]), never followed to an address they
+    /// didn't approve.
+    pub fn without_redirects(server: &str, creds: Credentials) -> ApiResult<Api> {
+        Api::build(server, creds, reqwest::redirect::Policy::none())
+    }
+
+    fn build(
+        server: &str,
+        creds: Credentials,
+        redirects: reqwest::redirect::Policy,
+    ) -> ApiResult<Api> {
         let init = |e: &dyn std::fmt::Display| {
             ApiError::Network(format!("cannot initialise HTTP client: {e}"))
         };
@@ -182,6 +204,7 @@ impl Api {
             .default_headers(headers)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
+            .redirect(redirects)
             .build()
             .map_err(|e| init(&e))?;
         Ok(Api {
@@ -716,5 +739,43 @@ mod tests {
         assert_eq!(tries.load(Ordering::SeqCst), 2);
         let e = api.device_authorization("test").await.unwrap_err();
         assert!(e.is_read_only(), "{e}");
+    }
+
+    /// An address only just given is contacted there only: a redirect to
+    /// another (here, a second listener) is never followed.
+    #[tokio::test]
+    async fn a_new_address_is_never_left_for_another() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let reached = std::sync::Arc::new(AtomicU32::new(0));
+        let elsewhere = axum::Router::new().fallback({
+            let reached = reached.clone();
+            move || async move {
+                reached.fetch_add(1, Ordering::SeqCst);
+                r#"{"name":"notekpr"}"#
+            }
+        });
+        let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target = format!("http://{}/api/v1/info", other.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(other, elsewhere).await.unwrap() });
+        let app = axum::Router::new().route(
+            "/api/v1/info",
+            axum::routing::get(move || async move {
+                (axum::http::StatusCode::FOUND, [("location", target)], "")
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let e = Api::without_redirects(&server, Credentials::None)
+            .unwrap()
+            .info()
+            .await
+            .unwrap_err();
+        assert!(e.is_redirect(), "{e}");
+        assert_eq!(reached.load(Ordering::SeqCst), 0);
+        // What every other request does (a server once chosen): followed.
+        let _ = Api::new(&server, Credentials::None).unwrap().info().await;
+        assert_eq!(reached.load(Ordering::SeqCst), 1);
     }
 }

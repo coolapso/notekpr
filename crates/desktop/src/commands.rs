@@ -165,11 +165,21 @@ pub async fn add_server(app: AppHandle, state: State<'_, Arc<AppState>>, url: St
             return Err("cancelled".into());
         }
     }
-    let info = Api::new(&server, Credentials::None)
+    // There only: a redirect would reach an address the person wasn't asked
+    // about.
+    let info = Api::without_redirects(&server, Credentials::None)
         .map_err(text)?
         .info()
         .await
-        .map_err(|e| format!("{server} didn't answer as a notekpr server: {e}"))?;
+        .map_err(|e| {
+            if e.is_redirect() {
+                format!(
+                    "{server} sends notekpr to another address: add the server at its own address"
+                )
+            } else {
+                format!("{server} didn't answer as a notekpr server: {e}")
+            }
+        })?;
     if info.name != "notekpr" {
         return Err(format!("{server} isn't a notekpr server"));
     }

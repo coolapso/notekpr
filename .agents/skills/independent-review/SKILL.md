@@ -72,6 +72,9 @@ confirm it.
 
 - Where: the repository path, and how to see the change (`git diff` plus
   untracked files, or a commit range).
+- That it is the reviewer and reviews itself: one that finds this skill
+  in the repository may otherwise try to start a reviewer of its own
+  (which its read-only sandbox can't).
 - First read AGENTS.md (the hard rules) and, for design and cryptography,
   docs/security.md.
 - **Read-only and private**: no edits, commits, pushes, issues, PRs,

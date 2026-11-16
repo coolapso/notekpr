@@ -50,10 +50,13 @@ pub struct AppState {
 /// The window's Content-Security-Policy: the server's own, but the API may
 /// be reached at the chosen server (and Tauri's IPC).
 pub fn csp(server: Option<&str>) -> String {
+    // Tauri's IPC: `ipc:` on Linux and macOS; on Windows
+    // https://ipc.localhost, as the window is https://tauri.localhost
+    // (`use_https_scheme`).
     let mut connect = vec![
         "'self'".to_string(),
         "ipc:".into(),
-        "http://ipc.localhost".into(),
+        "https://ipc.localhost".into(),
     ];
     if let Some(u) = server.and_then(|s| url::Url::parse(s).ok()) {
         let origin = u.origin().ascii_serialization();
@@ -537,7 +540,7 @@ mod tests {
     fn content_security_policy() {
         let c = csp(Some("https://notes.example.com/sub"));
         assert!(c.contains(
-            "connect-src 'self' ipc: http://ipc.localhost https://notes.example.com wss://notes.example.com;"
+            "connect-src 'self' ipc: https://ipc.localhost https://notes.example.com wss://notes.example.com;"
         ));
         assert!(c.contains("script-src 'self' 'wasm-unsafe-eval';"));
         let c = csp(Some("http://localhost:8080"));
@@ -545,9 +548,9 @@ mod tests {
         // The app's own server: that address and port only.
         let c = csp(Some("http://127.0.0.1:41234"));
         assert!(c.contains(
-            "connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:41234 ws://127.0.0.1:41234;"
+            "connect-src 'self' ipc: https://ipc.localhost http://127.0.0.1:41234 ws://127.0.0.1:41234;"
         ));
-        assert!(csp(None).contains("connect-src 'self' ipc: http://ipc.localhost;"));
+        assert!(csp(None).contains("connect-src 'self' ipc: https://ipc.localhost;"));
     }
 
     #[test]

@@ -11,7 +11,8 @@ writes, all with transparent backgrounds:
     docs/assets/icon.svg, icon.png            the icon alone
 
 and the web app's icons for home screens, in crates/web/static/ (see
-APP_ICONS), and the desktop app's, in crates/desktop/icons/ (DESKTOP_ICONS).
+APP_ICONS), and the desktop app's, in crates/desktop/icons/ (DESKTOP_ICONS,
+and WINDOWS_ICON for Windows).
 
 The logo is "notekpr" in Fira Code SemiBold with the icon's diamond ring as
 the "o". The letters are stored as outlines, so it looks the same where the
@@ -31,6 +32,7 @@ writes.
 import argparse
 import os
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -84,6 +86,11 @@ DESKTOP_ICONS = (
     ("icon.png", 512),
     ("tray.png", 64),
 )
+
+# The desktop app's on Windows: one .ico with the sizes Windows picks from
+# (the program's icon, which tauri-build puts in notekpr-desktop.exe, and
+# the installers'), each a PNG inside, as Windows reads them since Vista.
+WINDOWS_ICON = ("icon.ico", (16, 20, 24, 32, 40, 48, 64, 256))
 
 
 def num(v):
@@ -159,7 +166,31 @@ def app_icons():
         out = os.path.join(DESKTOP_ICONS_DIR, name)
         subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), "-o", out], input=rounded.encode(), check=True)
         written.append(out)
+    written.append(windows_icon(rounded))
     return written
+
+
+def windows_icon(svg):
+    """WINDOWS_ICON from the favicon `svg`: an ICONDIR, an entry per size,
+    then each size as a PNG."""
+    name, sizes = WINDOWS_ICON
+    pngs = [
+        subprocess.run(
+            ["rsvg-convert", "-w", str(size), "-h", str(size)], input=svg.encode(), check=True, capture_output=True
+        ).stdout
+        for size in sizes
+    ]
+    header = struct.pack("<HHH", 0, 1, len(sizes))
+    offset = len(header) + 16 * len(sizes)
+    entries = b""
+    for size, data in zip(sizes, pngs):
+        # Width and height 0 mean 256; 32 bits per pixel.
+        entries += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(data), offset)
+        offset += len(data)
+    out = os.path.join(DESKTOP_ICONS_DIR, name)
+    with open(out, "wb") as f:
+        f.write(header + entries + b"".join(pngs))
+    return out
 
 
 def main():

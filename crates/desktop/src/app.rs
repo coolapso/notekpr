@@ -74,11 +74,49 @@ pub fn csp(server: Option<&str>) -> String {
     )
 }
 
-/// One argument as an autostart entry's `Exec` line needs it (the
-/// desktop entry spec; `auto-launch` joins them with spaces as they are):
-/// quoted when it holds more than plain characters, a folder's path with a
-/// space say.
+/// One argument as the system's autostart entry needs it (`auto-launch`
+/// joins them with spaces as they are): [`desktop_entry_arg`], or on
+/// Windows [`command_line_arg`].
 fn exec_arg(a: &str) -> String {
+    if cfg!(windows) {
+        command_line_arg(a)
+    } else {
+        desktop_entry_arg(a)
+    }
+}
+
+/// One argument as a Windows command line needs it (the `Run` key's
+/// value; how the program splits it again: `CommandLineToArgvW`'s rules):
+/// quoted when it holds a space or a quote, with backslashes doubled only
+/// before a quote.
+fn command_line_arg(a: &str) -> String {
+    if !a.is_empty() && !a.contains([' ', '\t', '"']) {
+        return a.to_string();
+    }
+    let mut q = String::from("\"");
+    let mut backslashes = 0;
+    for c in a.chars() {
+        if c == '\\' {
+            backslashes += 1;
+        } else {
+            if c == '"' {
+                // The backslashes before it doubled, and one for the quote.
+                q.extend(std::iter::repeat_n('\\', backslashes + 1));
+            }
+            backslashes = 0;
+        }
+        q.push(c);
+    }
+    // And those before the closing quote.
+    q.extend(std::iter::repeat_n('\\', backslashes));
+    q.push('"');
+    q
+}
+
+/// One argument as an autostart entry's `Exec` line needs it (the desktop
+/// entry spec): quoted when it holds more than plain characters, a
+/// folder's path with a space say.
+fn desktop_entry_arg(a: &str) -> String {
     let plain = |c: char| c.is_ascii_alphanumeric() || "/._-=,+:@".contains(c);
     if !a.is_empty() && a.chars().all(plain) {
         return a.to_string();
@@ -555,18 +593,38 @@ mod tests {
 
     #[test]
     fn autostart_arguments_survive_the_entry() {
-        assert_eq!(exec_arg("--hidden"), "--hidden");
+        let arg = desktop_entry_arg;
+        assert_eq!(arg("--hidden"), "--hidden");
         assert_eq!(
-            exec_arg("/home/ana/dev/notekpr/data/desktop/config"),
+            arg("/home/ana/dev/notekpr/data/desktop/config"),
             "/home/ana/dev/notekpr/data/desktop/config"
         );
         assert_eq!(
-            exec_arg("/home/ana/My notes/config"),
+            arg("/home/ana/My notes/config"),
             "\"/home/ana/My notes/config\""
         );
-        assert_eq!(exec_arg("a\"b$c"), "\"a\\\\\"b\\\\$c\"");
-        assert_eq!(exec_arg("a\\b"), "\"a\\\\\\\\b\"");
-        assert_eq!(exec_arg(""), "\"\"");
+        assert_eq!(arg("a\"b$c"), "\"a\\\\\"b\\\\$c\"");
+        assert_eq!(arg("a\\b"), "\"a\\\\\\\\b\"");
+        assert_eq!(arg(""), "\"\"");
+    }
+
+    #[test]
+    fn autostart_arguments_survive_the_run_key() {
+        let arg = command_line_arg;
+        assert_eq!(arg("--hidden"), "--hidden");
+        assert_eq!(
+            arg(r"C:\Users\ana\dev\notekpr\config"),
+            r"C:\Users\ana\dev\notekpr\config"
+        );
+        assert_eq!(
+            arg(r"C:\Users\ana\My notes\config"),
+            r#""C:\Users\ana\My notes\config""#
+        );
+        // Backslashes before a quote, a closing one included, doubled.
+        assert_eq!(arg(r"C:\My notes\"), r#""C:\My notes\\""#);
+        assert_eq!(arg(r#"a"b"#), r#""a\"b""#);
+        assert_eq!(arg(r#"a\"b"#), r#""a\\\"b""#);
+        assert_eq!(arg(""), r#""""#);
     }
 
     #[test]

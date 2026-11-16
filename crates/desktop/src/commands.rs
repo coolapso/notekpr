@@ -898,7 +898,7 @@ async fn take_from_cli(
         s.cli_wait = Some(CliWait {
             dir: shown.clone(),
             profile: found.profile.clone(),
-            command: systemd.is_none().then(|| found.command()),
+            command: systemd.is_none().then(|| found.command()).flatten(),
         })
     });
     let lock = found.wait_until_free(cancel).await;

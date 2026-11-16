@@ -227,7 +227,8 @@ over: *Take over ~/Notes from the CLI*. After your yes in a window of the
 system's, the app:
 
 1. stops the CLI's background sync, `notekpr-sync@<profile>`, and turns it
-   off at login. The Flatpak can't: it shows the command to run instead
+   off at login (Linux; elsewhere the CLI has none). The Flatpak can't: it
+   shows the command to run instead
    (`systemctl --user disable --now notekpr-sync@<profile>`) and goes on
    once the CLI's sync has stopped — as for a `notekpr sync` you started
    yourself (stop it with Ctrl-C);

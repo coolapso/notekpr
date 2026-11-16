@@ -84,9 +84,10 @@ impl Found {
         format!("notekpr-sync@{}.service", self.profile)
     }
 
-    /// What stops it by hand.
-    pub fn command(&self) -> String {
-        format!("systemctl --user disable --now {}", self.unit())
+    /// What stops it by hand: none where the CLI doesn't sync in the
+    /// background (it does through systemd, on Linux only).
+    pub fn command(&self) -> Option<String> {
+        cfg!(target_os = "linux").then(|| format!("systemctl --user disable --now {}", self.unit()))
     }
 
     /// Wait until no CLI runs the profile, then hold its lock: none if
@@ -137,13 +138,40 @@ pub struct Service {
     pub enabled: bool,
 }
 
+#[cfg(target_os = "linux")]
 const SYSTEMD: &str = "org.freedesktop.systemd1";
 
 /// Systemd's user manager on the session bus. Never reached from the
 /// Flatpak: its bus lets the manager's name through only to apps that ask
 /// for it, and this one doesn't.
+#[cfg(target_os = "linux")]
 pub struct Systemd(zbus::Proxy<'static>);
 
+/// No systemd: the CLI syncs in the background on Linux only (`notekpr
+/// setup`), so there is never one to reach.
+#[cfg(not(target_os = "linux"))]
+pub struct Systemd(std::convert::Infallible);
+
+#[cfg(not(target_os = "linux"))]
+impl Systemd {
+    pub async fn connect() -> Option<Systemd> {
+        None
+    }
+
+    pub async fn state(&self, _unit: &str) -> Result<Service> {
+        match self.0 {}
+    }
+
+    pub async fn stop(&self, _unit: &str, _was: Service) -> Result<()> {
+        match self.0 {}
+    }
+
+    pub async fn restore(&self, _unit: &str, _was: Service) -> Result<()> {
+        match self.0 {}
+    }
+}
+
+#[cfg(target_os = "linux")]
 type UnitRow = (
     String,
     String,
@@ -157,6 +185,7 @@ type UnitRow = (
     zbus::zvariant::OwnedObjectPath,
 );
 
+#[cfg(target_os = "linux")]
 impl Systemd {
     /// The session's manager; none where it can't be reached (the Flatpak,
     /// a system without systemd).

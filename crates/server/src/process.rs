@@ -68,6 +68,7 @@ pub fn record() {
 }
 
 /// User and system CPU time from `/proc/self/stat`, in seconds.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn cpu_seconds(stat: &str) -> Option<f64> {
     // The fields after the command name, which is in parentheses and may
     // contain spaces; utime and stime are the 12th and 13th of them, in
@@ -81,6 +82,7 @@ fn cpu_seconds(stat: &str) -> Option<f64> {
 }
 
 /// The resident set size from `/proc/self/status`, in bytes.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn resident_bytes(status: &str) -> Option<u64> {
     let kb: u64 = status
         .lines()

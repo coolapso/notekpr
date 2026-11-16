@@ -835,6 +835,8 @@ enum Replaced {
     Changed,
     /// Written, but an editor wrote into the old file in the instant between
     /// the last check and the rename: this is what it wrote (to be ingested).
+    /// Unix only ([`replace_with_hook`] keeps the old file open there).
+    #[cfg_attr(not(unix), allow(dead_code))]
     Recovered(Vec<u8>),
 }
 

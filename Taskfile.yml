@@ -470,7 +470,7 @@ tasks:
   # run by packaging/run.sh): Docker is all these need.
 
   build:clients:
-    desc: "Build the CLI's and the desktop app's release files into dist/clients without publishing: Linux (amd64, arm64) as .tar.gz, .deb and .rpm, AUR's PKGBUILDs and COPR's source RPMs (in Docker)"
+    desc: "Build the CLI's and the desktop app's release files into dist/clients without publishing: Linux (amd64, arm64) as .tar.gz, .deb and .rpm, AUR's PKGBUILDs and COPR's source RPMs, and Windows (x64) installers (in Docker)"
     cmds:
       - packaging/run.sh goreleaser release --snapshot --clean
       - packaging/run.sh packaging/rpm/srpm.sh dist/clients

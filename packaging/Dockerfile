@@ -11,6 +11,13 @@
 # system has. Also here: the wasm32 target and the wasm-bindgen CLI (the app
 # has the web client inside), GoReleaser, and rpmbuild for COPR's source RPMs.
 #
+# Windows (x64, the MSVC target, as Tauri wants): cargo-xwin compiles and
+# links with clang and LLVM against Microsoft's C runtime and Windows SDK,
+# which it downloads from Microsoft into the image (versions pinned below);
+# building the image accepts Microsoft's license for them
+# (https://go.microsoft.com/fwlink/?LinkId=2086102). NASM for aws-lc's
+# assembly, NSIS for the installers (packaging/windows).
+#
 # Upgrading a tool: change its version and checksums together (the
 # checksums come from the tool's own release page).
 
@@ -42,7 +49,7 @@ COPY --from=rust /usr/local/cargo /usr/local/cargo
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl xz-utils git openssh-client rpm gcc libc6-dev pkg-config \
-      libwebkit2gtk-4.1-dev gcc-aarch64-linux-gnu \
+      libwebkit2gtk-4.1-dev gcc-aarch64-linux-gnu clang lld llvm nasm nsis \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=arm64-sysroot /usr/include /sysroot/arm64/usr/include
@@ -50,7 +57,7 @@ COPY --from=arm64-sysroot /usr/lib /sysroot/arm64/usr/lib
 COPY --from=arm64-sysroot /usr/share/pkgconfig /sysroot/arm64/usr/share/pkgconfig
 RUN ln -s usr/lib /sysroot/arm64/lib
 
-RUN rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu wasm32-unknown-unknown
+RUN rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-msvc wasm32-unknown-unknown
 
 ARG ZIG_VERSION=0.16.0
 ARG ZIG_SHA256_AMD64=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
@@ -73,15 +80,28 @@ RUN set -eu; \
     tar -xzf /tmp/goreleaser.tar.gz -C /usr/local/bin goreleaser; \
     rm /tmp/zig.tar.xz /tmp/goreleaser.tar.gz
 
-# cargo-zigbuild for the CLI; the wasm-bindgen CLI the web client's crates
-# pin (packaging/run.sh passes it from crates/web/Cargo.toml).
+# cargo-zigbuild for the CLI; cargo-xwin for Windows; the wasm-bindgen CLI
+# the web client's crates pin (packaging/run.sh passes it from
+# crates/web/Cargo.toml).
 ARG CARGO_ZIGBUILD_VERSION=0.24.0
+ARG CARGO_XWIN_VERSION=0.23.1
 ARG WASM_BINDGEN_VERSION
 RUN test -n "$WASM_BINDGEN_VERSION" \
  && cargo install cargo-zigbuild --version "$CARGO_ZIGBUILD_VERSION" --locked \
+ && cargo install cargo-xwin --version "$CARGO_XWIN_VERSION" --locked \
  && cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked \
  && rm -rf /usr/local/cargo/registry /usr/local/cargo/.package-cache
 
+# Microsoft's C runtime and Windows SDK for cargo-xwin, downloaded now (the
+# builds never download them) into XWIN_CACHE_DIR: those of Visual Studio
+# 2022 (17), whose last release, 17.14, has MSVC 14.44. xwin checks each
+# file against Microsoft's manifest; a version the manifest no longer has
+# fails here. Upgrading: change the versions together.
+ENV XWIN_CACHE_DIR=/opt/xwin \
+    XWIN_VERSION=17 XWIN_CRT_VERSION=14.44.17.14 XWIN_SDK_VERSION=10.0.26100
+RUN cargo xwin env --target x86_64-pc-windows-msvc > /dev/null
+
 # Commands run as the developer's own user (packaging/run.sh), so files they
-# write in the checkout are theirs: let any user use the toolchain.
-RUN chmod -R a+w /usr/local/cargo /usr/local/rustup
+# write in the checkout are theirs: let any user use the toolchain, and
+# cargo-xwin its folder.
+RUN chmod -R a+w /usr/local/cargo /usr/local/rustup /opt/xwin

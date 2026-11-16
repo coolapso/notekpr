@@ -3,7 +3,7 @@
 notekpr for your computer: the app you know from the browser, in a window
 of its own, that keeps running in the background, sits in the tray, can
 start when you log in, and keeps your notes as a folder of Markdown files
-too. Linux for now ([install it](#install-it)).
+too. For Linux and Windows ([install it](#install-it)).
 
 It is a client of your notekpr server like the browser and the CLI: your
 notes are encrypted on your computer before anything leaves it. Or it keeps
@@ -40,10 +40,12 @@ screen.
 From 0.17.0 on, each release on
 [GitHub](https://github.com/coolapso/notekpr/releases) carries the app for
 Linux: as packages (amd64 and arm64) for systems with glibc 2.35 and
-WebKitGTK 4.1 or newer, and as a Flatpak (x86_64) for any Linux:
+WebKitGTK 4.1 or newer, and as a Flatpak (x86_64) for any Linux. From
+0.20.0 on, an installer for Windows too:
 
 | System | Install |
 |---|---|
+| Windows 10, 11 | the release's installer, `notekpr-desktop_<version>_windows_amd64_setup.exe` (x64; Windows 11 on ARM runs it too): for you only, without administrator rights ([below](#on-windows)) |
 | Any Linux | the release's Flatpak, `notekpr-desktop_<version>_x86_64.flatpak`: `flatpak install --user ./notekpr-desktop_<version>_x86_64.flatpak` (it brings GNOME's runtime from Flathub; it doesn't update itself yet: install a newer release's the same way; [below](#the-flatpak)) |
 | Arch | from the AUR: `notekpr-desktop-bin` |
 | Debian 12+, Ubuntu 22.04+, Mint 21+ | the release's `.deb`: `sudo apt install ./notekpr-desktop_<version>_amd64.deb` (`arm64` on ARM) |
@@ -57,6 +59,22 @@ bring what the app needs from your system's own: WebKitGTK, the tray's
 library (libayatana-appindicator) and xdg-utils. The CLI is a package of
 its own (`notekpr-cli`, [cli.md](cli.md#packages)), and you don't need it
 for the app.
+
+### On Windows
+
+The installer puts notekpr in your Start menu. The app's window is drawn
+by Microsoft Edge WebView2 Runtime, which Windows 11 and most Windows 10
+computers have; where it's missing, the installer downloads it from
+Microsoft and installs it. The installer isn't signed yet, so Windows may
+say it protected your PC: *More info*, then *Run anyway*.
+
+To update, run a newer release's installer: a running app quits first
+(and if a copy for another profile still runs, the installer asks you to
+quit it), and your settings stay. To remove the app: *Settings → Apps →
+Installed apps → notekpr → Uninstall*. That removes the program, its Start
+menu entry and its starting at login; your settings and data (below) and
+your Markdown folder stay. The installer and the uninstaller also run
+silently with `/S`.
 
 ## Getting started
 
@@ -246,10 +264,12 @@ notekpr-sync@<profile>`.
 
 ## The tray
 
-Most Linux desktops show tray icons (KDE, Cinnamon, Xfce, sway or Hyprland
-with a bar that has a tray). GNOME needs the *AppIndicator and
-KStatusNotifierItem Support* extension. Without a tray, closing the window
-quits the app, and *Close to the tray* says so.
+Windows shows the app's icon in the notification area (the arrow beside
+the clock keeps it, unless you drag it out). Most Linux desktops show tray
+icons (KDE, Cinnamon, Xfce, sway or Hyprland with a bar that has a tray).
+GNOME needs the *AppIndicator and KStatusNotifierItem Support* extension.
+Without a tray, closing the window quits the app, and *Close to the tray*
+says so.
 
 The tray's menu: *Open notekpr*, *Open the Markdown folder*, *Settings* and
 *Quit notekpr*.
@@ -263,6 +283,12 @@ The tray's menu: *Open notekpr*, *Open the Markdown folder*, *Settings* and
 | Only on this computer: the server's data (its database and attachments, encrypted as on any server) | `~/.local/share/notekpr-desktop/default/this-computer/` |
 | The Markdown folders' keys and encrypted copies, one folder per account | `~/.local/share/notekpr-desktop/default/folders/` |
 | Starting at login | `~/.config/autostart/notekpr.desktop` |
+
+On Windows the same folders are under `%APPDATA%\notekpr-desktop` (in
+place of `~/.config/notekpr-desktop`) and `%LOCALAPPDATA%\notekpr-desktop`
+(in place of `~/.local/share/notekpr-desktop`); starting at login is the
+value `notekpr` in the registry's
+`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`.
 
 What is protected how: [security.md](security.md#local-storage).
 `NOTEKPR_DESKTOP_CONFIG_DIR` and `NOTEKPR_DESKTOP_DATA_DIR` replace

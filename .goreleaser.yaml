@@ -1,12 +1,14 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # The CLI's and the desktop app's release files and packages (.deb, .rpm,
-# the AUR's) for Linux (docs/development.md, "Releases"), with the free
-# GoReleaser. It runs in the image packaging/Dockerfile builds
-# (packaging/run.sh): `task build:clients` makes everything into
-# dist/clients without publishing; `task release:clients` adds it to the
-# release semrel made and publishes the AUR packages. COPR's source RPMs,
-# which GoReleaser has no pipe for, are made after it
-# (packaging/rpm/srpm.sh). The server is released as container images only.
+# the AUR's) for Linux, and their installers for Windows
+# (docs/development.md, "Releases"), with the free GoReleaser. It runs in
+# the image packaging/Dockerfile builds (packaging/run.sh): `task
+# build:clients` makes everything into dist/clients without publishing;
+# `task release:clients` adds it to the release semrel made and publishes
+# the AUR packages. What GoReleaser has no pipe for is made beside it: the
+# Windows installers by its build hooks (packaging/windows), COPR's source
+# RPMs after it (packaging/rpm/srpm.sh). The server is released as
+# container images only.
 version: 2
 
 project_name: notekpr
@@ -64,6 +66,60 @@ builds:
       - x86_64-unknown-linux-gnu
       - aarch64-unknown-linux-gnu
 
+  # Windows, x64 only (Windows 11 on ARM runs it too): the MSVC target,
+  # built with cargo-xwin (packaging/Dockerfile). No Visual C++
+  # Redistributable needed: the CLI has the whole C runtime linked in
+  # (+crt-static); the desktop app has Tauri link in the VC runtime and use
+  # the Universal CRT that comes with Windows (tauri-build's
+  # static_vc_runtime, which +crt-static would break). The linker would say
+  # once for each of the runtime's objects that their debug info isn't
+  # there: /ignore. Each build's hook makes its installer
+  # (packaging/windows), which the release takes as one of its extra files.
+  - id: cli-windows
+    builder: rust
+    binary: notekpr
+    tool: cargo-xwin
+    command: build
+    flags: [--release, --locked, --package=notekpr-cli]
+    env:
+      - NOTEKPR_VERSION={{ .Version }}
+      - CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-C target-feature=+crt-static -C link-arg=/ignore:4099
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    targets: [x86_64-pc-windows-msvc]
+    hooks:
+      post:
+        - cmd: >-
+            makensis -V2 -NOCD -DVERSION={{ .Version }}
+            -DVERSION4={{ .Major }}.{{ .Minor }}.{{ .Patch }}.0
+            -DBINARY={{ .Path }}
+            -DOUTFILE=dist/clients/{{ .ProjectName }}-cli_{{ .Version }}_windows_{{ .Arch }}_setup.exe
+            packaging/windows/notekpr-cli.nsi
+          output: true
+
+  # The desktop app's version goes into the program's file properties too
+  # (tauri-build's, from TAURI_CONFIG).
+  - id: desktop-windows
+    builder: rust
+    binary: notekpr-desktop
+    tool: cargo-xwin
+    command: build
+    flags: [--release, --locked, --package=notekpr-desktop]
+    env:
+      - NOTEKPR_VERSION={{ .Version }}
+      - 'TAURI_CONFIG={"version":"{{ .Version }}","build":{"frontendDist":"../../target-release/desktop-web"}}'
+      - CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS=-C link-arg=/ignore:4099
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    targets: [x86_64-pc-windows-msvc]
+    hooks:
+      post:
+        - cmd: >-
+            makensis -V2 -NOCD -DVERSION={{ .Version }}
+            -DVERSION4={{ .Major }}.{{ .Minor }}.{{ .Patch }}.0
+            -DBINARY={{ .Path }}
+            -DOUTFILE=dist/clients/{{ .ProjectName }}-desktop_{{ .Version }}_windows_{{ .Arch }}_setup.exe
+            packaging/windows/notekpr-desktop.nsi
+          output: true
+
 archives:
   - id: cli
     ids: [cli]
@@ -112,11 +168,13 @@ source:
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
-  extra_files: &flatpak
+  extra_files: &extra_files
     # The desktop app's Flatpak, which task release:flatpak builds before
     # (as Flathub builds apps: not GoReleaser's own Flatpaks, which hold the binary
     # only). The wildcard lets builds without it go on: only this version's.
     - glob: "target-release/flatpak-release/notekpr-desktop_{{ .Version }}_*.flatpak"
+    # The Windows installers, which the Windows builds' hooks made.
+    - glob: "dist/clients/notekpr-*_{{ .Version }}_windows_*_setup.exe"
 
 # Installed straight from the release (no package repository yet: they don't
 # update themselves). `task test:packages` installs them in Debian and in
@@ -278,7 +336,7 @@ release:
     name: notekpr
   mode: keep-existing
   replace_existing_artifacts: true
-  extra_files: *flatpak
+  extra_files: *extra_files
 
 changelog:
   disable: true

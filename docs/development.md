@@ -373,10 +373,15 @@ for arm64 with Ubuntu's cross compiler against an arm64 Ubuntu 22.04's
 (`/sysroot/arm64`, installed in an arm64 image that Docker emulates, as
 the two architectures' development packages can't be installed side by
 side). The CLI links nothing but glibc: zig and cargo-zigbuild build it for
-both architectures and glibc 2.28, whatever the image's system. Also in it:
-Rust with the wasm32 target and the wasm-bindgen CLI the crates pin (the
-app has the web client inside, built before it), and rpmbuild for COPR's
-source RPMs. `packaging/run.sh` runs a command in it, as your user, with
+both architectures and glibc 2.28, whatever the image's system. Windows
+(x64) is the MSVC target, as Tauri wants, built by cargo-xwin with clang
+and LLVM against Microsoft's C runtime and Windows SDK, which the image
+downloads once (their versions pinned in the Dockerfile; building it
+accepts Microsoft's license for them); the C runtime is linked in, so
+nothing else needs installing on Windows. Also in it: Rust with the wasm32
+target and the wasm-bindgen CLI the crates pin (the app has the web client
+inside, built before it), rpmbuild for COPR's source RPMs and NSIS for the
+Windows installers. `packaging/run.sh` runs a command in it, as your user, with
 the checkout at `/src`; its builds stay in `target-release/`, and start
 again from scratch when the image changed.
 
@@ -401,6 +406,8 @@ A release adds to the GitHub Release semrel made (its notes stay):
 | `notekpr-desktop_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr-desktop` (glibc 2.35, WebKitGTK 4.1), its desktop entry and icons: what the AUR package installs |
 | `notekpr-desktop_<v>_{amd64,arm64}.deb`, `notekpr-desktop-<v>-1.{x86_64,aarch64}.rpm` | the app as packages, which depend on the system's WebKitGTK, the tray's library and xdg-utils |
 | `notekpr-desktop_<v>_x86_64.flatpak` | the app's Flatpak as one file (`task release:flatpak`, below) |
+| `notekpr-cli_<v>_windows_amd64_setup.exe` | the CLI's Windows installer: `notekpr.exe` for the current user, on their PATH |
+| `notekpr-desktop_<v>_windows_amd64_setup.exe` | the app's Windows installer: `notekpr-desktop.exe` for the current user, in the Start menu, with WebView2 if missing |
 | `notekpr-<v>.tar.gz` | the source, which COPR's source RPMs are made from |
 | `notekpr_<v>_checksums.txt` | SHA-256 of all of them |
 
@@ -412,6 +419,16 @@ SSH key your own ssh uses for `aur.archlinux.org` (`AUR_KEY_FILE` to choose
 another), in CI (`$CI` set) with the `aur` secret in Infisical; the key's
 contents in `AUR_KEY` take precedence over both. The key must have no
 passphrase.
+
+GoReleaser has no pipe for Windows installers (the paid one does): each
+Windows build's hook runs `makensis` on its script in `packaging/windows`
+(`common.nsh` says what both do), into `dist/clients`, and the release
+takes them as extra files. They install for the current user, without
+administrator rights, under `%LOCALAPPDATA%\Programs`, uninstall from
+*Installed apps* and run silently with `/S`; installing the app over a
+running one has it quit first (`notekpr-desktop --quit`). Nothing tests
+them on Windows yet: try one on Windows after changing them (installing,
+over an older one, uninstalling). They aren't signed (#33).
 
 Last, COPR builds the CLI and the desktop app for Fedora in
 `coolapso/notekpr` (both architectures), and the release waits for its
@@ -437,10 +454,9 @@ it.
 
 If publishing fails halfway, fix it and run
 `task release:clients` again on the tagged commit (the working tree clean):
-it builds again and replaces the files already on the release. Linux only
-for now (the desktop app for Windows and macOS, and its Flatpak, are steps
-of #37 still to come). Snapshots are named like the images' versions
-(`0.2.0-3-gabc1234`).
+it builds again and replaces the files already on the release. Linux and
+Windows for now (macOS is a step of #37 still to come). Snapshots are named
+like the images' versions (`0.2.0-3-gabc1234`).
 
 Between releases, `task docker:push` and `task docker:push:demo` push an
 image tagged `latest` and with the version `git describe` gives after

@@ -292,12 +292,12 @@ notes](writing.md) and [Drawings](drawings.md).
   its own icon, in a window of its own. The sign-in screen offers it: one
   tap on Android, the steps on an iPhone
   ([how](getting-started.md#on-your-phone)).
-* The desktop app (Linux): notekpr in a window of its own, signed in
-  through your browser, that keeps running in the tray (closing the window
-  hides it there), can start when you log in, and keeps your vaults as a
-  two-way folder of Markdown files itself — no CLI needed for that;
-  a Flatpak and packages for Arch (AUR), Debian and Ubuntu
-  (`.deb`) and Fedora (COPR)
+* The desktop app (Linux and Windows): notekpr in a window of its own,
+  signed in through your browser, that keeps running in the tray (closing
+  the window hides it there), can start when you log in, and keeps your
+  vaults as a two-way folder of Markdown files itself — no CLI needed for
+  that; a Flatpak and packages for Arch (AUR), Debian and Ubuntu (`.deb`)
+  and Fedora (COPR), and an installer for Windows
   ([desktop app](desktop.md)).
 * Or the desktop app keeps your notes only on that computer: no server and
   no account, everything else as on a server (vaults, history, comments,

@@ -279,6 +279,11 @@ computer don't see such a copy's Markdown folders.
 `notekpr-desktop --profile bob` keeps its own settings, sign-in, data and
 folder, like the CLI's `--profile`.
 
+`notekpr-desktop --quit` (with the same `--profile`) has the running app
+quit, as *Quit notekpr* in its tray does: it stops its Markdown folder's
+sync first. With none running it does nothing. The Windows installer uses
+it before it replaces the app.
+
 ### The Flatpak
 
 The Flatpak keeps the same things under `~/.var/app/md.notekpr.Notekpr/`

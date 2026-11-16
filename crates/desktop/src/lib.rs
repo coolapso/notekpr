@@ -28,6 +28,12 @@ pub struct Args {
     /// Start in the tray without showing the window (how it starts at login).
     #[arg(long)]
     pub hidden: bool,
+    /// Have the copy of the app running with this profile (and folders)
+    /// quit, as Quit in its tray does, and return at once; it quits once
+    /// its Markdown folder's sync stopped. Nothing happens when none runs.
+    /// The Windows installer uses it before replacing or removing the app.
+    #[arg(long, conflicts_with = "hidden")]
+    pub quit: bool,
     /// Keep separate settings, sign-in and data under this name, so several
     /// people can be signed in side by side (as the CLI's --profile).
     #[arg(long, default_value = "default", value_parser = profile_name)]

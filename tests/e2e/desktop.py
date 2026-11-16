@@ -402,6 +402,20 @@ def main():
         wait_for("the window's edit in the file", lambda: "Typed in the app." in open(welcome).read())
         check(True, "typing in the window reaches the file")
 
+        # ---- quitting it from outside, as the Windows installer does before
+        # it replaces the app: started again with --quit (on the app's own
+        # display and D-Bus), the running copy quits; with none, nothing runs
+        pid = next(iter(app_pids(profile)))
+        app_env = dict(v.split("=", 1) for v in open(f"/proc/{pid}/environ").read().split("\0") if "=" in v)
+        quit_it = lambda: subprocess.run([app_bin, "--profile", profile, "--quit"], env=app_env,
+                                         capture_output=True, text=True, timeout=30)
+        r = quit_it()
+        check(r.returncode == 0, f"--quit hands over and ends ({r.stderr.strip()[-160:]})")
+        wait_for("the app to quit", lambda: not app_pids(profile), 30)
+        check(True, "the running copy quits")
+        r = quit_it()
+        check(r.returncode == 0 and not app_pids(profile), "with no copy running, --quit starts nothing")
+
         # ---- starting again: the folder goes on by itself
         a.quit()
         a = App(app_bin, profile)

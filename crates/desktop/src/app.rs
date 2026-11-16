@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use clap::Parser;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::utils::config::{BackgroundThrottlingPolicy, Csp};
@@ -185,6 +186,52 @@ fn quit(app: &AppHandle) {
     });
 }
 
+/// Only one copy of the app runs per profile (and folders of its own): the
+/// single-instance plugin, under the app's identifier with what sets this
+/// copy apart (`id`) — on Linux as its D-Bus name; elsewhere in the
+/// identifier itself, which the plugin names its lock after (Windows: a
+/// mutex and a window). A copy started again hands its arguments over and
+/// ends.
+fn single_copy(
+    context: &mut tauri::Context<tauri::Wry>,
+    id: &[String],
+) -> tauri_plugin_single_instance::Builder<tauri::Wry> {
+    let single = tauri_plugin_single_instance::Builder::new().callback(|app, argv, _cwd| {
+        match Args::try_parse_from(&argv) {
+            Ok(a) if a.quit => quit(app),
+            // The autostart of an app that is already running.
+            Ok(a) if a.hidden => {}
+            // Started again: show the window.
+            _ => show_window(app),
+        }
+    });
+    if id.is_empty() {
+        return single;
+    }
+    let named = format!("{}.{}", context.config().identifier, id.join("."));
+    #[cfg(target_os = "linux")]
+    return single.dbus_id(named);
+    #[cfg(not(target_os = "linux"))]
+    {
+        context.config_mut().identifier = named;
+        single
+    }
+}
+
+/// `--quit`: the copy running with the same profile and folders gets the
+/// arguments ([`single_copy`]) and quits; this process ends there. Built,
+/// it is the only copy: there is nothing to quit.
+fn quit_running(
+    context: tauri::Context<tauri::Wry>,
+    single: tauri_plugin_single_instance::Builder<tauri::Wry>,
+) -> Result<()> {
+    let _only = tauri::Builder::default()
+        .plugin(single.build())
+        .build(context)
+        .context("starting the app")?;
+    Ok(())
+}
+
 /// Whether a tray icon shows now. On Linux that takes a StatusNotifier host
 /// (most desktops; GNOME with an extension): without one there is no icon,
 /// and a window closed to the tray could not come back. Asked when it
@@ -296,6 +343,39 @@ fn download_path(downloads: &std::path::Path, suggested: &std::path::Path) -> Pa
 }
 
 pub fn run(args: Args) -> Result<()> {
+    // A copy with folders of its own runs beside the installed app, with an
+    // autostart entry of its own that starts it with the same folders.
+    let own = crate::paths::own_folders();
+    let default_profile = args.profile == "default";
+    let mut context = tauri::generate_context!();
+    // The window's app id (Wayland) and class (X11) come from the program's
+    // name: make it the app's identifier, which its desktop entry and icons
+    // are named after (packaging/desktop), so desktops find them.
+    #[cfg(target_os = "linux")]
+    glib::set_prgname(Some(context.config().identifier.as_str()));
+
+    let mut autostart_args = vec!["--hidden".to_string()];
+    let mut autostart = tauri_plugin_autostart::Builder::new();
+    let mut id = vec![];
+    let mut name = vec![];
+    if let Some((tag, folders)) = &own {
+        id.push(format!("d{tag}"));
+        name.push(format!("development {tag}"));
+        autostart_args.extend(folders.iter().cloned());
+    }
+    if !default_profile {
+        id.push(format!("p_{}", args.profile.replace('-', "_")));
+        name.push(args.profile.clone());
+        autostart_args.extend(["--profile".to_string(), args.profile.clone()]);
+    }
+    let single = single_copy(&mut context, &id);
+    if !id.is_empty() {
+        autostart = autostart.app_name(format!("notekpr ({})", name.join(", ")));
+    }
+    if args.quit {
+        return quit_running(context, single);
+    }
+
     let paths = Paths::for_profile(&args.profile)?;
     paths.private_data()?;
     let loaded = Settings::load(&paths.settings_file())?;
@@ -316,10 +396,6 @@ pub fn run(args: Args) -> Result<()> {
         None => open.as_ref().and_then(|a| a.server.clone()),
     };
     let updates = Arc::new(Updates::default());
-    // A copy with folders of its own runs beside the installed app, with an
-    // autostart entry of its own that starts it with the same folders.
-    let own = crate::paths::own_folders();
-    let default_profile = args.profile == "default";
     // How a Markdown folder's .notekpr-folder names this app.
     let mut which = vec![];
     if let Some((tag, _)) = &own {
@@ -339,39 +415,7 @@ pub fn run(args: Args) -> Result<()> {
         updates.clone(),
     );
 
-    let mut context = tauri::generate_context!();
     context.config_mut().app.security.csp = Some(Csp::Policy(csp(api_server.as_deref())));
-    // The window's app id (Wayland) and class (X11) come from the program's
-    // name: make it the app's identifier, which its desktop entry and icons
-    // are named after (packaging/desktop), so desktops find them.
-    #[cfg(target_os = "linux")]
-    glib::set_prgname(Some(context.config().identifier.as_str()));
-
-    let mut single = tauri_plugin_single_instance::Builder::new().callback(|app, argv, _cwd| {
-        // Started again: show the window — unless it was the autostart of
-        // an app that is already running.
-        if !argv.iter().any(|a| a == "--hidden") {
-            show_window(app);
-        }
-    });
-    let mut autostart_args = vec!["--hidden".to_string()];
-    let mut autostart = tauri_plugin_autostart::Builder::new();
-    let mut id = vec![];
-    let mut name = vec![];
-    if let Some((tag, folders)) = &own {
-        id.push(format!("d{tag}"));
-        name.push(format!("development {tag}"));
-        autostart_args.extend(folders.iter().cloned());
-    }
-    if !default_profile {
-        id.push(format!("p_{}", args.profile.replace('-', "_")));
-        name.push(args.profile.clone());
-        autostart_args.extend(["--profile".to_string(), args.profile.clone()]);
-    }
-    if !id.is_empty() {
-        single = single.dbus_id(format!("md.notekpr.Notekpr.{}", id.join(".")));
-        autostart = autostart.app_name(format!("notekpr ({})", name.join(", ")));
-    }
 
     let state = Arc::new(AppState {
         profile: args.profile.clone(),

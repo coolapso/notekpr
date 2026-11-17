@@ -73,8 +73,18 @@ class Browser:
         raise RuntimeError(f"no {css} containing {text!r}")
 
     def click(self, css_or_id, timeout=10):
-        eid = css_or_id if not any(c in css_or_id for c in " .#[:>") and len(css_or_id) > 30 else self.find(css_or_id, timeout)
-        req("POST", self.p(f"/element/{eid}/click"), {})
+        if not any(c in css_or_id for c in " .#[:>") and len(css_or_id) > 30:
+            return self.click_el(css_or_id)
+        # The page may draw what the selector matches anew between finding
+        # it and clicking it (a note's title row as the note opens): then
+        # the new one is clicked.
+        for attempt in range(3):
+            eid = self.find(css_or_id, timeout)
+            try:
+                return self.click_el(eid)
+            except RuntimeError as e:
+                if "stale element" not in str(e) or attempt == 2:
+                    raise
 
     def click_el(self, eid):
         req("POST", self.p(f"/element/{eid}/click"), {})

@@ -1302,9 +1302,14 @@ async fn saved_shapes_are_a_file_merged_shape_by_shape() {
         ("bed".to_string(), Some("Bed".to_string())),
     ];
     assert_eq!(saved_shapes(&h).await, three);
-    // Beside the vault folders, not among the quick notes' files.
+    // Beside the vault folders, not among the quick notes' files. The
+    // mirror works in the folder's real path (macOS's temporary folders
+    // are in /var, a link to /private/var).
     let quick_dir = m.vault_dir(&qid).unwrap().to_path_buf();
-    assert_eq!(quick_dir.parent(), Some(root.as_path()));
+    assert_eq!(
+        quick_dir.parent(),
+        Some(root.canonicalize().unwrap().as_path())
+    );
     assert!(std::fs::read_dir(&quick_dir).unwrap().all(|e| {
         !e.unwrap()
             .file_name()

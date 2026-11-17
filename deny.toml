@@ -17,6 +17,8 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained as a crate of its own (now part of zbus 6), no known vulnerability: zbus 5's D-Bus messages in the desktop app's single-instance and opener plugins (Linux). Goes away when those plugins move to zbus 6." },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained as a crate of its own (now part of zbus 6), no known vulnerability: see RUSTSEC-2026-0370." },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained as a crate of its own (now part of zbus 6), no known vulnerability: see RUSTSEC-2026-0370." },
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, no known vulnerability: the server's sign-in (openidconnect, vendor/openidconnect, and oauth2: ID tokens' times) and its S3 file store (object_store: objects' times) use it; notekpr's own code doesn't. No version without it yet. Goes away when those move to jiff or time." },
+    { id = "RUSTSEC-2026-0542", reason = "humantime is unmaintained (it wraps chrono), no known vulnerability: object_store reads durations in its S3 settings with it. Goes away with RUSTSEC-2026-0543." },
 ]
 
 [licenses]

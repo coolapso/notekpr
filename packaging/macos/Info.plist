@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The desktop app's Info.plist (notekpr.app/Contents/Info.plist): what
+     macOS knows the app by. package.sh fills in @VERSION@ (numbers only,
+     as macOS wants them: 0.20.0). -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>notekpr</string>
+  <key>CFBundleName</key>
+  <string>notekpr</string>
+  <key>CFBundleExecutable</key>
+  <string>notekpr-desktop</string>
+  <!-- tauri.conf.json's identifier, as the app's files are named on Linux. -->
+  <key>CFBundleIdentifier</key>
+  <string>md.notekpr.Notekpr</string>
+  <key>CFBundleIconFile</key>
+  <string>icon</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@VERSION@</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>coolapso, AGPL-3.0-or-later</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.productivity</string>
+  <!-- The build's own minimum (MACOSX_DEPLOYMENT_TARGET in the Taskfile's
+       build:macos): the same number. 14: each account's window storage
+       is a data store of its own (paths.rs, webview_store) from then on. -->
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <!-- Plain HTTP on this computer only, as the app allows it anywhere
+       (normalize_server_url): its own server for notes only on this
+       computer (http://127.0.0.1), a development server
+       (http://localhost:8080). Servers elsewhere are HTTPS. -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+</dict>
+</plist>

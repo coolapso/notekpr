@@ -1,0 +1,61 @@
+name: macos
+run-name: macOS ${{ inputs.tag && format('release files for {0}', inputs.tag) || format('check of {0}', github.ref_name) }}
+on:
+  # With a tag: task release:macos:dispatch, which task release runs
+  # (release:clients, last), once the release is on GitHub. Without one, by
+  # hand (gh workflow run macos.yml): a check that touches no release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release's tag (v0.20.0), whose GitHub Release gets the files; empty: only build and test"
+        required: false
+        default: ""
+        type: string
+
+# The macOS files are built on a Mac (Apple's tools run on Macs only): this
+# runner installs the tooling, then runs the task a Mac of our own would.
+# With a tag, task release:macos: build, attach to the release with their
+# checksums. Without, task ci:macos: every Rust test and the files as a
+# snapshot, kept here for two weeks.
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    # Apple Silicon.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # The tags, which release:macos and snapshots' names read.
+          fetch-depth: 0
+      - name: Rust, the release image's (packaging/Dockerfile), with the wasm32 target
+        run: |
+          v=$(sed -nE 's/^FROM rust:([0-9.]+)-.*/\1/p' packaging/Dockerfile)
+          rustup toolchain install "$v" --profile minimal --target aarch64-apple-darwin,wasm32-unknown-unknown
+          rustup default "$v"
+      - name: go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: The wasm-bindgen CLI the crates pin
+        run: |
+          v=$(sed -nE 's/^wasm-bindgen = "=([0-9.]+)".*/\1/p' crates/web/Cargo.toml)
+          cargo install wasm-bindgen-cli --version "$v" --locked
+      - name: task release:macos
+        if: inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: task release:macos
+      - name: task ci:macos
+        if: inputs.tag == ''
+        run: task ci:macos
+      - name: The files built
+        if: inputs.tag == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/clients/*_darwin_*
+          retention-days: 14

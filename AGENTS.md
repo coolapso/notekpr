@@ -193,8 +193,11 @@ packaging/      the CLI's and the desktop app's release builds (GoReleaser,
                 AppStream page) · rpm/ (COPR's source RPMs: the specs, srpm.sh) ·
                 flatpak/ (the app's Flatpak: manifest template, build.sh, generate.py) ·
                 windows/ (the Windows installers, NSIS: made by the Windows builds'
-                hooks) · screenshots/ (app stores' pictures); Linux: .tar.gz, .deb,
-                .rpm, AUR, COPR, a .flatpak on the release; Windows (x64): installers
+                hooks) · macos/ (the app's .app and .dmg, the CLI's archive: on a
+                Mac, task build:macos; for releases GitHub's macOS runner,
+                .github/workflows/macos.yml) · screenshots/ (app stores' pictures);
+                Linux: .tar.gz, .deb, .rpm, AUR, COPR, a .flatpak on the release;
+                Windows (x64): installers; macOS (Apple Silicon): .dmg, .tar.gz
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes for panics found by fuzzing, via [patch.crates-io];
                 the changes are in vendor/yrs/NOTEKPR.md — re-apply on upgrade

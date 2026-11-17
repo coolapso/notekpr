@@ -475,6 +475,40 @@ tasks:
       - packaging/run.sh goreleaser release --snapshot --clean
       - packaging/run.sh packaging/rpm/srpm.sh dist/clients
 
+  # macOS builds need Apple's own tools, which run on Macs only (and Apple's
+  # licence allows them there only): no Docker image. GitHub's macOS runner
+  # runs these for releases (release:macos:dispatch).
+  build:macos:
+    desc: "On a Mac (Apple Silicon): build the CLI's and the desktop app's macOS release files into dist/clients, the app's .dmg and the CLI's .tar.gz (packaging/macos), as VERSION (default: named as GoReleaser names a snapshot)"
+    deps: [rust]
+    vars:
+      SNAPSHOT:
+        sh: git describe --tags --always --dirty --match 'v[0-9]*' | sed 's/^v//'
+      VERSION: '{{.VERSION | default .SNAPSHOT}}'
+    preconditions:
+      - sh: test "$(uname -s)" = Darwin
+        msg: "build:macos runs on a Mac: macOS builds need Apple's own tools"
+    env:
+      NOTEKPR_VERSION: "{{.VERSION}}"
+      # The oldest macOS it is for: packaging/macos/Info.plist says the same.
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+    cmds:
+      # The web client the app has inside, as GoReleaser's builds do.
+      - CARGO_TARGET_DIR={{.WEB_TARGET_DIR}} OUT=target-release/desktop-web ./scripts/build-web.sh > /dev/null
+      - >-
+        TAURI_CONFIG='{"version":"{{.VERSION}}","build":{"frontendDist":"../../target-release/desktop-web"}}'
+        cargo build --release --locked --target aarch64-apple-darwin -p notekpr-cli -p notekpr-desktop
+      - >-
+        packaging/macos/package.sh {{.VERSION}}
+        target/aarch64-apple-darwin/release/notekpr-desktop target/aarch64-apple-darwin/release/notekpr
+        dist/clients
+
+  ci:macos:
+    desc: "On a Mac: every Rust test, then the macOS release files as a snapshot (build:macos), publishing nothing — GitHub's macOS runner runs it when .github/workflows/macos.yml is started without a tag (gh workflow run macos.yml)"
+    cmds:
+      - task: test
+      - task: build:macos
+
   test:packages:
     desc: "Install the CLI's .deb in Debian and its .rpm in AlmaLinux 8 (glibc 2.28, the oldest the builds run on), the desktop app's .deb in Ubuntu 22.04 (the oldest it is for) and Debian and its .rpm in Fedora, and check them: for amd64, and for arm64 where Docker can run it (qemu) — after build:clients"
     preconditions:
@@ -766,7 +800,7 @@ tasks:
           FLAGS: ""
 
   release:clients:
-    desc: "Publish the CLI and the desktop app for the release tagged at HEAD (task release does, after the images; run it again if it failed there): their files and packages on the GitHub Release (the app's Flatpak too: release:flatpak), the AUR packages, then the COPR builds (release:copr)"
+    desc: "Publish the CLI and the desktop app for the release tagged at HEAD (task release does, after the images; run it again if it failed there): their files and packages on the GitHub Release (the app's Flatpak too: release:flatpak), the AUR packages, the COPR builds (release:copr), then the macOS files (release:macos:dispatch)"
     preconditions:
       - sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD
         msg: "HEAD has no release tag: the CLI is published for a release (task release)"
@@ -808,6 +842,65 @@ tasks:
         packaging/run.sh goreleaser release --clean
       - packaging/run.sh packaging/rpm/srpm.sh dist/clients
       - task: release:copr
+      # Last: the macOS files come from GitHub's macOS runner.
+      - task: release:macos:dispatch
+
+  release:macos:
+    desc: "On a Mac: the macOS release files for the release tagged at HEAD (build:macos), attached to its GitHub Release with their checksums (notekpr_<version>_macos_checksums.txt) — GitHub's macOS runner runs this (release:macos:dispatch)"
+    vars:
+      TAG:
+        sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD 2>/dev/null || true
+      VERSION: '{{trimPrefix "v" .TAG}}'
+    preconditions:
+      - sh: test -n "{{.TAG}}"
+        msg: "HEAD has no release tag: the macOS files are made for a release (task release)"
+      - sh: 'test -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" || gh auth status >/dev/null 2>&1'
+        msg: Set GITHUB_TOKEN, or sign in with gh auth login.
+    cmds:
+      - task: build:macos
+        vars:
+          VERSION: "{{.VERSION}}"
+      # Their checksums in a list of their own, beside GoReleaser's, which
+      # stays as it is (replacing it would delete it first). Run again, it
+      # all is made and replaced anew.
+      - |
+        set -eu
+        cd dist/clients
+        files="notekpr-desktop_{{.VERSION}}_darwin_arm64.dmg notekpr-cli_{{.VERSION}}_darwin_arm64.tar.gz"
+        sums=notekpr_{{.VERSION}}_macos_checksums.txt
+        shasum -a 256 $files > "$sums"
+        gh release upload {{.TAG}} --repo coolapso/notekpr --clobber $files "$sums"
+
+  release:macos:dispatch:
+    desc: "Have GitHub's macOS runner make the macOS release files for the release tagged at HEAD and attach them (.github/workflows/macos.yml runs release:macos), and wait for it — release:clients does, last; run it again if it failed there"
+    vars:
+      TAG:
+        sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD 2>/dev/null || true
+    preconditions:
+      - sh: test -n "{{.TAG}}"
+        msg: "HEAD has no release tag: the macOS files are made for a release (task release)"
+      - sh: 'test -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" || gh auth status >/dev/null 2>&1'
+        msg: Set GITHUB_TOKEN, or sign in with gh auth login.
+    cmds:
+      - |
+        set -eu
+        repo=coolapso/notekpr
+        since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        gh workflow run macos.yml --repo "$repo" --ref {{.TAG}} -f tag={{.TAG}}
+        # The run just asked for: the workflow's newest for this tag since.
+        id=
+        for _ in $(seq 30); do
+          id=$(gh run list --repo "$repo" --workflow macos.yml --event workflow_dispatch --created ">=$since" \
+            --json databaseId,displayTitle --jq 'map(select(.displayTitle | endswith(" {{.TAG}}")))[0].databaseId // empty')
+          [ -n "$id" ] && break
+          sleep 2
+        done
+        if [ -z "$id" ]; then
+          echo "The macOS build didn't start: gh run list --repo $repo --workflow macos.yml" >&2
+          exit 1
+        fi
+        echo "The macOS build: https://github.com/$repo/actions/runs/$id"
+        gh run watch "$id" --repo "$repo" --exit-status > /dev/null
 
   release:copr:
     desc: "Have COPR ({{.COPR_PROJECT}}) build the CLI and the desktop app from dist/clients' source RPMs and wait for them — release:clients does, after GoReleaser"

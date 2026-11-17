@@ -1,8 +1,8 @@
 # The command-line client (CLI)
 
-`notekpr` is the command-line client (for Linux and Windows; it also
-builds for macOS). It is not the [desktop app](desktop.md), a separate
-client that keeps a Markdown folder too; the CLI is for scripts, AI agents
+`notekpr` is the command-line client (for Linux, Windows and macOS). It
+is not the [desktop app](desktop.md), a separate client that keeps a
+Markdown folder too; the CLI is for scripts, AI agents
 and computers without a screen. It keeps an **encrypted local replica** of your vaults for
 offline use, syncs live over the WebSocket, can **mirror vaults as ordinary
 Markdown files** you edit with Neovim, VS Code or Obsidian, and
@@ -33,12 +33,13 @@ ciphertext.
 From the release after 0.8.0 on, each release on
 [GitHub](https://github.com/coolapso/notekpr/releases) carries the CLI for
 Linux, amd64 and arm64, for glibc 2.28 or newer (Debian 10, Ubuntu 20.04,
-RHEL 8 and later); from 0.20.0 on, an installer for Windows too. Other
-systems: build it from source.
+RHEL 8 and later); from 0.20.0 on, an installer for Windows and an
+archive for macOS too. Other systems: build it from source.
 
 | System | Install |
 |---|---|
 | Windows 10, 11 | the release's installer, `notekpr-cli_<version>_windows_amd64_setup.exe` (x64; Windows 11 on ARM runs it too): for you only, without administrator rights, and adds `notekpr` to your PATH: open a new terminal to use it. It isn't signed yet, so Windows may say it protected your PC: *More info*, then *Run anyway*. Remove it in *Settings → Apps → Installed apps → notekpr CLI*; your profiles stay. `/S` installs and uninstalls silently |
+| macOS 14 or newer, on Apple Silicon (M1 and newer) | the release's `notekpr-cli_<version>_darwin_arm64.tar.gz`: `notekpr` and the completions. It isn't signed by Apple yet, so macOS won't run it from a browser's download: download it with curl instead (`curl -fLO https://github.com/coolapso/notekpr/releases/download/v<version>/notekpr-cli_<version>_darwin_arm64.tar.gz`), then `tar -xzf notekpr-cli_<version>_darwin_arm64.tar.gz notekpr` and move `notekpr` to a folder on your PATH (`sudo mv notekpr /usr/local/bin/`). `notekpr setup` doesn't set up syncing in the background there yet. Not fully tested yet: its automatic tests run on a Mac, but nobody has used it on one by hand |
 | Arch | from the AUR: `notekpr-cli-bin` |
 | Debian, Ubuntu | the release's `.deb`: `sudo apt install ./notekpr-cli_<version>_amd64.deb` (`arm64` on ARM) |
 | Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-cli` |
@@ -52,7 +53,8 @@ for each Fedora release). The release's `.deb` and `.rpm` don't update
 themselves (there is no package repository for them yet): install a newer
 release's the same way. Each release also
 lists the files' SHA-256 sums (`notekpr_<version>_checksums.txt`; up to
-0.16.1 `notekpr-cli_<version>_checksums.txt`).
+0.16.1 `notekpr-cli_<version>_checksums.txt`), the macOS files' in
+`notekpr_<version>_macos_checksums.txt`.
 
 ### Shell completions
 
@@ -1041,9 +1043,10 @@ empty folder; `--json` prints `{vaults, files, problems, source}` (`source`:
 | `…/<profile>/audit.jsonl` | gateway write log (no content) |
 
 `NOTEKPR_CONFIG_DIR` and `NOTEKPR_DATA_DIR` override the two roots. On
-Windows they are `%APPDATA%\notekpr` and `%LOCALAPPDATA%\notekpr`, which
-only you (and administrators) can read: file modes don't apply there, the
-folders' own permissions do.
+macOS they are `~/.config/notekpr` and `~/.local/share/notekpr`, as on
+Linux. On Windows they are `%APPDATA%\notekpr` and
+`%LOCALAPPDATA%\notekpr`, which only you (and administrators) can read:
+file modes don't apply there, the folders' own permissions do.
 
 Honest limits: `local.key` lives in the same profile directory as the sealed
 data, so **a copy of that directory (a backup, a synced folder) can be

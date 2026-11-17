@@ -395,6 +395,9 @@ task ci:clients         # all three, as CI runs them
 task release:clients    # publish for the release tag at HEAD (task release does it), the Flatpak file too
 task release:copr       # only the COPR builds, again (release:clients does it)
 task copr:project       # once: create the COPR project
+task build:macos        # on a Mac: the macOS files into dist/clients (a snapshot)
+task ci:macos           # on a Mac: every Rust test, then build:macos (gh workflow run macos.yml: on GitHub's)
+task release:macos:dispatch  # the macOS files for the release tag at HEAD, again (release:clients does it)
 ```
 
 A release adds to the GitHub Release semrel made (its notes stay):
@@ -408,8 +411,11 @@ A release adds to the GitHub Release semrel made (its notes stay):
 | `notekpr-desktop_<v>_x86_64.flatpak` | the app's Flatpak as one file (`task release:flatpak`, below) |
 | `notekpr-cli_<v>_windows_amd64_setup.exe` | the CLI's Windows installer: `notekpr.exe` for the current user, on their PATH |
 | `notekpr-desktop_<v>_windows_amd64_setup.exe` | the app's Windows installer: `notekpr-desktop.exe` for the current user, in the Start menu, with WebView2 if missing |
+| `notekpr-cli_<v>_darwin_arm64.tar.gz` | `notekpr` for macOS 14 or newer on Apple Silicon, and the completions |
+| `notekpr-desktop_<v>_darwin_arm64.dmg` | the app for macOS 14 or newer on Apple Silicon: `notekpr.app` to drag into Applications |
 | `notekpr-<v>.tar.gz` | the source, which COPR's source RPMs are made from |
-| `notekpr_<v>_checksums.txt` | SHA-256 of all of them |
+| `notekpr_<v>_checksums.txt` | SHA-256 of all of them but the macOS files |
+| `notekpr_<v>_macos_checksums.txt` | SHA-256 of the macOS files |
 
 and publishes the AUR packages `notekpr-cli-bin` and `notekpr-desktop-bin`.
 The desktop app's desktop entry is `packaging/desktop/md.notekpr.Notekpr.desktop`,
@@ -429,6 +435,34 @@ administrator rights, under `%LOCALAPPDATA%\Programs`, uninstall from
 running one has it quit first (`notekpr-desktop --quit`). Nothing tests
 them on Windows yet: try one on Windows after changing them (installing,
 over an older one, uninstalling). They aren't signed (#33).
+
+The macOS files can't come from the image: macOS builds need Apple's own
+tools (its SDK, `codesign`, `hdiutil`), which run on Macs only, and
+Apple's licence allows them there only. `task build:macos` makes them on a
+Mac (Apple Silicon; Rust with the wasm32 target and the wasm-bindgen CLI,
+as for the web client): the web client, then the CLI and the app for
+`aarch64-apple-darwin` (macOS 14 or newer, as each account's window
+storage needs: `MACOSX_DEPLOYMENT_TARGET`, and the same in
+`packaging/macos/Info.plist`), then
+`packaging/macos/package.sh` puts the app in `notekpr.app` with its
+Info.plist and icon (`crates/desktop/icons/icon.icns`, from
+`scripts/logo.py`), signs it ad hoc, and makes the disk image and the
+CLI's archive. For a release, `release:clients` has GitHub's macOS runner
+do it last (`task release:macos:dispatch` starts
+`.github/workflows/macos.yml` for the tag and waits for it): the
+workflow installs the tools and runs `task release:macos`, the task a Mac
+of our own would run, which attaches the two files to the release with
+their checksums (`notekpr_<v>_macos_checksums.txt`: GoReleaser's list
+stays as it is). Started without a tag (`gh
+workflow run macos.yml`, after pushing), the workflow runs `task
+ci:macos` instead: every Rust test on macOS, then the files as a snapshot,
+which the run keeps for two weeks; nothing is published. Run it before a
+release that changed anything macOS builds. Nobody has tried the app or
+the CLI on a Mac by hand yet (there is no Mac to try them on), so the
+docs say macOS isn't fully tested; take that out once someone has. They
+aren't signed with an Apple Developer ID or notarized (#33), so macOS asks
+people to allow the app once (*Privacy & Security → Open Anyway*), and the
+CLI runs only when downloaded with curl, not a browser.
 
 Last, COPR builds the CLI and the desktop app for Fedora in
 `coolapso/notekpr` (both architectures), and the release waits for its
@@ -454,9 +488,9 @@ it.
 
 If publishing fails halfway, fix it and run
 `task release:clients` again on the tagged commit (the working tree clean):
-it builds again and replaces the files already on the release. Linux and
-Windows for now (macOS is a step of #37 still to come). Snapshots are named
-like the images' versions (`0.2.0-3-gabc1234`).
+it builds again and replaces the files already on the release (the macOS
+ones too, from the runner). Snapshots are named like the images' versions
+(`0.2.0-3-gabc1234`).
 
 Between releases, `task docker:push` and `task docker:push:demo` push an
 image tagged `latest` and with the version `git describe` gives after

@@ -3,7 +3,7 @@
 notekpr for your computer: the app you know from the browser, in a window
 of its own, that keeps running in the background, sits in the tray, can
 start when you log in, and keeps your notes as a folder of Markdown files
-too. For Linux and Windows ([install it](#install-it)).
+too. For Linux, Windows and macOS ([install it](#install-it)).
 
 It is a client of your notekpr server like the browser and the CLI: your
 notes are encrypted on your computer before anything leaves it. Or it keeps
@@ -41,11 +41,12 @@ From 0.17.0 on, each release on
 [GitHub](https://github.com/coolapso/notekpr/releases) carries the app for
 Linux: as packages (amd64 and arm64) for systems with glibc 2.35 and
 WebKitGTK 4.1 or newer, and as a Flatpak (x86_64) for any Linux. From
-0.20.0 on, an installer for Windows too:
+0.20.0 on, an installer for Windows and a disk image for macOS too:
 
 | System | Install |
 |---|---|
 | Windows 10, 11 | the release's installer, `notekpr-desktop_<version>_windows_amd64_setup.exe` (x64; Windows 11 on ARM runs it too): for you only, without administrator rights ([below](#on-windows)) |
+| macOS 14 or newer, on Apple Silicon (M1 and newer) | the release's disk image, `notekpr-desktop_<version>_darwin_arm64.dmg`: open it and drag notekpr into *Applications*. Not fully tested yet ([below](#on-macos)) |
 | Any Linux | the release's Flatpak, `notekpr-desktop_<version>_x86_64.flatpak`: `flatpak install --user ./notekpr-desktop_<version>_x86_64.flatpak` (it brings GNOME's runtime from Flathub; it doesn't update itself yet: install a newer release's the same way; [below](#the-flatpak)) |
 | Arch | from the AUR: `notekpr-desktop-bin` |
 | Debian 12+, Ubuntu 22.04+, Mint 21+ | the release's `.deb`: `sudo apt install ./notekpr-desktop_<version>_amd64.deb` (`arm64` on ARM) |
@@ -75,6 +76,32 @@ Installed apps → notekpr → Uninstall*. That removes the program, its Start
 menu entry and its starting at login; your settings and data (below) and
 your Markdown folder stay. The installer and the uninstaller also run
 silently with `/S`.
+
+### On macOS
+
+**Not fully tested yet.** The macOS app is built and its automatic tests
+run on a Mac, but nobody has tried it on one by hand yet, so something on
+this page may not work as it says. If it doesn't, please say so in a
+[discussion](https://github.com/coolapso/notekpr/discussions).
+
+Drag notekpr from the disk image into *Applications*, and open it from
+there (Launchpad, Spotlight). It isn't signed by Apple yet, so the first
+time macOS says it couldn't check notekpr and doesn't open it: choose
+*Done*, open *System Settings → Privacy & Security*, and near the bottom
+choose *Open Anyway* beside notekpr, then *Open Anyway* again (with your
+password). That is once per release you install.
+
+Its icon sits in the menu bar (click it for its menu), and while it runs
+its icon in the Dock opens the window too. *Quit notekpr* (⌘Q, or in the
+menu bar's menu) stops your Markdown folder's sync before it quits.
+*Start notekpr when you log in* needs notekpr in *Applications*, and macOS
+lists it in *System Settings → General → Login Items & Extensions*.
+
+To update, quit notekpr and drag a newer release's into *Applications* in
+place of the one there; your settings stay. To remove it: turn off *Start
+notekpr when you log in* (Settings), quit notekpr and drag it from
+*Applications* to the Trash. Your settings and data (below) and your
+Markdown folder stay.
 
 ## Getting started
 
@@ -265,7 +292,8 @@ notekpr-sync@<profile>`.
 ## The tray
 
 Windows shows the app's icon in the notification area (the arrow beside
-the clock keeps it, unless you drag it out). Most Linux desktops show tray
+the clock keeps it, unless you drag it out), macOS in the menu bar (a click
+opens its menu; the Dock's icon, the window). Most Linux desktops show tray
 icons (KDE, Cinnamon, Xfce, sway or Hyprland with a bar that has a tray).
 GNOME needs the *AppIndicator and KStatusNotifierItem Support* extension.
 Without a tray, closing the window quits the app, and *Close to the tray*
@@ -288,7 +316,11 @@ On Windows the same folders are under `%APPDATA%\notekpr-desktop` (in
 place of `~/.config/notekpr-desktop`) and `%LOCALAPPDATA%\notekpr-desktop`
 (in place of `~/.local/share/notekpr-desktop`); starting at login is the
 value `notekpr` in the registry's
-`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`.
+`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`. On
+macOS both are `~/Library/Application Support/notekpr-desktop`, but the
+window's data is where WebKit keeps it, a store per account under
+`~/Library/WebKit/md.notekpr.Notekpr/`; starting at login is
+`~/Library/LaunchAgents/notekpr.plist`.
 
 What is protected how: [security.md](security.md#local-storage).
 `NOTEKPR_DESKTOP_CONFIG_DIR` and `NOTEKPR_DESKTOP_DATA_DIR` replace

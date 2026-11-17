@@ -1,4 +1,4 @@
-; The CLI's Windows installer, notekpr-cli_<version>_windows_amd64_setup.exe
+; The CLI's Windows installer, notekpr-cli_windows_amd64_setup.exe
 ; (common.nsh says how it is made): notekpr.exe in
 ; %LOCALAPPDATA%\Programs\notekpr-cli, and that folder on the user's PATH,
 ; so `notekpr` runs in any new terminal. Installing a newer one over it

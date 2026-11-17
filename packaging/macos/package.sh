@@ -2,10 +2,13 @@
 # The macOS release files, from the release builds of the app and the CLI
 # (task build:macos builds them and runs this, on a Mac):
 #
-#   OUT/notekpr-desktop_<version>_darwin_arm64.dmg  the app, notekpr.app, to
-#       drag into Applications (the disk image shows where)
-#   OUT/notekpr-cli_<version>_darwin_arm64.tar.gz   the CLI, as the Linux
-#       archives hold it: notekpr, LICENSE, README.md, completions/
+#   OUT/notekpr-desktop_darwin_arm64.dmg  the app, notekpr.app, to drag
+#       into Applications (the disk image shows where)
+#   OUT/notekpr-cli_darwin_arm64.tar.gz   the CLI, as the Linux archives
+#       hold it: notekpr, LICENSE, README.md, completions/
+#
+# Named without the version, as the other release files
+# (.goreleaser.yaml says why); VERSION goes into the app's Info.plist.
 #
 #   packaging/macos/package.sh VERSION DESKTOP_BINARY CLI_BINARY OUT
 #
@@ -48,7 +51,7 @@ codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 # The disk image: the app, and Applications to drag it to.
 ln -s /Applications "$work/dmg/Applications"
-dmg=$out/notekpr-desktop_${version}_darwin_$arch.dmg
+dmg=$out/notekpr-desktop_darwin_$arch.dmg
 rm -f "$dmg"
 hdiutil create -quiet -volname notekpr -srcfolder "$work/dmg" -fs HFS+ -format UDZO "$dmg"
 
@@ -62,6 +65,7 @@ cp LICENSE README.md "$c/"
 "$c/notekpr" completions fish > "$c/completions/notekpr.fish"
 "$c/notekpr" completions powershell > "$c/completions/notekpr.ps1"
 "$c/notekpr" completions elvish > "$c/completions/notekpr.elv"
-tar -C "$c" -czf "$out/notekpr-cli_${version}_darwin_$arch.tar.gz" notekpr LICENSE README.md completions
+cli_archive=$out/notekpr-cli_darwin_$arch.tar.gz
+tar -C "$c" -czf "$cli_archive" notekpr LICENSE README.md completions
 
-ls -l "$dmg" "$out/notekpr-cli_${version}_darwin_$arch.tar.gz"
+ls -l "$dmg" "$cli_archive"

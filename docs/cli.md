@@ -34,17 +34,19 @@ From the release after 0.8.0 on, each release on
 [GitHub](https://github.com/coolapso/notekpr/releases) carries the CLI for
 Linux, amd64 and arm64, for glibc 2.28 or newer (Debian 10, Ubuntu 20.04,
 RHEL 8 and later); from 0.20.0 on, an installer for Windows and an
-archive for macOS too. Other systems: build it from source.
+archive for macOS too. Other systems: build it from source. The links
+below are always the newest release's (from 0.20.0 on, the files' names
+have no version).
 
 | System | Install |
 |---|---|
-| Windows 10, 11 | the release's installer, `notekpr-cli_<version>_windows_amd64_setup.exe` (x64; Windows 11 on ARM runs it too): for you only, without administrator rights, and adds `notekpr` to your PATH: open a new terminal to use it. It isn't signed yet, so Windows may say it protected your PC: *More info*, then *Run anyway*. Remove it in *Settings → Apps → Installed apps → notekpr CLI*; your profiles stay. `/S` installs and uninstalls silently |
-| macOS 14 or newer, on Apple Silicon (M1 and newer) | the release's `notekpr-cli_<version>_darwin_arm64.tar.gz`: `notekpr` and the completions. It isn't signed by Apple yet, so macOS won't run it from a browser's download: download it with curl instead (`curl -fLO https://github.com/coolapso/notekpr/releases/download/v<version>/notekpr-cli_<version>_darwin_arm64.tar.gz`), then `tar -xzf notekpr-cli_<version>_darwin_arm64.tar.gz notekpr` and move `notekpr` to a folder on your PATH (`sudo mv notekpr /usr/local/bin/`). `notekpr setup` doesn't set up syncing in the background there yet. Not fully tested yet: its automatic tests run on a Mac, but nobody has used it on one by hand |
+| Windows 10, 11 | the release's installer, [`notekpr-cli_windows_amd64_setup.exe`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-cli_windows_amd64_setup.exe) (x64; Windows 11 on ARM runs it too): for you only, without administrator rights, and adds `notekpr` to your PATH: open a new terminal to use it. It isn't signed yet, so Windows may say it protected your PC: *More info*, then *Run anyway*. Remove it in *Settings → Apps → Installed apps → notekpr CLI*; your profiles stay. `/S` installs and uninstalls silently |
+| macOS 14 or newer, on Apple Silicon (M1 and newer) | the release's [`notekpr-cli_darwin_arm64.tar.gz`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-cli_darwin_arm64.tar.gz): `notekpr` and the completions. It isn't signed by Apple yet, so macOS won't run it from a browser's download: download it with curl instead (`curl -fLO https://github.com/coolapso/notekpr/releases/latest/download/notekpr-cli_darwin_arm64.tar.gz`), then `tar -xzf notekpr-cli_darwin_arm64.tar.gz notekpr` and move `notekpr` to a folder on your PATH (`sudo mv notekpr /usr/local/bin/`). `notekpr setup` doesn't set up syncing in the background there yet. Not fully tested yet: its automatic tests run on a Mac, but nobody has used it on one by hand |
 | Arch | from the AUR: `notekpr-cli-bin` |
-| Debian, Ubuntu | the release's `.deb`: `sudo apt install ./notekpr-cli_<version>_amd64.deb` (`arm64` on ARM) |
+| Debian, Ubuntu | the release's [`notekpr-cli_amd64.deb`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-cli_amd64.deb) ([`notekpr-cli_arm64.deb`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-cli_arm64.deb) on ARM): `sudo apt install ./notekpr-cli_amd64.deb` |
 | Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-cli` |
-| RHEL, openSUSE | the release's `.rpm`: `sudo dnf install ./notekpr-cli-<version>-1.x86_64.rpm` (`aarch64` on ARM; `zypper install` on openSUSE) |
-| Other Linux | the release's `notekpr-cli_<version>_linux_<arch>.tar.gz`: `notekpr`, the completions and the systemd unit |
+| RHEL, openSUSE | the release's [`notekpr-cli_x86_64.rpm`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-cli_x86_64.rpm) ([`notekpr-cli_aarch64.rpm`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-cli_aarch64.rpm) on ARM): `sudo dnf install ./notekpr-cli_x86_64.rpm` (`zypper install` on openSUSE) |
+| Other Linux | the release's [`notekpr-cli_linux_amd64.tar.gz`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-cli_linux_amd64.tar.gz) ([`notekpr-cli_linux_arm64.tar.gz`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-cli_linux_arm64.tar.gz) on ARM): `notekpr`, the completions and the systemd unit |
 
 The packages install the completions for bash, zsh and fish and a systemd
 user unit to keep a profile in sync ([§4](#4-sync-and-the-markdown-mirror)).
@@ -52,9 +54,11 @@ COPR's package updates with the rest of Fedora (COPR builds it from source
 for each Fedora release). The release's `.deb` and `.rpm` don't update
 themselves (there is no package repository for them yet): install a newer
 release's the same way. Each release also
-lists the files' SHA-256 sums (`notekpr_<version>_checksums.txt`; up to
-0.16.1 `notekpr-cli_<version>_checksums.txt`), the macOS files' in
-`notekpr_<version>_macos_checksums.txt`.
+lists the files' SHA-256 sums, in
+[`notekpr_checksums.txt`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr_checksums.txt), the macOS files' in
+[`notekpr_macos_checksums.txt`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr_macos_checksums.txt) (up to 0.19.2
+`notekpr_<version>_checksums.txt`; up to 0.16.1
+`notekpr-cli_<version>_checksums.txt`).
 
 ### Shell completions
 

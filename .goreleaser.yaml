@@ -9,6 +9,12 @@
 # Windows installers by its build hooks (packaging/windows), COPR's source
 # RPMs after it (packaging/rpm/srpm.sh). The server is released as
 # container images only.
+#
+# The files' names have no version (notekpr-desktop_amd64.deb), so that
+# https://github.com/coolapso/notekpr/releases/latest/download/<name> is
+# always the newest: the website's downloads and the docs link there. Only
+# the source keeps it (COPR's source RPMs are made from it); the AUR
+# packages download under names of their own, with the version.
 version: 2
 
 project_name: notekpr
@@ -92,7 +98,7 @@ builds:
             makensis -V2 -NOCD -DVERSION={{ .Version }}
             -DVERSION4={{ .Major }}.{{ .Minor }}.{{ .Patch }}.0
             -DBINARY={{ .Path }}
-            -DOUTFILE=dist/clients/{{ .ProjectName }}-cli_{{ .Version }}_windows_{{ .Arch }}_setup.exe
+            -DOUTFILE=dist/clients/{{ .ProjectName }}-cli_windows_{{ .Arch }}_setup.exe
             packaging/windows/notekpr-cli.nsi
           output: true
 
@@ -116,7 +122,7 @@ builds:
             makensis -V2 -NOCD -DVERSION={{ .Version }}
             -DVERSION4={{ .Major }}.{{ .Minor }}.{{ .Patch }}.0
             -DBINARY={{ .Path }}
-            -DOUTFILE=dist/clients/{{ .ProjectName }}-desktop_{{ .Version }}_windows_{{ .Arch }}_setup.exe
+            -DOUTFILE=dist/clients/{{ .ProjectName }}-desktop_windows_{{ .Arch }}_setup.exe
             packaging/windows/notekpr-desktop.nsi
           output: true
 
@@ -124,7 +130,7 @@ archives:
   - id: cli
     ids: [cli]
     formats: [tar.gz]
-    name_template: "notekpr-cli_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "notekpr-cli_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README.md
@@ -138,7 +144,7 @@ archives:
   - id: desktop
     ids: [desktop]
     formats: [tar.gz]
-    name_template: "notekpr-desktop_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "notekpr-desktop_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - src: packaging/desktop/md.notekpr.Notekpr.desktop
@@ -167,14 +173,15 @@ source:
   prefix_template: "{{ .ProjectName }}-{{ .Version }}/"
 
 checksum:
-  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  name_template: "{{ .ProjectName }}_checksums.txt"
   extra_files: &extra_files
     # The desktop app's Flatpak, which task release:flatpak builds before
     # (as Flathub builds apps: not GoReleaser's own Flatpaks, which hold the binary
-    # only). The wildcard lets builds without it go on: only this version's.
-    - glob: "target-release/flatpak-release/notekpr-desktop_{{ .Version }}_*.flatpak"
+    # only). The wildcard lets builds without it go on: only this version's,
+    # from the folder named after it.
+    - glob: "target-release/flatpak-release/bundle/{{ .Version }}/notekpr-desktop_*.flatpak"
     # The Windows installers, which the Windows builds' hooks made.
-    - glob: "dist/clients/notekpr-*_{{ .Version }}_windows_*_setup.exe"
+    - glob: "dist/clients/notekpr-*_windows_*_setup.exe"
 
 # Installed straight from the release (no package repository yet: they don't
 # update themselves). `task test:packages` installs them in Debian and in
@@ -183,7 +190,13 @@ nfpms:
   - id: cli
     ids: [cli]
     package_name: notekpr-cli
-    file_name_template: "{{ .ConventionalFileName }}"
+    # Each format's own name for the architecture: notekpr-cli_amd64.deb,
+    # notekpr-cli_x86_64.rpm.
+    file_name_template: >-
+      {{ .PackageName }}_
+      {{- if eq .Format "rpm" }}{{ if eq .Arch "amd64" }}x86_64{{ else }}aarch64{{ end }}
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- .ConventionalExtension }}
     vendor: coolapso
     homepage: https://notekpr.md
     maintainer: coolapso <c4s@coolapso.sh>
@@ -227,7 +240,12 @@ nfpms:
   - id: desktop
     ids: [desktop]
     package_name: notekpr-desktop
-    file_name_template: "{{ .ConventionalFileName }}"
+    # As the CLI's: notekpr-desktop_amd64.deb, notekpr-desktop_x86_64.rpm.
+    file_name_template: >-
+      {{ .PackageName }}_
+      {{- if eq .Format "rpm" }}{{ if eq .Arch "amd64" }}x86_64{{ else }}aarch64{{ end }}
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- .ConventionalExtension }}
     vendor: coolapso
     homepage: https://notekpr.md
     maintainer: coolapso <c4s@coolapso.sh>

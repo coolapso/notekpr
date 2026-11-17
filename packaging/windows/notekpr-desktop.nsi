@@ -1,5 +1,5 @@
 ; The desktop app's Windows installer,
-; notekpr-desktop_<version>_windows_amd64_setup.exe (common.nsh says how it
+; notekpr-desktop_windows_amd64_setup.exe (common.nsh says how it
 ; is made): notekpr-desktop.exe in %LOCALAPPDATA%\Programs\notekpr, notekpr
 ; in the Start menu, and Microsoft Edge WebView2 Runtime (what draws the
 ; app's window) when the computer doesn't have it yet — Windows 11 does, as

@@ -539,12 +539,12 @@ tasks:
           fi
           echo "test:packages: $platform"
           run() { docker run --rm --platform "$platform" -v "$PWD/dist/clients:/p:ro" "$@"; }
-          run debian:stable-slim sh -c 'dpkg -i /p/notekpr-cli_*_$(dpkg --print-architecture).deb > /dev/null && {{.PACKAGE_CHECK}}'
-          run almalinux:8 sh -c 'rpm -i /p/notekpr-cli-*.$(uname -m).rpm && {{.PACKAGE_CHECK}}'
+          run debian:stable-slim sh -c 'dpkg -i /p/notekpr-cli_$(dpkg --print-architecture).deb > /dev/null && {{.PACKAGE_CHECK}}'
+          run almalinux:8 sh -c 'rpm -i /p/notekpr-cli_$(uname -m).rpm && {{.PACKAGE_CHECK}}'
           for image in ubuntu:22.04 debian:stable-slim; do
-            run "$image" sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends /p/notekpr-desktop_*_$(dpkg --print-architecture).deb desktop-file-utils > /dev/null && {{.DESKTOP_PACKAGE_CHECK}} && desktop-file-validate /usr/share/applications/md.notekpr.Notekpr.desktop'
+            run "$image" sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends /p/notekpr-desktop_$(dpkg --print-architecture).deb desktop-file-utils > /dev/null && {{.DESKTOP_PACKAGE_CHECK}} && desktop-file-validate /usr/share/applications/md.notekpr.Notekpr.desktop'
           done
-          run fedora:latest sh -c 'dnf -y -q install /p/notekpr-desktop-*.$(uname -m).rpm > /dev/null && {{.DESKTOP_PACKAGE_CHECK}}'
+          run fedora:latest sh -c 'dnf -y -q install /p/notekpr-desktop_$(uname -m).rpm > /dev/null && {{.DESKTOP_PACKAGE_CHECK}}'
         done
 
   test:srpm:
@@ -614,7 +614,7 @@ tasks:
         && test -e /app/share/metainfo/md.notekpr.Notekpr.metainfo.xml && ! test -e /app/tools'
 
   release:flatpak:
-    desc: "The desktop app's Flatpak as one file, for the release tagged at HEAD (release:clients makes it, and GoReleaser attaches it): built as Flathub builds it, from that tag on GitHub, into target-release/flatpak-release/notekpr-desktop_<version>_<arch>.flatpak"
+    desc: "The desktop app's Flatpak as one file, for the release tagged at HEAD (release:clients makes it, and GoReleaser attaches it): built as Flathub builds it, from that tag on GitHub, into target-release/flatpak-release/bundle/<version>/notekpr-desktop_<arch>.flatpak"
     vars:
       TAG:
         sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD 2>/dev/null || true
@@ -631,10 +631,14 @@ tasks:
         # On the branch apps are installed from (stable), not the build's own (master).
         arch=$(flatpak --default-arch)
         flatpak build-commit-from --src-ref="app/md.notekpr.Notekpr/$arch/master" repo "app/md.notekpr.Notekpr/$arch/stable"
-        rm -f notekpr-desktop_*.flatpak
+        # In a folder named after the version: GoReleaser attaches only
+        # this release's (its name has no version).
+        bundle="bundle/{{trimPrefix "v" .TAG}}"
+        rm -rf bundle
+        mkdir -p "$bundle"
         # Installing it fetches GNOME's runtime from Flathub.
         flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
-          repo "notekpr-desktop_{{trimPrefix "v" .TAG}}_$arch.flatpak" md.notekpr.Notekpr stable
+          repo "$bundle/notekpr-desktop_$arch.flatpak" md.notekpr.Notekpr stable
 
   # ------------------------------------------------------------------ docker
 
@@ -859,7 +863,7 @@ tasks:
       - task: release:macos:dispatch
 
   release:macos:
-    desc: "On a Mac: the macOS release files for the release tagged at HEAD (build:macos), attached to its GitHub Release with their checksums (notekpr_<version>_macos_checksums.txt) — GitHub's macOS runner runs this (release:macos:dispatch)"
+    desc: "On a Mac: the macOS release files for the release tagged at HEAD (build:macos), attached to its GitHub Release with their checksums (notekpr_macos_checksums.txt) — GitHub's macOS runner runs this (release:macos:dispatch)"
     vars:
       TAG:
         sh: git describe --exact-match --tags --match 'v[0-9]*' HEAD 2>/dev/null || true
@@ -879,8 +883,8 @@ tasks:
       - |
         set -eu
         cd dist/clients
-        files="notekpr-desktop_{{.VERSION}}_darwin_arm64.dmg notekpr-cli_{{.VERSION}}_darwin_arm64.tar.gz"
-        sums=notekpr_{{.VERSION}}_macos_checksums.txt
+        files="notekpr-desktop_darwin_arm64.dmg notekpr-cli_darwin_arm64.tar.gz"
+        sums=notekpr_macos_checksums.txt
         shasum -a 256 $files > "$sums"
         gh release upload {{.TAG}} --repo coolapso/notekpr --clobber $files "$sums"
 

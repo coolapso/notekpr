@@ -404,18 +404,26 @@ A release adds to the GitHub Release semrel made (its notes stay):
 
 | File | What |
 |---|---|
-| `notekpr-cli_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr` (glibc 2.28 or newer), completions, the systemd user unit |
-| `notekpr-cli_<v>_{amd64,arm64}.deb`, `notekpr-cli-<v>-1.{x86_64,aarch64}.rpm` | the same as packages, installed from the file (no package repository yet) |
-| `notekpr-desktop_<v>_linux_{amd64,arm64}.tar.gz` | `notekpr-desktop` (glibc 2.35, WebKitGTK 4.1), its desktop entry and icons: what the AUR package installs |
-| `notekpr-desktop_<v>_{amd64,arm64}.deb`, `notekpr-desktop-<v>-1.{x86_64,aarch64}.rpm` | the app as packages, which depend on the system's WebKitGTK, the tray's library and xdg-utils |
-| `notekpr-desktop_<v>_x86_64.flatpak` | the app's Flatpak as one file (`task release:flatpak`, below) |
-| `notekpr-cli_<v>_windows_amd64_setup.exe` | the CLI's Windows installer: `notekpr.exe` for the current user, on their PATH |
-| `notekpr-desktop_<v>_windows_amd64_setup.exe` | the app's Windows installer: `notekpr-desktop.exe` for the current user, in the Start menu, with WebView2 if missing |
-| `notekpr-cli_<v>_darwin_arm64.tar.gz` | `notekpr` for macOS 14 or newer on Apple Silicon, and the completions |
-| `notekpr-desktop_<v>_darwin_arm64.dmg` | the app for macOS 14 or newer on Apple Silicon: `notekpr.app` to drag into Applications |
+| `notekpr-cli_linux_{amd64,arm64}.tar.gz` | `notekpr` (glibc 2.28 or newer), completions, the systemd user unit |
+| `notekpr-cli_{amd64,arm64}.deb`, `notekpr-cli_{x86_64,aarch64}.rpm` | the same as packages, installed from the file (no package repository yet) |
+| `notekpr-desktop_linux_{amd64,arm64}.tar.gz` | `notekpr-desktop` (glibc 2.35, WebKitGTK 4.1), its desktop entry and icons: what the AUR package installs |
+| `notekpr-desktop_{amd64,arm64}.deb`, `notekpr-desktop_{x86_64,aarch64}.rpm` | the app as packages, which depend on the system's WebKitGTK, the tray's library and xdg-utils |
+| `notekpr-desktop_x86_64.flatpak` | the app's Flatpak as one file (`task release:flatpak`, below) |
+| `notekpr-cli_windows_amd64_setup.exe` | the CLI's Windows installer: `notekpr.exe` for the current user, on their PATH |
+| `notekpr-desktop_windows_amd64_setup.exe` | the app's Windows installer: `notekpr-desktop.exe` for the current user, in the Start menu, with WebView2 if missing |
+| `notekpr-cli_darwin_arm64.tar.gz` | `notekpr` for macOS 14 or newer on Apple Silicon, and the completions |
+| `notekpr-desktop_darwin_arm64.dmg` | the app for macOS 14 or newer on Apple Silicon: `notekpr.app` to drag into Applications |
 | `notekpr-<v>.tar.gz` | the source, which COPR's source RPMs are made from |
-| `notekpr_<v>_checksums.txt` | SHA-256 of all of them but the macOS files |
-| `notekpr_<v>_macos_checksums.txt` | SHA-256 of the macOS files |
+| `notekpr_checksums.txt` | SHA-256 of all of them but the macOS files |
+| `notekpr_macos_checksums.txt` | SHA-256 of the macOS files |
+
+The names have no version (but the source's), so that
+`https://github.com/coolapso/notekpr/releases/latest/download/<name>` is
+always the newest release's file: the website's downloads and the install
+tables in cli.md and desktop.md link there. Renaming one breaks those
+links. (Up to 0.19.2 the names had the version:
+`notekpr-cli_0.19.2_amd64.deb`.) The AUR packages download them under
+names of their own, with the version, as makepkg needs.
 
 and publishes the AUR packages `notekpr-cli-bin` and `notekpr-desktop-bin`.
 The desktop app's desktop entry is `packaging/desktop/md.notekpr.Notekpr.desktop`,
@@ -452,7 +460,7 @@ do it last (`task release:macos:dispatch` starts
 `.github/workflows/macos.yml` for the tag and waits for it): the
 workflow installs the tools and runs `task release:macos`, the task a Mac
 of our own would run, which attaches the two files to the release with
-their checksums (`notekpr_<v>_macos_checksums.txt`: GoReleaser's list
+their checksums (`notekpr_macos_checksums.txt`: GoReleaser's list
 stays as it is). Started without a tag (`gh
 workflow run macos.yml`, after pushing), the workflow runs `task
 ci:macos` instead: every Rust test on macOS, then the files as a snapshot,
@@ -557,7 +565,7 @@ task release:flatpak       # the Flatpak as one file for the release tagged at H
 **On the GitHub Release.** `release:clients` first builds the Flatpak from
 the release's tag on GitHub (`generate.py --tag`, then `flathub-build`),
 on the branch apps are installed from (`stable`), and packs it into one
-file, `notekpr-desktop_<v>_<arch>.flatpak` (`flatpak build-bundle`, which
+file, `notekpr-desktop_<arch>.flatpak` (`flatpak build-bundle`, which
 names Flathub for GNOME's runtime); GoReleaser then attaches it to the
 release and lists it in the checksums. Not GoReleaser's own Flatpaks: they
 hold the binary only, without the tray's library, the desktop entry, the

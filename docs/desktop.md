@@ -41,17 +41,19 @@ From 0.17.0 on, each release on
 [GitHub](https://github.com/coolapso/notekpr/releases) carries the app for
 Linux: as packages (amd64 and arm64) for systems with glibc 2.35 and
 WebKitGTK 4.1 or newer, and as a Flatpak (x86_64) for any Linux. From
-0.20.0 on, an installer for Windows and a disk image for macOS too:
+0.20.0 on, an installer for Windows and a disk image for macOS too. The
+links below are always the newest release's (from 0.20.0 on, the files'
+names have no version):
 
 | System | Install |
 |---|---|
-| Windows 10, 11 | the release's installer, `notekpr-desktop_<version>_windows_amd64_setup.exe` (x64; Windows 11 on ARM runs it too): for you only, without administrator rights ([below](#on-windows)) |
-| macOS 14 or newer, on Apple Silicon (M1 and newer) | the release's disk image, `notekpr-desktop_<version>_darwin_arm64.dmg`: open it and drag notekpr into *Applications*. Not fully tested yet ([below](#on-macos)) |
-| Any Linux | the release's Flatpak, `notekpr-desktop_<version>_x86_64.flatpak`: `flatpak install --user ./notekpr-desktop_<version>_x86_64.flatpak` (it brings GNOME's runtime from Flathub; it doesn't update itself yet: install a newer release's the same way; [below](#the-flatpak)) |
+| Windows 10, 11 | the release's installer, [`notekpr-desktop_windows_amd64_setup.exe`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-desktop_windows_amd64_setup.exe) (x64; Windows 11 on ARM runs it too): for you only, without administrator rights ([below](#on-windows)) |
+| macOS 14 or newer, on Apple Silicon (M1 and newer) | the release's disk image, [`notekpr-desktop_darwin_arm64.dmg`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-desktop_darwin_arm64.dmg): open it and drag notekpr into *Applications*. Not fully tested yet ([below](#on-macos)) |
+| Any Linux | the release's Flatpak, [`notekpr-desktop_x86_64.flatpak`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-desktop_x86_64.flatpak): `flatpak install --user ./notekpr-desktop_x86_64.flatpak` (it brings GNOME's runtime from Flathub; it doesn't update itself yet: install a newer release's the same way; [below](#the-flatpak)) |
 | Arch | from the AUR: `notekpr-desktop-bin` |
-| Debian 12+, Ubuntu 22.04+, Mint 21+ | the release's `.deb`: `sudo apt install ./notekpr-desktop_<version>_amd64.deb` (`arm64` on ARM) |
-| Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-desktop`; or the release's `.rpm`: `sudo dnf install ./notekpr-desktop-<version>-1.x86_64.rpm` (`aarch64` on ARM) |
-| Other Linux | the release's `notekpr-desktop_<version>_linux_<arch>.tar.gz` (the app, its desktop entry and icons; it needs WebKitGTK 4.1 and libayatana-appindicator installed), or [build it from source](#build-it) |
+| Debian 12+, Ubuntu 22.04+, Mint 21+ | the release's [`notekpr-desktop_amd64.deb`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-desktop_amd64.deb) ([`notekpr-desktop_arm64.deb`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-desktop_arm64.deb) on ARM): `sudo apt install ./notekpr-desktop_amd64.deb` |
+| Fedora | from COPR: `sudo dnf copr enable coolapso/notekpr`, then `sudo dnf install notekpr-desktop`; or the release's [`notekpr-desktop_x86_64.rpm`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-desktop_x86_64.rpm) ([`notekpr-desktop_aarch64.rpm`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-desktop_aarch64.rpm) on ARM): `sudo dnf install ./notekpr-desktop_x86_64.rpm` |
+| Other Linux | the release's [`notekpr-desktop_linux_amd64.tar.gz`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-desktop_linux_amd64.tar.gz) ([`notekpr-desktop_linux_arm64.tar.gz`](https://github.com/coolapso/notekpr/releases/latest/download/notekpr-desktop_linux_arm64.tar.gz) on ARM; the app, its desktop entry and icons; it needs WebKitGTK 4.1 and libayatana-appindicator installed), or [build it from source](#build-it) |
 
 It shows in your applications as *notekpr*. COPR's package updates with the
 rest of Fedora; the release's `.deb` doesn't update itself (no package

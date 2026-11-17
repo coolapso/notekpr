@@ -46,6 +46,9 @@ pub struct AppState {
     pub cli_take: Mutex<Option<oneshot::Sender<()>>>,
     /// What starts this profile at login (the autostart entry's command).
     pub autostart_line: Vec<String>,
+    /// Whether [`AppState::stop`] ran: the app is quitting or starting
+    /// again. Held while it runs, so another stop waits for it.
+    pub stopped: tokio::sync::Mutex<bool>,
 }
 
 /// The window's Content-Security-Policy: the server's own, but the API may
@@ -75,15 +78,26 @@ pub fn csp(server: Option<&str>) -> String {
     )
 }
 
-/// One argument as the system's autostart entry needs it (`auto-launch`
-/// joins them with spaces as they are): [`desktop_entry_arg`], or on
-/// Windows [`command_line_arg`].
+/// One argument as the system's autostart entry needs it, which
+/// `auto-launch` writes the arguments into as they are: [`desktop_entry_arg`],
+/// on Windows [`command_line_arg`], on macOS [`plist_arg`].
 fn exec_arg(a: &str) -> String {
     if cfg!(windows) {
         command_line_arg(a)
+    } else if cfg!(target_os = "macos") {
+        plist_arg(a)
     } else {
         desktop_entry_arg(a)
     }
+}
+
+/// One argument as a Launch Agent needs it (macOS: each argument is a
+/// `<string>` of its `ProgramArguments`, nothing splits them again): XML's
+/// `&`, `<` and `>` escaped.
+fn plist_arg(a: &str) -> String {
+    a.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// One argument as a Windows command line needs it (the `Run` key's
@@ -159,8 +173,13 @@ impl AppState {
     /// the CLI's folder cancelled (its background sync put back as it
     /// was) and any change of folder let finish, the Markdown folder the
     /// way `notekpr sync` does, then the app's own server it may still be
-    /// sending to.
+    /// sending to. Once: called while it runs (quitting twice, the system
+    /// ending the app meanwhile), it waits for it.
     pub async fn stop(&self) {
+        let mut stopped = self.stopped.lock().await;
+        if *stopped {
+            return;
+        }
         if let Some(tx) = self.cli_take.lock().unwrap().take() {
             let _ = tx.send(());
         }
@@ -171,6 +190,7 @@ impl AppState {
         if let Some(local) = &self.local {
             local.stop().await;
         }
+        *stopped = true;
     }
 }
 
@@ -184,6 +204,43 @@ fn quit(app: &AppHandle) {
         app.state::<Arc<AppState>>().stop().await;
         app.exit(0);
     });
+}
+
+/// Whether this copy runs from where it is only for now (macOS): a
+/// downloaded app that hasn't been moved yet runs from a temporary copy
+/// (App Translocation), which is gone at the next login.
+#[cfg(target_os = "macos")]
+pub fn runs_from_temporary_copy() -> bool {
+    std::env::current_exe()
+        .and_then(|p| p.canonicalize())
+        .is_ok_and(|p| p.to_string_lossy().contains("/AppTranslocation/"))
+}
+
+/// The menu bar's menus (macOS): Tauri's own, but with the app's Quit. The
+/// system's (terminate) ends the app at once; the app's stops the
+/// Markdown folder's sync first, as Quit in the tray does.
+#[cfg(target_os = "macos")]
+fn menu_bar(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let menu = Menu::default(app)?;
+    // The app's menu, the first: Quit is its last item.
+    if let Some(first) = menu.items()?.first().and_then(|m| m.as_submenu().cloned()) {
+        if let Some(last) = first
+            .items()?
+            .into_iter()
+            .last()
+            .filter(|i| i.as_predefined_menuitem().is_some())
+        {
+            first.remove(&last)?;
+        }
+        first.append(&MenuItem::with_id(
+            app,
+            "menu-quit",
+            "Quit notekpr",
+            true,
+            Some("CmdOrCtrl+Q"),
+        )?)?;
+    }
+    Ok(menu)
 }
 
 /// Only one copy of the app runs per profile (and folders of its own): the
@@ -274,15 +331,25 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &quit_item,
         ],
     )?;
-    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+    // macOS draws the menu bar's icons itself, in the menu bar's colours,
+    // from a black shape (a template): the icon's diamond alone.
+    let macos = cfg!(target_os = "macos");
+    let icon = tauri::image::Image::from_bytes(if macos {
+        include_bytes!("../icons/tray-template.png")
+    } else {
+        include_bytes!("../icons/tray.png")
+    })?;
     let mut tray = TrayIconBuilder::with_id("main");
     if let Some(dir) = crate::flatpak::tray_icon_dir() {
         tray = tray.temp_dir_path(dir);
     }
     tray.icon(icon)
+        .icon_as_template(macos)
         .tooltip("notekpr")
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        // A click opens the window, but in macOS's menu bar the menu, as
+        // its icons do (the window: the Dock's icon).
+        .show_menu_on_left_click(macos)
         .on_menu_event(|app, e| match e.id().as_ref() {
             "open" => show_window(app),
             "folder" => {
@@ -306,12 +373,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             "quit" => quit(app),
             _ => {}
         })
-        .on_tray_icon_event(|tray, e| {
+        .on_tray_icon_event(move |tray, e| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
             } = e
+                && !macos
             {
                 show_window(tray.app_handle());
             }
@@ -432,10 +500,18 @@ pub fn run(args: Args) -> Result<()> {
         autostart_line: std::iter::once("notekpr-desktop".to_string())
             .chain(autostart_args.iter().cloned())
             .collect(),
+        stopped: Default::default(),
     });
 
     let hidden = args.hidden;
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(menu_bar).on_menu_event(|app, e| {
+        if e.id() == "menu-quit" {
+            quit(app);
+        }
+    });
+    let app = builder
         .plugin(single.build())
         .plugin(
             autostart
@@ -481,12 +557,17 @@ pub fn run(args: Args) -> Result<()> {
                 .or_else(|_| app.path().home_dir())
                 .unwrap_or_else(|_| PathBuf::from("."));
             let nav = handle.clone();
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App(PathBuf::new()))
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(PathBuf::new()))
                 .title("notekpr")
                 .inner_size(1200.0, 820.0)
                 .min_inner_size(360.0, 480.0)
                 .visible(!hidden)
-                .data_directory(webview_dir.clone())
+                .data_directory(webview_dir.clone());
+            // macOS keeps the window's storage where WebKit does, not in
+            // the folder: the account's own store there.
+            #[cfg(target_os = "macos")]
+            let window = window.data_store_identifier(crate::paths::webview_store(&webview_dir));
+            window
                 // Windows: https://tauri.localhost, a secure origin like the
                 // others (changing it later would strand the window's storage).
                 .use_https_scheme(true)
@@ -600,16 +681,28 @@ pub fn run(args: Args) -> Result<()> {
         })
         .build(context)
         .context("starting the app")?;
-    app.run(|app, e| {
-        if let RunEvent::ExitRequested {
+    app.run(|app, e| match e {
+        RunEvent::ExitRequested {
             code: None, api, ..
-        } = e
-        {
+        } => {
             // The window closed for good: stop the folder's sync properly
             // first.
             api.prevent_exit();
             quit(app);
         }
+        // The app ends. Usually what runs stopped already; but the system
+        // may end it without asking (macOS: Quit in the Dock, logging
+        // out), even while it is stopping: it stops, or finishes stopping,
+        // before the process ends.
+        RunEvent::Exit => {
+            if let Some(state) = app.try_state::<Arc<AppState>>() {
+                tauri::async_runtime::block_on(state.stop());
+            }
+        }
+        // The Dock's icon clicked: the window, closed to the menu bar, back.
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => show_window(app),
+        _ => {}
     });
     Ok(())
 }
@@ -669,6 +762,19 @@ mod tests {
         assert_eq!(arg(r#"a"b"#), r#""a\"b""#);
         assert_eq!(arg(r#"a\"b"#), r#""a\\\"b""#);
         assert_eq!(arg(""), r#""""#);
+    }
+
+    #[test]
+    fn autostart_arguments_survive_the_launch_agent() {
+        let arg = plist_arg;
+        assert_eq!(arg("--hidden"), "--hidden");
+        // Spaces and quotes as they are: nothing splits the arguments again.
+        assert_eq!(
+            arg("/Users/ana/My notes/\"config\""),
+            "/Users/ana/My notes/\"config\""
+        );
+        assert_eq!(arg("/Users/ana/a&b<c>"), "/Users/ana/a&amp;b&lt;c&gt;");
+        assert_eq!(arg(""), "");
     }
 
     #[test]

@@ -196,9 +196,56 @@ pub fn valid_profile(name: &str) -> bool {
     notekpr_cli::profile::valid_profile_name(name)
 }
 
+/// The window storage at `dir` ([`Paths::webview`]) as macOS keeps it
+/// (macOS 14 and newer): a data store of the app's, named by a UUID, as
+/// WebKit there keeps one store unless told which — every account and
+/// profile would share it. The same folder always gives the same store (a
+/// UUID version 8 from its path's SHA-256), another folder another.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn webview_store(dir: &std::path::Path) -> [u8; 16] {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(dir.as_os_str().as_encoded_bytes());
+    let mut id = [0u8; 16];
+    id.copy_from_slice(&digest[..16]);
+    id[6] = (id[6] & 0x0f) | 0x80;
+    id[8] = (id[8] & 0x3f) | 0x80;
+    id
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_store_per_window_storage() {
+        let p = Paths {
+            config: "/c".into(),
+            data: "/d/default".into(),
+            profile: "default".into(),
+            data_root: "/d".into(),
+        };
+        let a = webview_store(&p.webview(Some("notes.example.com-9914ea42e685")));
+        // The same every time, so the account finds its storage again.
+        assert_eq!(
+            a,
+            webview_store(&p.webview(Some("notes.example.com-9914ea42e685")))
+        );
+        // Another account's, another profile's: another store.
+        assert_ne!(a, webview_store(&p.webview(Some("other.example.com-1"))));
+        assert_ne!(a, webview_store(&p.webview(None)));
+        let bob = Paths {
+            data: "/d/bob".into(),
+            profile: "bob".into(),
+            ..p.clone()
+        };
+        assert_ne!(
+            a,
+            webview_store(&bob.webview(Some("notes.example.com-9914ea42e685")))
+        );
+        // A UUID version 8 (RFC 9562), never all zeros.
+        assert_eq!(a[6] >> 4, 8);
+        assert_eq!(a[8] >> 6, 0b10);
+    }
 
     #[test]
     fn a_window_storage_and_a_folder_per_account() {

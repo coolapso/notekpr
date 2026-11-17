@@ -351,6 +351,7 @@ async fn open_account(app: &AppHandle, state: &AppState, id: &str) -> Res<()> {
         state
             .switching
             .store(false, std::sync::atomic::Ordering::SeqCst);
+        *state.stopped.lock().await = false;
         if let Some(local) = &state.local {
             let _ = local.start().await;
         }
@@ -424,6 +425,15 @@ pub fn set_close_to_tray(state: State<'_, Arc<AppState>>, on: bool) -> Res<()> {
 /// the Flatpak through the Background portal, which may ask the person.
 #[tauri::command]
 pub async fn set_autostart(app: AppHandle, state: State<'_, Arc<AppState>>, on: bool) -> Res<()> {
+    // Its Launch Agent would start a copy that is gone by then.
+    #[cfg(target_os = "macos")]
+    if on && crate::app::runs_from_temporary_copy() {
+        return Err(
+            "Move notekpr to your Applications folder first (drag it there), open it from there, \
+             then turn this on."
+                .into(),
+        );
+    }
     if !crate::flatpak::inside() {
         let a = app.autolaunch();
         return if on { a.enable() } else { a.disable() }.map_err(text);

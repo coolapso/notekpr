@@ -411,13 +411,15 @@ mod tests {
     fn pty() -> (i32, i32) {
         let (mut master, mut slave) = (0, 0);
         // SAFETY: openpty writes two descriptors; no name, settings or size.
+        // (Null as `*mut`: macOS's openpty takes those two as mutable,
+        // Linux's as const, which a `*mut` passes for.)
         let rc = unsafe {
             libc::openpty(
                 &mut master,
                 &mut slave,
                 std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
             )
         };
         assert_eq!(rc, 0, "openpty");

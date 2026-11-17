@@ -1073,26 +1073,48 @@ mod tests {
         assert!(asin(1.0000000000000002).is_nan() && asin(f64::NAN).is_nan());
     }
 
+    /// How many ulps the port may be from the C library, which isn't exact
+    /// either. The largest errors known for fdlibm's functions (OpenLibm's
+    /// and FreeBSD's are fdlibm's too) are 1.55 ulps (atan2) and 1.02
+    /// (tan); for the C libraries' tan, glibc's 0.62 and Apple's 3.53
+    /// (`tan(2.1178571928920746)` there: 1.6 ulps off, where fdlibm is
+    /// correctly rounded). Table 3 of Gladman, Innocente, Mather and
+    /// Zimmermann, "Accuracy of Mathematical Functions in Single, Double,
+    /// Double Extended, and Quadruple Precision" (2025). Two results that
+    /// far from the true value can be 5 ulps apart; a slip in the port
+    /// would be far more.
+    const FROM_THE_C_LIBRARY: u64 = 5;
+
     #[test]
     fn close_to_the_c_library() {
-        // Not a reference (it rounds differently now and then), but a slip
-        // in the port would be far more than an ulp off.
+        // Every miss, not only the first: a platform's C library is tried
+        // where this is tested (macOS: on GitHub's runner).
+        let mut off = Vec::new();
+        let mut check = |what: String, port: f64, c: f64| {
+            if ulps(port, c) > FROM_THE_C_LIBRARY {
+                off.push(format!("{what}: {port:e}, the C library's {c:e}"));
+            }
+        };
         let mut x = 1.0e-9;
         while x < 1.0e22 {
             for v in [x, -x, x * 1.37, x * 3.1] {
-                assert!(ulps(sin(v), v.sin()) <= 1, "sin {v:e}");
-                assert!(ulps(cos(v), v.cos()) <= 1, "cos {v:e}");
-                assert!(ulps(atan2(v, 1.3), v.atan2(1.3)) <= 1, "atan2 {v:e}");
-                assert!(ulps(atan2(-2.0, v), (-2.0f64).atan2(v)) <= 1, "atan2 {v:e}");
-                assert!(ulps(tan(v), v.tan()) <= 1, "tan {v:e}");
-                assert!(ulps(atan(v), v.atan()) <= 1, "atan {v:e}");
+                check(format!("sin({v:e})"), sin(v), v.sin());
+                check(format!("cos({v:e})"), cos(v), v.cos());
+                check(format!("atan2({v:e}, 1.3)"), atan2(v, 1.3), v.atan2(1.3));
+                check(
+                    format!("atan2(-2, {v:e})"),
+                    atan2(-2.0, v),
+                    (-2.0f64).atan2(v),
+                );
+                check(format!("tan({v:e})"), tan(v), v.tan());
+                check(format!("atan({v:e})"), atan(v), v.atan());
             }
             x *= 1.21;
         }
         let mut x = -1.0;
         while x <= 1.0 {
-            assert!(ulps(acos(x), x.acos()) <= 1, "acos {x:e}");
-            assert!(ulps(asin(x), x.asin()) <= 1, "asin {x:e}");
+            check(format!("acos({x:e})"), acos(x), x.acos());
+            check(format!("asin({x:e})"), asin(x), x.asin());
             x += 0.00173;
         }
         for v in [
@@ -1104,9 +1126,17 @@ mod tests {
             1e6,
             2.0f64.powi(60),
         ] {
-            assert!(ulps(sin(v), v.sin()) <= 1, "sin {v:e}");
-            assert!(ulps(cos(v), v.cos()) <= 1, "cos {v:e}");
-            assert!(ulps(tan(v), v.tan()) <= 1, "tan {v:e}");
+            check(format!("sin({v:e})"), sin(v), v.sin());
+            check(format!("cos({v:e})"), cos(v), v.cos());
+            check(format!("tan({v:e})"), tan(v), v.tan());
         }
+        assert!(off.is_empty(), "{}", off.join("\n"));
+    }
+
+    #[test]
+    fn tan_rounds_correctly_where_apples_does_not() {
+        // tan(2.1178571928920746) = -1.641851376615215104781…: fdlibm's is
+        // the nearest double (0.36 ulps away), as glibc's.
+        assert_eq!(tan(2.1178571928920746).to_bits(), 0xBFFA_4505_F2F7_4763);
     }
 }

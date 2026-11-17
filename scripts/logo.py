@@ -12,7 +12,7 @@ writes, all with transparent backgrounds:
 
 and the web app's icons for home screens, in crates/web/static/ (see
 APP_ICONS), and the desktop app's, in crates/desktop/icons/ (DESKTOP_ICONS,
-and WINDOWS_ICON for Windows).
+WINDOWS_ICON for Windows, MACOS_ICON and MACOS_TRAY for macOS).
 
 The logo is "notekpr" in Fira Code SemiBold with the icon's diamond ring as
 the "o". The letters are stored as outlines, so it looks the same where the
@@ -31,6 +31,7 @@ writes.
 
 import argparse
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -91,6 +92,33 @@ DESKTOP_ICONS = (
 # (the program's icon, which tauri-build puts in notekpr-desktop.exe, and
 # the installers'), each a PNG inside, as Windows reads them since Vista.
 WINDOWS_ICON = ("icon.ico", (16, 20, 24, 32, 40, 48, 64, 256))
+
+# The desktop app's on macOS: one .icns (the app's icon in Finder and the
+# Dock: packaging/macos puts it in the app), each size a PNG inside, under
+# the type macOS reads it as; the favicon on Apple's grid, its square 824 of
+# 1024 wide in the middle (macOS's own icons leave that margin).
+MACOS_ICON = (
+    "icon.icns",
+    (
+        ("icp4", 16),
+        ("icp5", 32),
+        ("icp6", 64),
+        ("ic07", 128),
+        ("ic08", 256),
+        ("ic09", 512),
+        ("ic10", 1024),
+        ("ic11", 32),
+        ("ic12", 64),
+        ("ic13", 256),
+        ("ic14", 512),
+    ),
+)
+
+# The menu bar's icon on macOS: a "template", which macOS colours itself
+# (black or white, as the menu bar is), so only a shape: the favicon's
+# diamond ring, black. macOS shows it 18 points high: 36 pixels on its
+# screens (two pixels to a point).
+MACOS_TRAY = ("tray-template.png", 36)
 
 
 def num(v):
@@ -167,6 +195,8 @@ def app_icons():
         subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), "-o", out], input=rounded.encode(), check=True)
         written.append(out)
     written.append(windows_icon(rounded))
+    written.append(macos_icon(rounded))
+    written.append(macos_tray(rounded))
     return written
 
 
@@ -190,6 +220,49 @@ def windows_icon(svg):
     out = os.path.join(DESKTOP_ICONS_DIR, name)
     with open(out, "wb") as f:
         f.write(header + entries + b"".join(pngs))
+    return out
+
+
+def rsvg(svg, size):
+    """`svg` as a PNG, `size` pixels square."""
+    return subprocess.run(
+        ["rsvg-convert", "-w", str(size), "-h", str(size)], input=svg.encode(), check=True, capture_output=True
+    ).stdout
+
+
+def macos_icon(svg):
+    """MACOS_ICON from the favicon `svg`: "icns" and the file's length, then
+    each size as its type, its length (with these 8 bytes) and a PNG."""
+    name, entries = MACOS_ICON
+    inside = re.sub(r"^<svg[^>]*>|</svg>\s*$", "", svg.strip())
+    on_grid = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">'
+        '<g transform="translate(100 100) scale(12.875)">%s</g></svg>' % inside
+    )
+    body = b""
+    for kind, size in entries:
+        data = rsvg(on_grid, size)
+        body += kind.encode("ascii") + struct.pack(">I", 8 + len(data)) + data
+    out = os.path.join(DESKTOP_ICONS_DIR, name)
+    with open(out, "wb") as f:
+        f.write(b"icns" + struct.pack(">I", 8 + len(body)) + body)
+    return out
+
+
+def macos_tray(svg):
+    """MACOS_TRAY from the favicon `svg`: its two diamonds (the ring and
+    its hole), black, the ring 40 of 44 high."""
+    name, size = MACOS_TRAY
+    paths = re.findall(r'<path d="([^"]+)"', svg)
+    if len(paths) != 2:
+        sys.exit("logo.py: the favicon's diamond ring isn't two paths: change MACOS_TRAY's drawing")
+    shape = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 10 44 44">'
+        '<path d="%s" fill="#000" fill-rule="evenodd"/></svg>' % "".join(paths)
+    )
+    out = os.path.join(DESKTOP_ICONS_DIR, name)
+    with open(out, "wb") as f:
+        f.write(rsvg(shape, size))
     return out
 
 

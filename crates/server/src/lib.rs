@@ -19,6 +19,7 @@ pub mod export;
 pub mod hub;
 pub mod instance;
 pub mod oidc;
+pub mod page;
 pub mod process;
 pub mod ratelimit;
 pub mod repo;

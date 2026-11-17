@@ -264,6 +264,15 @@ tasks:
     cmds:
       - task: build:web:dev
 
+  web:card:
+    desc: "Render the social card (scripts/social-card.html: the picture a link to a server shows) to crates/web/static/social.png, 1200×630, with headless Chromium"
+    preconditions:
+      - sh: command -v chromium >/dev/null && command -v optipng >/dev/null
+        msg: "Needs chromium and optipng."
+    cmds:
+      - chromium --headless=new --hide-scrollbars --allow-file-access-from-files --force-device-scale-factor=1 --window-size=1200,630 --screenshot="{{.ROOT_DIR}}/crates/web/static/social.png" "file://{{.ROOT_DIR}}/scripts/social-card.html"
+      - optipng -quiet -o2 "{{.ROOT_DIR}}/crates/web/static/social.png"
+
   dev:reset:
     desc: Delete the development database (all local test users, vaults and notes)
     prompt: "This deletes everything in {{.DATA_DIR}}/. Continue?"

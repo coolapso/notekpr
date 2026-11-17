@@ -146,7 +146,7 @@ pub struct Config {
     pub data_dir: PathBuf,
 
     /// Public base URL (scheme://host[:port]) as seen by browsers. Used for the
-    /// OIDC redirect URI and device-login links.
+    /// OIDC redirect URI, device-login links and link previews' addresses.
     #[arg(
         long,
         env = "NOTEKPR_PUBLIC_URL",

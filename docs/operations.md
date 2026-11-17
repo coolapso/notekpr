@@ -179,7 +179,7 @@ web app or over the admin API without a restart.
 |---|---|---|
 | `--listen` / `NOTEKPR_LISTEN` | `127.0.0.1:8080` | bind address (container image: `0.0.0.0:8080`) |
 | `--data-dir` / `NOTEKPR_DATA_DIR` | `./data` | holds `notekpr.db`, the attachments (`files/`, unless `--file-store` says otherwise) and automatic pre-migration backups (container image: `/data`) |
-| `--public-url` / `NOTEKPR_PUBLIC_URL` | `http://localhost:8080` | external URL; used for the OIDC redirect URI and device-login links |
+| `--public-url` / `NOTEKPR_PUBLIC_URL` | `http://localhost:8080` | external URL; used for the OIDC redirect URI, device-login links and the picture a shared link to the server shows (link previews want a whole address) |
 | `--web-dir` / `NOTEKPR_WEB_DIR` | unset | built browser client; unset = API only (container image: `/usr/share/notekpr/web`) |
 | `--oidc-issuer` / `NOTEKPR_OIDC_ISSUER` | unset | issuer URL (discovery at `/.well-known/openid-configuration`) |
 | `--oidc-client-id` / `NOTEKPR_OIDC_CLIENT_ID` | unset | client id |

@@ -633,6 +633,18 @@ app has loaded) and the offer's button turns into the browser's own
 dialog. No service worker is needed for that (Chromium 156). iPhones have
 no such event: the offer shows the steps.
 
+A link to a server shared in a chat or on a social network shows a preview:
+the Open Graph tags in `crates/web/static/index.html` and their picture,
+`crates/web/static/social.png` (1200×630). Previews want whole addresses,
+which only the server knows, so it puts its public URL in front of each
+`content="/…"` in the page as it serves it (`crates/server/src/page.rs`).
+The picture is drawn from `scripts/social-card.html`, the website's card
+without its pitch for the hosted service (the notekpr-cloud repository
+has the original): change it with the website's, then render it with
+`task web:card` (headless Chromium, then optipng) and look at it. Keep it
+a PNG under 300 KB (WhatsApp skips bigger ones), with large text: it is
+often shown at a third of its size.
+
 ## The docs site
 
 The docs in `docs/` are also a website, [docs.notekpr.md](https://docs.notekpr.md)

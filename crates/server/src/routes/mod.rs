@@ -16,13 +16,14 @@ use std::time::Instant;
 
 use axum::Router;
 use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::handler::HandlerWithoutStateExt;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header};
 use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
 use notekpr_core::protocol::InstanceSettings;
 use tower_http::compression::CompressionLayer;
-use tower_http::services::{ServeDir, ServeFile};
+use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::error::AppError;
@@ -310,9 +311,18 @@ pub(crate) fn routes(state: AppState, mount: Mount) -> Router {
 
     app = match &cfg.web_dir {
         Some(dir) => {
-            let index = dir.join("index.html");
-            let spa = ServeDir::new(dir).fallback(ServeFile::new(index));
-            app.fallback_service(
+            // The client's page for every address that isn't one of its
+            // files, "/" and "/index.html" too: with the public URL in its
+            // link previews' addresses (page.rs).
+            let page = crate::page::Page::new(dir.join("index.html"), &cfg.public_url());
+            let serve_page = move || {
+                let page = page.clone();
+                async move { page.respond().await }
+            };
+            let spa = ServeDir::new(dir)
+                .append_index_html_on_directories(false)
+                .fallback(serve_page.clone().into_service());
+            app.route("/index.html", get(serve_page)).fallback_service(
                 tower::ServiceBuilder::new()
                     .layer(SetResponseHeaderLayer::if_not_present(
                         header::CACHE_CONTROL,

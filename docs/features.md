@@ -371,6 +371,9 @@ notes](writing.md) and [Drawings](drawings.md).
   then wait a moment, nothing is lost. Elsewhere, the server tells
   connected apps it's restarting; they keep working and are back about a
   second after it is.
+* A link to the server shared in a chat or on a social network shows a
+  preview: notekpr's picture and what it is, the same for every link —
+  nothing of the server's or of its notes.
 * Backups, upgrades, Prometheus metrics, and an admin page for accounts
   (make admins, disable accounts), server statistics and the server's
   version — never content.

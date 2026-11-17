@@ -12,6 +12,7 @@ mod export;
 mod files;
 mod handover;
 mod oidc;
+mod page;
 mod s3;
 
 /// With `autotests = false`, a file in tests/ that isn't a module here would

@@ -128,7 +128,8 @@ crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions
                 read-only mode) · apps.rs (apps too old for the server:
                 OLDEST_APP_VERSION) · admin_clients.rs (scripts administering the
                 instance: scopes, tokens) · auth.rs (sessions; Admin: admins and
-                admin clients), oidc.rs · writer.rs (the writer lease: one server
+                admin clients), oidc.rs · page.rs (the web client's page: its link
+                previews' addresses) · writer.rs (the writer lease: one server
                 writes to a database; an update's next version takes over) ·
                 migrations/
 crates/editor   the live-preview Markdown editor. Pure model (native tests): text.rs
@@ -180,9 +181,10 @@ scripts/        build-web.sh, build-load-ui.sh (wasm builds) · guide-shots.py (
                 guide's screenshots: task docs:shots) · emoji.py (the emoji
                 table, from Unicode's data) · demo.py (task demo),
                 demo-files/ (what it can't make, e.g. a video) · logo.py (the logo
-                and icon in docs/assets, by hand) · test-s3.sh (task test:s3: the
-                S3 file store against Garage in Docker) · clean-worktrees.sh
-                (task clean:worktrees) · check-docs.py,
+                and icon in docs/assets, by hand) · social-card.html (the picture
+                a shared link to a server shows: task web:card) · test-s3.sh
+                (task test:s3: the S3 file store against Garage in Docker) ·
+                clean-worktrees.sh (task clean:worktrees) · check-docs.py,
                 docs-theme.sh (the docs site)
 docs/site       the docs as a website (docs.notekpr.md): Hugo with the Dockleaf theme,
                 copied into themes/dockleaf; data/docs.yaml lists its pages

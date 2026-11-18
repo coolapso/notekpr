@@ -24,6 +24,9 @@ and no account.
 * **A Markdown folder.** Your vaults as a folder of ordinary Markdown files,
   synced both ways while the app runs, for Obsidian, VS Code, Neovim or any
   other editor (more in [Your own editor](own-editor.md)).
+* **Tells you of a new version.** When your server runs a newer release
+  than the app, the app says so; it never updates itself
+  ([update it](#update-it)).
 * **Without the server.** Like a browser, it keeps an encrypted copy of
   your vaults so it opens at once, but it asks the server for the keys each
   time it starts. *Settings → Devices → Keep this computer usable offline*
@@ -104,6 +107,30 @@ place of the one there; your settings stay. To remove it: turn off *Start
 notekpr when you log in* (Settings), quit notekpr and drag it from
 *Applications* to the Trash. Your settings and data (below) and your
 Markdown folder stay.
+
+### Update it
+
+notekpr never updates itself: nothing is installed on your computer
+without you. When the server your account is on runs a newer release than
+the app, the app says so: a bar in its window (*Dismiss* hides it until the
+next release), *Update available* in the tray's menu, and *Settings →
+Desktop app → Version*. It asks only that server, when it starts and every
+hour, so you hear of a release once your server runs it; with notes [only
+on this computer](#only-on-this-computer) there is no server to ask. When
+the server needs a newer app than yours, the window says that instead, and
+keeps your unsent edits until you've installed it.
+
+Install the new version the way you installed the app (the links
+[above](#install-it) are always the newest release's):
+
+| Installed from | To update |
+|---|---|
+| The Windows installer | run the newer release's installer: a running app quits first, and your settings stay ([above](#on-windows)) |
+| The macOS disk image | quit notekpr and drag the newer release's into *Applications* in place of the one there ([above](#on-macos)) |
+| The release's Flatpak | install the newer release's the same way: `flatpak install --user ./notekpr-desktop_x86_64.flatpak` |
+| The AUR, COPR | your system's updates bring it |
+| The release's `.deb` or `.rpm` | install the newer release's the same way: `sudo apt install ./notekpr-desktop_amd64.deb`, `sudo dnf install ./notekpr-desktop_x86_64.rpm` |
+| The `.tar.gz` | unpack the newer release's in place of the one you have |
 
 ## Getting started
 
@@ -302,7 +329,8 @@ Without a tray, closing the window quits the app, and *Close to the tray*
 says so.
 
 The tray's menu: *Open notekpr*, *Open the Markdown folder*, *Settings* and
-*Quit notekpr*.
+*Quit notekpr*. When your server runs a newer release, *Update available*
+comes first: it opens [how to update](#update-it) in your browser.
 
 ## Where it keeps things
 

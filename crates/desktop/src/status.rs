@@ -19,6 +19,9 @@ pub struct Status {
     /// While taking over the CLI's Markdown folder: waiting for the CLI to
     /// stop (docs/desktop.md "From the CLI").
     pub cli_wait: Option<CliWait>,
+    /// A newer release is out: the open account's server runs it
+    /// ([`crate::update`]).
+    pub update: Option<crate::update::Update>,
 }
 
 /// The CLI still runs the profile whose folder is being taken over.

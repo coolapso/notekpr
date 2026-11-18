@@ -71,6 +71,10 @@ pub struct Settings {
     /// starting at login): asked once, not for each account.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub background_asked: bool,
+    /// The release whose notice was dismissed in the window: its bar isn't
+    /// shown again ([`crate::update`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_dismissed: Option<String>,
 }
 
 fn yes() -> bool {
@@ -87,6 +91,7 @@ impl Default for Settings {
             close_to_tray: true,
             autostart: false,
             background_asked: false,
+            update_dismissed: None,
         }
     }
 }
@@ -308,6 +313,7 @@ mod tests {
             close_to_tray: false,
             autostart: true,
             background_asked: true,
+            update_dismissed: Some("0.24.0".into()),
         };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), s);

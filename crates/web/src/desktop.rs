@@ -139,6 +139,19 @@ pub struct Status {
     /// While taking over the CLI's Markdown folder: a CLI still runs it.
     #[serde(default)]
     pub cli_wait: Option<CliWait>,
+    /// A newer release is out: the server runs it (docs/desktop.md "Update
+    /// it").
+    #[serde(default)]
+    pub update: Option<Update>,
+}
+
+/// A newer release than this app.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Update {
+    /// `0.24.0`.
+    pub version: String,
+    /// Its bar was dismissed.
+    pub dismissed: bool,
 }
 
 /// Waiting for the CLI to stop ([`folder_take_from_cli`]).
@@ -412,6 +425,16 @@ pub async fn setup_done() -> Result<(), String> {
 /// Whether the open account still has its initial setup to see.
 pub fn needs_setup() -> bool {
     is_desktop() && accounts().iter().any(|a| a.open && !a.set_up)
+}
+
+/// Don't show the bar about release `version` again.
+pub fn dismiss_update(version: &str) {
+    fire("dismiss_update", json!({ "version": version }));
+}
+
+/// How to update, on the docs' page, in the default browser.
+pub fn update_help() {
+    fire("update_help", json!({}));
 }
 
 pub async fn folder_off() -> Result<(), String> {

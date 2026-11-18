@@ -310,27 +310,64 @@ pub fn tray_available() -> bool {
     }
 }
 
-fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open notekpr", true, None::<&str>)?;
-    let folder = MenuItem::with_id(
+/// The tray's menu; first, when a newer release is out, an entry saying so
+/// ([`crate::update`]), which opens how to update.
+fn tray_menu(app: &AppHandle, update: Option<&str>) -> tauri::Result<Menu<tauri::Wry>> {
+    let menu = Menu::new(app)?;
+    if let Some(v) = update {
+        menu.append(&MenuItem::with_id(
+            app,
+            "update",
+            format!("Update available: notekpr {v}"),
+            true,
+            None::<&str>,
+        )?)?;
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
+    menu.append(&MenuItem::with_id(
+        app,
+        "open",
+        "Open notekpr",
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
         app,
         "folder",
         "Open the Markdown folder",
         true,
         None::<&str>,
-    )?;
-    let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit notekpr", true, None::<&str>)?;
-    let menu = Menu::with_items(
+    )?)?;
+    menu.append(&MenuItem::with_id(
         app,
-        &[
-            &open,
-            &folder,
-            &settings,
-            &PredefinedMenuItem::separator(app)?,
-            &quit_item,
-        ],
-    )?;
+        "settings",
+        "Settings",
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "quit",
+        "Quit notekpr",
+        true,
+        None::<&str>,
+    )?)?;
+    Ok(menu)
+}
+
+/// A newer release is out, or none: the tray's menu says so.
+pub fn tray_update(app: &AppHandle, version: Option<&str>) {
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
+    if let Err(e) = tray_menu(app, version).and_then(|m| tray.set_menu(Some(m))) {
+        tracing::warn!("the tray's menu: {e}");
+    }
+}
+
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = tray_menu(app, None)?;
     // macOS draws the menu bar's icons itself, in the menu bar's colours,
     // from a black shape (a template): the icon's diamond alone.
     let macos = cfg!(target_os = "macos");
@@ -351,6 +388,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         // its icons do (the window: the Dock's icon).
         .show_menu_on_left_click(macos)
         .on_menu_event(|app, e| match e.id().as_ref() {
+            "update" => {
+                let _ = tauri_plugin_opener::open_url(crate::update::HELP, None::<&str>);
+            }
             "open" => show_window(app),
             "folder" => {
                 let state = app.state::<Arc<AppState>>();
@@ -547,6 +587,8 @@ pub fn run(args: Args) -> Result<()> {
             crate::commands::folder_take_from_cli,
             crate::commands::cancel_take,
             crate::commands::setup_done,
+            crate::commands::dismiss_update,
+            crate::commands::update_help,
             crate::commands::next_event,
         ])
         .setup(move |app| {
@@ -629,6 +671,8 @@ pub fn run(args: Args) -> Result<()> {
             // on this computer, at the app's own server's new address,
             // once it runs.
             let state = handle.state::<Arc<AppState>>().inner().clone();
+            // Whether a newer release is out: the server is asked.
+            crate::update::watch(handle.clone(), state.clone());
             if settled {
                 let s = state.settings.lock().unwrap();
                 if let Err(e) = s.save(&state.paths.settings_file()) {

@@ -1018,4 +1018,7 @@ which both are on their way to, so a server built from `main` takes the
 apps built beside it. Apps say so plainly and keep
 their unsent changes: the CLI stops syncing (its local copies keep them),
 the web app stops syncing, stores them in the browser and asks for a
-reload, after which it sends them.
+reload, after which it sends them (in the desktop app, whose files are its
+own: to install the new version). The desktop app also compares its own
+version with `GET /info`'s, to say when the server runs a newer release
+(docs/desktop.md "Update it"); it never updates itself.

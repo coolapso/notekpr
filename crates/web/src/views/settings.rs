@@ -421,6 +421,12 @@ fn DesktopApp() -> impl IntoView {
         </div>
         <h3>"Version"</h3>
         <p class="muted small">{move || info.get().map(|i| format!("notekpr desktop app {}", i.version))}</p>
+        {move || ui.desktop.get().update.map(|u| view! {
+            <p class="update-available">{format!("notekpr {} is out, and your server runs it. Install it the way you installed this app: the app doesn't update itself.", u.version)}</p>
+            <div class="row">
+                <button class="btn" on:click=|_| crate::desktop::update_help()><Icon name="download"/>" How to update"</button>
+            </div>
+        })}
     }
 }
 

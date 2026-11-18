@@ -17,6 +17,7 @@ pub mod signin;
 pub mod status;
 #[cfg(all(test, target_os = "linux"))]
 mod testbus;
+pub mod update;
 
 use std::path::PathBuf;
 

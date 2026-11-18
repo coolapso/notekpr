@@ -27,6 +27,19 @@ pub fn Loading() -> impl IntoView {
 
 #[component]
 pub fn Fatal(msg: String) -> impl IntoView {
+    // The desktop app, too old for its server: its files are its own, so
+    // trying again brings back the same app. A newer one must be installed.
+    if crate::desktop::is_desktop() && ui().outdated.get_untracked() {
+        return view! {
+            <Card>
+                <h1>"This app needs updating"</h1>
+                <p class="muted update-required">"The server needs a newer version of notekpr. Install it the way you installed this app; what it keeps on this computer stays."</p>
+                <button class="btn primary" on:click=|_| crate::desktop::update_help()>"How to update"</button>
+                <AccountsButton/>
+            </Card>
+        }
+        .into_any();
+    }
     view! {
         <Card>
             <h1>"Something went wrong"</h1>
@@ -35,6 +48,7 @@ pub fn Fatal(msg: String) -> impl IntoView {
             <AccountsButton/>
         </Card>
     }
+    .into_any()
 }
 
 /// The desktop app, stuck before the notes open (a server that can't be

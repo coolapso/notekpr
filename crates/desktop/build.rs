@@ -28,6 +28,8 @@ const COMMANDS: &[&str] = &[
     "folder_take_from_cli",
     "cancel_take",
     "setup_done",
+    "dismiss_update",
+    "update_help",
     "next_event",
 ];
 

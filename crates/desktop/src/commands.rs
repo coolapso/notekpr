@@ -960,6 +960,20 @@ pub fn setup_done(state: State<'_, Arc<AppState>>) -> Res<()> {
     s.save(&state.paths.settings_file()).map_err(chain)
 }
 
+/// The bar saying a newer release is out was dismissed for `version`
+/// (docs/desktop.md "Update it"). A script saying so only hides the bar.
+#[tauri::command]
+pub fn dismiss_update(state: State<'_, Arc<AppState>>, version: String) -> Res<()> {
+    crate::update::dismiss(&state, &version).map_err(chain)
+}
+
+/// How to update, on the docs' page, in the default browser: that address
+/// only.
+#[tauri::command]
+pub fn update_help() -> Res<()> {
+    tauri_plugin_opener::open_url(crate::update::HELP, None::<&str>).map_err(text)
+}
+
 /// Stop keeping the folder in sync, once the person said yes: the app
 /// forgets its copies and keys for it; the Markdown files stay.
 #[tauri::command]

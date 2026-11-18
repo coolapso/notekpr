@@ -174,6 +174,9 @@ def main():
     start(["dbus-run-session", "--", "WebKitWebDriver", f"--port={wd_port}"], log="webdriver.log",
           env=dict(os.environ, XDG_RUNTIME_DIR=runtime, WAYLAND_DISPLAY=display, GDK_BACKEND="wayland",
                    TAURI_WEBVIEW_AUTOMATION="true", NOTEKPR_DESKTOP_TEST_FOLDER=notes,
+                   # The app and its server taken to be these releases: a
+                   # newer one is out (crates/desktop/src/update.rs).
+                   NOTEKPR_DESKTOP_TEST_VERSIONS="0.1.0,0.2.0",
                    NOTEKPR_DESKTOP_CONFIG_DIR=desk_config, NOTEKPR_DESKTOP_DATA_DIR=desk_data,
                    HOME=f"{home}/home", XDG_CONFIG_HOME=f"{home}/home/.config",
                    XDG_DATA_HOME=f"{home}/home/.local/share", NOTEKPR_LOG="info",
@@ -346,6 +349,24 @@ def main():
         wait_for("the autostart entry to go", lambda: not os.path.exists(autostart))
         check(True, "turned off, the entry goes")
 
+        # ---- a newer release (docs/desktop.md "Update it"): the server runs
+        # one, so the app says so; it never updates itself
+        a.find_text(".update-banner", "notekpr 0.2.0 is out", 20)
+        check(True, "a server running a newer release than the app: a bar says it is out")
+        check("notekpr 0.2.0 is out" in a.js("return document.querySelector('.update-available')?.textContent || ''"),
+              "and the app's settings say it")
+        update_page = "https://docs.notekpr.md/tools/desktop/#update-it"
+        a.click(".update-banner .btn.primary")
+        wait_for("the page on updating", lambda: open(opened).read().split()[-1] == update_page)
+        check(True, "How to update opens the docs' page in the default browser")
+        r = invoke("dismiss_update", {"version": "../../x"})
+        check("err" in r, f"only a release's version is kept as dismissed ({r})")
+        a.click(".update-banner .dismiss-update")
+        wait_for("the bar to go", lambda: a.js("return !document.querySelector('.update-banner')"))
+        check(settings_of(profile).get("update_dismissed") == "0.2.0",
+              "dismissed, the bar goes for that release, and the app keeps that")
+        check(a.js("return !!document.querySelector('.update-available')"), "the settings still say it")
+
         # ---- the Markdown folder
         a.click_el(a.find_text(".settings-body button", "Choose a folder", 10))
         wait_for("the folder to sync", lambda: "Keeping" in a.folder_status())
@@ -423,6 +444,9 @@ def main():
         a.route("/settings/app")
         wait_for("the folder after a start", lambda: "Keeping" in a.folder_status())
         check(True, "after starting again the folder is kept in sync without asking")
+        a.find(".update-available", 20)
+        check(a.js("return !document.querySelector('.update-banner')"),
+              "after starting again, the bar dismissed for that release stays away")
         # (With a note open: the file tree isn't kept current under Settings.)
         a.click_el(a.find_text(".tree-item", "Welcome", 10))
         a.find(".ed .ln", 10)

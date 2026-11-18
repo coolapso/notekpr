@@ -32,6 +32,8 @@
     "allow-folder-take-from-cli",
     "allow-cancel-take",
     "allow-setup-done",
+    "allow-dismiss-update",
+    "allow-update-help",
     "allow-next-event"
   ]
 }

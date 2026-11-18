@@ -549,6 +549,14 @@ browser. What it adds to the above:
   put files there too, as on the web. Its CSP is the web app's, with the
   chosen server (and Tauri's IPC) in `connect-src`; Tauri's prototype
   freezing is on.
+* **Updates** ([desktop.md](desktop.md#update-it)): the app never
+  updates itself, nor downloads anything to run. It asks the open
+  account's server for its version (`GET /info`, without credentials,
+  following no redirect) when it starts and every hour, nobody else, and
+  logs nothing the server answers; it says when that is a newer release,
+  with a link to the docs' page on updating, which is built into the app.
+  A server can make it say that a release is out, or not, and nothing
+  more; a script in the window can only hide the bar.
 * **Accounts** ([desktop.md](desktop.md#accounts)): the app keeps one
   account per server added after that yes (the app asks before it
   contacts a new address at all, and doesn't follow it if it redirects

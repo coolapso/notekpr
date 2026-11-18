@@ -299,6 +299,10 @@ notes](writing.md) and [Drawings](drawings.md).
   that; a Flatpak and packages for Arch (AUR), Debian and Ubuntu (`.deb`)
   and Fedora (COPR), an installer for Windows and a disk image for macOS
   (not fully tested yet) ([desktop app](desktop.md)).
+* The desktop app tells you when your server runs a newer release: a bar
+  in its window, dismissed per release, and *Update available* in the
+  tray. It never updates itself; you install the new version as you
+  installed the app ([update it](desktop.md#update-it)).
 * Or the desktop app keeps your notes only on that computer: no server and
   no account, everything else as on a server (vaults, history, comments,
   drawings, attachments, the Markdown folder); export to move them to a

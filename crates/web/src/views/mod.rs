@@ -245,10 +245,30 @@ fn Banners() -> impl IntoView {
             })
         }}
         <InvitationBanners/>
-        {move || ui.outdated.get().then(|| view! {
-            <div class="banner warn outdated-banner"><Icon name="alert"/>
-                <span>"This page is out of date: the server needs a newer version of notekpr. Your unsent edits are kept in this browser; reload to get the new version."</span>
-                <button class="btn small primary" on:click=|_| { let _ = util::window().location().reload(); }>"Reload"</button></div>
+        {move || ui.outdated.get().then(|| if crate::desktop::is_desktop() {
+            // The app's files are its own: reloading brings back the same.
+            view! {
+                <div class="banner warn outdated-banner"><Icon name="alert"/>
+                    <span>"This app is out of date: the server needs a newer version of notekpr. Your unsent edits are kept on this computer, and sent once you've installed it."</span>
+                    <button class="btn small primary" on:click=|_| crate::desktop::update_help()>"How to update"</button></div>
+            }.into_any()
+        } else {
+            view! {
+                <div class="banner warn outdated-banner"><Icon name="alert"/>
+                    <span>"This page is out of date: the server needs a newer version of notekpr. Your unsent edits are kept in this browser; reload to get the new version."</span>
+                    <button class="btn small primary" on:click=|_| { let _ = util::window().location().reload(); }>"Reload"</button></div>
+            }.into_any()
+        })}
+        // The desktop app: a newer release is out (docs/desktop.md "Update
+        // it"). Said once per version: dismissed, the settings still say it.
+        {move || ui.desktop.get().update.filter(|u| !u.dismissed && !ui.outdated.get()).map(|u| {
+            let v = u.version.clone();
+            view! {
+                <div class="banner update-banner"><Icon name="download"/>
+                    <span>{format!("notekpr {} is out, and your server runs it. Install it the way you installed this app.", u.version)}</span>
+                    <button class="btn small primary" on:click=|_| crate::desktop::update_help()>"How to update"</button>
+                    <button class="btn small ghost dismiss-update" on:click=move |_| crate::desktop::dismiss_update(&v)>"Dismiss"</button></div>
+            }
         })}
         {move || ui.read_only.get().map(|why| view! {
             <div class="banner warn read-only-banner"><Icon name="cloud-off"/>
@@ -354,6 +374,7 @@ pub fn SyncStatus() -> impl IntoView {
     let ui = ui();
     view! {
         <span class="sync" title=move || match (ui.conn.get(), ui.pending.get()) {
+            (_, n) if ui.outdated.get() && crate::desktop::is_desktop() => format!("This app is out of date: changes to {n} document(s) are kept on this computer and sync once you've installed the new version"),
             (_, n) if ui.outdated.get() => format!("This page is out of date: changes to {n} document(s) are kept in this browser and sync after a reload"),
             (ConnState::Open, n) if ui.read_only.get().is_some() => format!("The server is read-only: changes to {n} document(s) are kept and will sync when it accepts changes again"),
             (ConnState::Open, n) if n > 0 && !ui.full.with(|f| f.is_empty()) => format!("A vault is full: changes to {n} document(s) are kept and will sync once it has room"),

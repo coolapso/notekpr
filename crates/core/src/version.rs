@@ -1,5 +1,6 @@
 //! Release versions, to tell an app too old for a server
-//! (docs/protocol.md §11).
+//! (docs/protocol.md §11), and the desktop app that a newer release is out
+//! (docs/desktop.md "Update it").
 
 use std::fmt;
 
@@ -58,6 +59,23 @@ impl Build {
     pub fn of_app(app: &str) -> Option<Build> {
         Some(Build::of(app.split_once('/')?.1))
     }
+
+    /// The release it is, or was built after; none for a development build.
+    pub fn release(self) -> Option<Version> {
+        match self {
+            Build::Release(v) | Build::After(v) => Some(v),
+            Build::Dev => None,
+        }
+    }
+}
+
+/// A release newer than an app built as `app`, which its server, built as
+/// `server`, shows is out: the server runs it, or was built after it. None
+/// when either is a development build (there is nothing to compare), or
+/// the server's release isn't newer (docs/desktop.md "Update it").
+pub fn newer_release(app: Build, server: Build) -> Option<Version> {
+    let (app, server) = (app.release()?, server.release()?);
+    (server > app).then_some(server)
 }
 
 impl fmt::Display for Version {
@@ -117,5 +135,36 @@ mod tests {
         );
         assert_eq!(Build::of_app("web/dev"), Some(Build::Dev));
         assert_eq!(Build::of_app("0.5.0"), None);
+    }
+
+    #[test]
+    fn releases_newer_than_an_app() {
+        let newer = |app: &str, server: &str| newer_release(Build::of(app), Build::of(server));
+        assert_eq!(newer("0.23.0", "0.24.0"), Some(Version(0, 24, 0)));
+        assert_eq!(newer("0.23.0", "0.23.1"), Some(Version(0, 23, 1)));
+        assert_eq!(newer("0.9.0", "1.0.0"), Some(Version(1, 0, 0)));
+        // A server built after a release shows that release is out…
+        assert_eq!(
+            newer("0.23.0", "0.24.0-3-gabc1234"),
+            Some(Version(0, 24, 0))
+        );
+        // …and an app built after one counts as it.
+        assert_eq!(
+            newer("0.23.0-3-gabc1234-dev", "0.24.0"),
+            Some(Version(0, 24, 0))
+        );
+        for (app, server) in [
+            ("0.24.0", "0.24.0"),
+            ("0.24.0", "0.23.0"),
+            ("0.24.0-1-gabc1234", "0.24.0"),
+            ("0.23.0", "0.23.0-5-gabc1234"),
+            // Development builds: nothing to compare.
+            ("dev", "0.24.0"),
+            ("0.23.0", "dev"),
+            ("abc1234", "0.24.0"),
+            ("dev", "dev"),
+        ] {
+            assert_eq!(newer(app, server), None, "{app} {server}");
+        }
     }
 }

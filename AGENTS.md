@@ -185,7 +185,9 @@ scripts/        build-web.sh, build-load-ui.sh (wasm builds) · guide-shots.py (
                 a shared link to a server shows: task web:card) · test-s3.sh
                 (task test:s3: the S3 file store against Garage in Docker) ·
                 clean-worktrees.sh (task clean:worktrees) · check-docs.py,
-                docs-theme.sh (the docs site)
+                docs-theme.sh (the docs site) · licenses.py (third-party
+                notices: docs/licenses.md, the web app's licenses.html;
+                task licenses)
 docs/site       the docs as a website (docs.notekpr.md): Hugo with the Dockleaf theme,
                 copied into themes/dockleaf; data/docs.yaml lists its pages
 packaging/      the CLI's and the desktop app's release builds (GoReleaser,
@@ -300,6 +302,12 @@ Without go-task, see the plain commands in the [Taskfile](Taskfile.yml) or
   the command when it fits the CLI (the way icons were added), otherwise add a
   line to the "Things to try" list in alice's *Start here* note (e.g.
   browser-only settings). Then run the demo and click through what changed.
+- **Dependencies carry notices.** A crate added, removed or upgraded:
+  `task licenses`, and commit what it changes (`task licenses:check`, which
+  CI runs, fails otherwise); another Rust in the Dockerfiles: `task
+  licenses:std RUST=x.y.z` first. Code or data copied or ported into
+  notekpr's own crates goes into `OWN` in `scripts/licenses.py`, with its
+  notice.
 - Its issue on the roadmap closes with the commit (`Closes: #N`); a step of a
   bigger issue is ticked in it, not deleted.
 - **Reviews.** Before a change is merged, the maintainer has it reviewed by

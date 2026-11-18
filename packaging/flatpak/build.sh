@@ -38,3 +38,6 @@ install -Dm644 crates/desktop/icons/128x128.png "$icons/128x128/apps/md.notekpr.
 install -Dm644 crates/desktop/icons/128x128@2x.png "$icons/256x256/apps/md.notekpr.Notekpr.png"
 install -Dm644 crates/desktop/icons/icon.png "$icons/512x512/apps/md.notekpr.Notekpr.png"
 install -Dm644 crates/web/static/favicon.svg "$icons/scalable/apps/md.notekpr.Notekpr.svg"
+# The notices of everyone else's code in it (scripts/licenses.py), next to
+# notekpr's LICENSE, which flatpak-builder puts in this module's folder.
+install -Dm644 docs/licenses.md /app/share/licenses/md.notekpr.Notekpr/notekpr-desktop/THIRD_PARTY_LICENSES.md

@@ -50,5 +50,18 @@ if command -v wasm-opt >/dev/null 2>&1 && [ "$PROFILE" != "dev" ]; then
   done
 fi
 cp -r crates/web/static/* "$OUT/"
+# The licences page (scripts/licenses.py) says which version it is and
+# links to that version's source: a release's tag, a snapshot's commit
+# (0.8.0-3-gabc1234, -dev with uncommitted changes), main for `dev`.
+version="${NOTEKPR_VERSION:-dev}"
+v="${version%-dev}"
+case "$v" in
+  dev) source=main ;;
+  [0-9]*-g*) source="${v##*-g}" ;;
+  [0-9]*) source="v$v" ;;
+  *) source="$v" ;;
+esac
+sed -e "s|@VERSION@|$version|g" -e "s|@SOURCE@|https://github.com/coolapso/notekpr/tree/$source|g" \
+  crates/web/static/licenses.html > "$OUT/licenses.html"
 ls -la "$OUT/pkg"
 echo "web client built into $OUT"

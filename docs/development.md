@@ -17,7 +17,7 @@ crates/load     load test runner (task load)           → notekpr-load
 crates/load-events  what the load runner streams to its live view
 crates/load-ui  the load test's live view (wasm32)     → dist/load
 scripts/        build-web.sh, build-load-ui.sh, demo.py (task demo), logo.py (the logo), emoji.py (the emoji table),
-                check-docs.py + docs-theme.sh (the docs site)
+                check-docs.py + docs-theme.sh (the docs site), licenses.py (third-party notices, task licenses)
 tests/e2e       browser end-to-end tests (Python stdlib + chromedriver)
 fuzz/           fuzz targets, a separate workspace (fuzz/run.sh, task fuzz)
 vendor/yrs      yrs 0.28 with fixes, via [patch.crates-io] (see its NOTEKPR.md)
@@ -41,6 +41,7 @@ get it.
 | go-task | the `task …` shortcuts (optional) | `go-task` | taskfile.dev |
 | `wasm-opt` | smaller release web builds (optional) | `binaryen` | binaryen releases |
 | Chromium + chromedriver, Python 3 | browser tests (`task test:e2e`) | `chromium` (includes chromedriver), `python` | matching Chrome/Chromium + chromedriver |
+| Python ≥ 3.11 | the third-party notices (`task licenses`, `task licenses:check`), the docs site's check | `python` | distro package |
 | cargo-deny | supply-chain checks (`task audit`) | `cargo-deny` | `cargo install cargo-deny --locked` |
 | Docker + Compose | container image, Docker dev stack, local Dex for OIDC, the load test (`task load`), the S3 file store's test (`task test:s3`, with Garage) | `docker`, `docker-compose`, `docker-buildx` | Docker docs |
 | WebKitGTK 4.1, GTK 3 (with headers) | the desktop app (`crates/desktop`, built by `task test` and `task lint`) | `webkit2gtk-4.1` | Debian, Ubuntu: `libwebkit2gtk-4.1-dev librsvg2-dev` |
@@ -89,6 +90,7 @@ task fmt                      # rustfmt (default style); CI checks it with task 
 task lint                     # clippy, warnings are errors
 task ci                       # exactly what CI runs: checks, every test, audit, the images
 task audit                    # supply-chain checks (cargo deny check)
+task licenses                 # the third-party notices, after changing dependencies
 task dev:reset                # wipe the dev database
 task build                    # debug build of server, CLI and web client;  task build:release  for release builds
 task check:wasm               # build the core for wasm32 (catches wasm-only issues)
@@ -317,6 +319,72 @@ task audit                # or: cargo deny check
 `cargo deny check` checks advisories (RustSec), licenses, banned crates and
 sources as `deny.toml` sets them (`task ci` runs it too). `Cargo.lock` is
 committed; release images are built with `--locked`.
+
+### Third-party notices
+
+```sh
+task licenses             # after changing dependencies: writes docs/licenses.md and crates/web/static/licenses.html
+task licenses:check       # fails when they're out of date (task ci:check runs it)
+task licenses:std RUST=1.99.1   # after moving the Dockerfiles to another Rust: its standard library's notices
+```
+
+`cargo deny` checks that notekpr may use every licence; this is the other
+half: the copyright notices and licence texts those licences ask to go with
+every copy, compiled or not. `scripts/licenses.py` writes them as one list
+for all the builds together (a notice too many does no harm), from the
+crates' own files:
+
+- **What's in a build:** for each program (the server; the web app and its
+  diagram module, `crates/diagram` being a workspace of its own; the CLI;
+  the desktop app), `cargo metadata` for each target it is released for,
+  followed from the program's crate along normal and build dependencies,
+  not development ones.
+- **What a crate gets:** its licence and notice files as it ships them
+  (`LICENSE*`, `COPYING*`, `NOTICE*`, `COPYRIGHT*`, `THIRD_PARTY*`): its own
+  at its top, and those of what it has inside from elsewhere anywhere below
+  (ring's `third_party/fiat/LICENSE`, merman's `THIRD_PARTY_LICENSES/`). Of a
+  choice for its own ("MIT OR Apache-2.0"), notekpr takes the first licence
+  of the script's `PREFERRED` that `deny.toml` allows, and the other
+  licences' files are left out. A crate that ships no licence text of its
+  own gets the standard one from `scripts/licenses/`, with its authors as its
+  `Cargo.toml` names them; a licence with no text there stops the script: add
+  it (from [SPDX](https://spdx.org/licenses/)). A notice a crate needs but
+  doesn't ship (Microsoft's WebView2 loader, which `webview2-com-sys` links
+  into the Windows desktop app) is in the script's `EXTRA`, its text in
+  `scripts/licenses/`. MPL-2.0 crates also get a line saying where their
+  source is (crates.io, unchanged), as that licence asks.
+- **What notekpr's own code holds from elsewhere** (the script's `OWN`): the
+  drawings' ports (`crates/draw/PORTED.md`), mhchem, the fonts, the emoji
+  data. Code or data copied or ported into notekpr's own crates goes there,
+  with its notice.
+- **Rust's standard library**, in every program: its licence, and the crates
+  it is built from (`STD_CRATES`: gimli, hashbrown, …), which cargo doesn't
+  show, with compiler-builtins' notices (LLVM's compiler-rt, musl's libm).
+  Those come from a copy in `scripts/licenses/std/`, for the Rust the
+  releases are built with (the Dockerfiles'): `task licenses:std RUST=1.99.1`
+  writes it from that Rust's `library/Cargo.lock` and crates.io (checked
+  against the lock's checksums), and `task licenses:check` fails once the
+  Dockerfiles move to another Rust. (The Flatpak and COPR's builds use their
+  own Rust, a little older or newer: the same crates, as a rule.)
+
+Every build carries them: the web app as `/licenses.html`, which opens
+without signing in (Settings → Account links it as *Licences*;
+`scripts/build-web.sh` writes the version and a link to its source into it);
+the server's image as `/usr/share/notekpr/THIRD_PARTY_LICENSES.md`; the CLI's
+and the desktop app's packages as `THIRD_PARTY_LICENSES.md` next to `LICENSE`
+(in the archives, `/usr/share/doc/<package>/` in a .deb,
+`/usr/share/licenses/<package>/` in an .rpm and the AUR's,
+`/app/share/licenses/md.notekpr.Notekpr/notekpr-desktop/` in the Flatpak),
+`THIRD_PARTY_LICENSES.txt` next to `LICENSE.txt` in the Windows installers and
+the macOS app. The docs site shows it as *Licences*, saying the release it was
+built from: the licences ask for the notices to travel with each copy, so the
+site is an extra, for reading before installing anything.
+
+Both files are generated and committed: never edit them by hand. `task
+licenses:check` fails when the dependencies changed without them, so a new
+dependency can't ship without its notice. The script needs only Python's
+standard library and cargo; it reads the crates where cargo keeps them,
+downloading any it doesn't have yet.
 
 **CI** is a fresh developer machine: the workflows in `.github/workflows/`
 only install the tooling and then run tasks — `task setup`, then `task ci`

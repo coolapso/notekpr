@@ -1,0 +1,87 @@
+{
+  "rust": "1.99.1",
+  "crates": [
+    {
+      "name": "addr2line",
+      "version": "0.27.1",
+      "license": "Apache-2.0 OR MIT",
+      "authors": []
+    },
+    {
+      "name": "adler2",
+      "version": "2.0.1",
+      "license": "0BSD OR MIT OR Apache-2.0",
+      "authors": [
+        "Jonas Schievink",
+        "oyvindln"
+      ]
+    },
+    {
+      "name": "cfg-if",
+      "version": "1.0.4",
+      "license": "MIT OR Apache-2.0",
+      "authors": [
+        "Alex Crichton"
+      ]
+    },
+    {
+      "name": "dlmalloc",
+      "version": "0.2.14",
+      "license": "MIT/Apache-2.0",
+      "authors": [
+        "Alex Crichton"
+      ]
+    },
+    {
+      "name": "gimli",
+      "version": "0.34.0",
+      "license": "MIT OR Apache-2.0",
+      "authors": []
+    },
+    {
+      "name": "hashbrown",
+      "version": "0.17.1",
+      "license": "MIT OR Apache-2.0",
+      "authors": []
+    },
+    {
+      "name": "libc",
+      "version": "0.2.189",
+      "license": "MIT OR Apache-2.0",
+      "authors": []
+    },
+    {
+      "name": "memchr",
+      "version": "2.8.3",
+      "license": "Unlicense OR MIT",
+      "authors": [
+        "Andrew Gallant",
+        "bluss"
+      ]
+    },
+    {
+      "name": "miniz_oxide",
+      "version": "0.9.1",
+      "license": "MIT OR Zlib OR Apache-2.0",
+      "authors": [
+        "Frommi",
+        "oyvindln",
+        "Rich Geldreich richgel99@gmail.com"
+      ]
+    },
+    {
+      "name": "object",
+      "version": "0.39.1",
+      "license": "Apache-2.0 OR MIT",
+      "authors": []
+    },
+    {
+      "name": "rustc-demangle",
+      "version": "0.1.28",
+      "license": "MIT/Apache-2.0",
+      "authors": [
+        "Alex Crichton"
+      ]
+    }
+  ]
+}

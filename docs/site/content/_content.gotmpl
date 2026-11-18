@@ -2,6 +2,8 @@
        mounted at assets/docs), as they are. A doc's "# " heading is its title, the rest its text.
        Every doc is on the site but the examples to copy (*.example.md), which GitHub shows. */ -}}
 {{- $repo := site.Params.repo -}}
+{{- /* The release the site is built from (git describe; the Taskfile's docs tasks set it). */ -}}
+{{- $release := os.Getenv "HUGO_NOTEKPR_VERSION" -}}
 {{- $listed := slice -}}
 {{- range hugo.Data.docs }}{{ range .pages }}{{ $listed = $listed | append .file }}{{ end }}{{ end -}}
 {{- range resources.Match "docs/*.md" -}}
@@ -19,13 +21,17 @@
     {{- if not $heading }}{{ errorf "docs/%s.md doesn't start with a \"# \" heading" $doc.file }}{{ end -}}
     {{- $title := index $heading 0 1 -}}
     {{- $nav := $doc.nav | default $title -}}
+    {{- $content := strings.TrimPrefix (index $heading 0 0) $source.Content -}}
+    {{- if and $doc.release $release -}}
+      {{- $content = printf "*This is for notekpr %s.*\n\n%s" $release (strings.TrimLeft "\n" $content) -}}
+    {{- end -}}
     {{- $path := printf "%s/%s" $section.section ($doc.slug | default $doc.file) -}}
     {{- $.AddPage (dict
       "path" $path
       "title" $title
       "weight" (add $j 1)
       "description" $doc.description
-      "content" (dict "mediaType" "text/markdown" "value" (strings.TrimPrefix (index $heading 0 0) $source.Content))
+      "content" (dict "mediaType" "text/markdown" "value" $content)
       "params" (dict
         "navTitle" $nav
         "eyebrow" $section.title

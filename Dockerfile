@@ -70,6 +70,7 @@ RUN --mount=type=cache,id=notekpr-registry-$TARGETARCH,target=/usr/local/cargo/r
 FROM python:3.13-slim-trixie AS demo
 COPY --from=build /out/bin/ /usr/local/bin/
 COPY --from=web /out/web /usr/share/notekpr/web
+COPY docs/licenses.md /usr/share/notekpr/THIRD_PARTY_LICENSES.md
 COPY scripts/demo.py /usr/share/notekpr/demo.py
 COPY scripts/demo-files /usr/share/notekpr/demo-files
 COPY --from=build --chown=65532:65532 /out/data /data
@@ -92,6 +93,9 @@ LABEL org.opencontainers.image.title="notekpr" \
       org.opencontainers.image.version="${VERSION}"
 COPY --from=build /out/bin/ /usr/local/bin/
 COPY --from=web /out/web /usr/share/notekpr/web
+# The notices of everyone else's code in it (scripts/licenses.py); the web
+# app has them as its page, /licenses.html.
+COPY docs/licenses.md /usr/share/notekpr/THIRD_PARTY_LICENSES.md
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV NOTEKPR_LISTEN=0.0.0.0:8080 \
     NOTEKPR_DATA_DIR=/data \

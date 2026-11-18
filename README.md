@@ -188,7 +188,7 @@ Security problems are reported privately: [SECURITY.md](SECURITY.md).
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE).
+[AGPL-3.0-or-later](LICENSE). notekpr is also made of other people's work, under their own licences: [docs/licenses.md](docs/licenses.md) has their notices, and every build carries a copy.
 
 If you like this project and want to support / contribute in a different way you can always [:heart: Sponsor Me](https://github.com/sponsors/coolapso) or
 

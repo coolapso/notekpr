@@ -210,7 +210,15 @@ fn Account() -> impl IntoView {
             </div>
         })}
         <h3>"Version"</h3>
-        <p class="muted small app-version">{versions}</p>
+        // The notices of everyone else's code the app is made of
+        // (scripts/licenses.py): a page of its own, which opens without
+        // signing in. The desktop app opens no other windows: it goes there,
+        // and the page's link comes back.
+        <p class="muted small">
+            <span class="app-version">{versions}</span>" · "
+            <a class="licenses-link" href="/licenses.html" rel="noopener"
+                target=(!crate::desktop::is_desktop()).then_some("_blank")>"Licences"</a>
+        </p>
     }
 }
 

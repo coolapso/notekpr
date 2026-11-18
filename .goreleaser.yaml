@@ -24,6 +24,9 @@ before:
   hooks:
     # The shell completion scripts the CLI's archives and packages ship.
     - packaging/completions.sh target-release/completions
+    # The notices of everyone else's code in the programs
+    # (scripts/licenses.py), under the name the archives give it.
+    - cp docs/licenses.md target-release/THIRD_PARTY_LICENSES.md
     # The web client the desktop app has inside (its build reads it from
     # TAURI_CONFIG's folder), with the release's version.
     - sh -c 'NOTEKPR_VERSION={{ .Version }} OUT=target-release/desktop-web scripts/build-web.sh > /dev/null'
@@ -133,6 +136,8 @@ archives:
     name_template: "notekpr-cli_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
+      - src: target-release/THIRD_PARTY_LICENSES.md
+        strip_parent: true
       - README.md
       - src: target-release/completions/*
         dst: completions
@@ -147,6 +152,8 @@ archives:
     name_template: "notekpr-desktop_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
+      - src: target-release/THIRD_PARTY_LICENSES.md
+        strip_parent: true
       - src: packaging/desktop/md.notekpr.Notekpr.desktop
         strip_parent: true
       - src: crates/desktop/icons/32x32.png
@@ -234,6 +241,12 @@ nfpms:
       - src: LICENSE
         dst: /usr/share/licenses/notekpr-cli/LICENSE
         packager: rpm
+      - src: docs/licenses.md
+        dst: /usr/share/doc/notekpr-cli/THIRD_PARTY_LICENSES.md
+        packager: deb
+      - src: docs/licenses.md
+        dst: /usr/share/licenses/notekpr-cli/THIRD_PARTY_LICENSES.md
+        packager: rpm
 
   # `task test:packages` installs them in Ubuntu 22.04 (the oldest they are
   # for), Debian and Fedora, and checks every library they need is there.
@@ -294,6 +307,12 @@ nfpms:
       - src: LICENSE
         dst: /usr/share/licenses/notekpr-desktop/LICENSE
         packager: rpm
+      - src: docs/licenses.md
+        dst: /usr/share/doc/notekpr-desktop/THIRD_PARTY_LICENSES.md
+        packager: deb
+      - src: docs/licenses.md
+        dst: /usr/share/licenses/notekpr-desktop/THIRD_PARTY_LICENSES.md
+        packager: rpm
 
 aurs:
   - name: notekpr-cli-bin
@@ -314,6 +333,7 @@ aurs:
     package: |-
       install -Dm755 notekpr "$pkgdir/usr/bin/notekpr"
       install -Dm644 LICENSE "$pkgdir/usr/share/licenses/notekpr-cli/LICENSE"
+      install -Dm644 THIRD_PARTY_LICENSES.md "$pkgdir/usr/share/licenses/notekpr-cli/THIRD_PARTY_LICENSES.md"
       install -Dm644 completions/notekpr.bash "$pkgdir/usr/share/bash-completion/completions/notekpr"
       install -Dm644 completions/_notekpr "$pkgdir/usr/share/zsh/site-functions/_notekpr"
       install -Dm644 completions/notekpr.fish "$pkgdir/usr/share/fish/vendor_completions.d/notekpr.fish"
@@ -344,6 +364,7 @@ aurs:
       install -Dm644 icons/icon.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/md.notekpr.Notekpr.png"
       install -Dm644 icons/favicon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/md.notekpr.Notekpr.svg"
       install -Dm644 LICENSE "$pkgdir/usr/share/licenses/notekpr-desktop/LICENSE"
+      install -Dm644 THIRD_PARTY_LICENSES.md "$pkgdir/usr/share/licenses/notekpr-desktop/THIRD_PARTY_LICENSES.md"
 
 # semrel made the release with its notes; this only adds the files. Run
 # again after a failure, it replaces those already there, so they match what

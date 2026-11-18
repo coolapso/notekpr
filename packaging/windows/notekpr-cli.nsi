@@ -47,6 +47,7 @@ Section "notekpr"
   ${EndIf}
   File "/oname=notekpr.exe" "${BINARY}"
   File "/oname=LICENSE.txt" "LICENSE"
+  File "/oname=THIRD_PARTY_LICENSES.txt" "docs/licenses.md"
   Delete "$INSTDIR\notekpr.exe.old"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -76,6 +77,7 @@ Section "Uninstall"
     MessageBox MB_ICONEXCLAMATION "notekpr is still running (a sync?), so $INSTDIR\notekpr.exe stays: stop it, then delete that folder." /SD IDOK
   ${EndIf}
   Delete "$INSTDIR\LICENSE.txt"
+  Delete "$INSTDIR\THIRD_PARTY_LICENSES.txt"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
   DeleteRegKey HKCU "${UNINSTALL_KEY}"

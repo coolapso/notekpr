@@ -38,6 +38,8 @@ keeps your notes as a folder of Markdown files too.
 
 %prep
 %autosetup -n notekpr-@VERSION@
+# The notices of everyone else's code in it (scripts/licenses.py).
+cp docs/licenses.md THIRD_PARTY_LICENSES.md
 
 %build
 export NOTEKPR_VERSION=@VERSION@
@@ -62,7 +64,7 @@ install -Dm644 crates/web/static/favicon.svg $icons/scalable/apps/md.notekpr.Not
 desktop-file-validate %{buildroot}%{_datadir}/applications/md.notekpr.Notekpr.desktop
 
 %files
-%license LICENSE
+%license LICENSE THIRD_PARTY_LICENSES.md
 %doc docs/desktop.md
 %{_bindir}/notekpr-desktop
 %{_datadir}/applications/md.notekpr.Notekpr.desktop

@@ -5,7 +5,8 @@
 #   OUT/notekpr-desktop_darwin_arm64.dmg  the app, notekpr.app, to drag
 #       into Applications (the disk image shows where)
 #   OUT/notekpr-cli_darwin_arm64.tar.gz   the CLI, as the Linux archives
-#       hold it: notekpr, LICENSE, README.md, completions/
+#       hold it: notekpr, LICENSE, THIRD_PARTY_LICENSES.md, README.md,
+#       completions/
 #
 # Named without the version, as the other release files
 # (.goreleaser.yaml says why); VERSION goes into the app's Info.plist.
@@ -47,6 +48,8 @@ plutil -lint -s "$app/Contents/Info.plist"
 cp "$desktop" "$app/Contents/MacOS/notekpr-desktop"
 cp crates/desktop/icons/icon.icns "$app/Contents/Resources/icon.icns"
 cp LICENSE "$app/Contents/Resources/LICENSE.txt"
+# The notices of everyone else's code in it (scripts/licenses.py).
+cp docs/licenses.md "$app/Contents/Resources/THIRD_PARTY_LICENSES.txt"
 codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 # The disk image: the app, and Applications to drag it to.
@@ -60,12 +63,13 @@ c=$work/cli
 mkdir -p "$c/completions"
 cp "$cli" "$c/notekpr"
 cp LICENSE README.md "$c/"
+cp docs/licenses.md "$c/THIRD_PARTY_LICENSES.md"
 "$c/notekpr" completions bash > "$c/completions/notekpr.bash"
 "$c/notekpr" completions zsh > "$c/completions/_notekpr"
 "$c/notekpr" completions fish > "$c/completions/notekpr.fish"
 "$c/notekpr" completions powershell > "$c/completions/notekpr.ps1"
 "$c/notekpr" completions elvish > "$c/completions/notekpr.elv"
 cli_archive=$out/notekpr-cli_darwin_$arch.tar.gz
-tar -C "$c" -czf "$cli_archive" notekpr LICENSE README.md completions
+tar -C "$c" -czf "$cli_archive" notekpr LICENSE THIRD_PARTY_LICENSES.md README.md completions
 
 ls -l "$dmg" "$cli_archive"

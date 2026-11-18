@@ -31,6 +31,9 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== self.location.origin) return;
   const navigate = req.mode === "navigate";
+  // Pages of their own (licenses.html) aren't the app: kept as "/", one
+  // would start in place of the app when offline.
+  if (navigate && url.pathname.endsWith(".html") && url.pathname !== "/index.html") return;
   // Every page of the app is the same index.html.
   const key = navigate ? "/" : url.pathname;
   // The drawings' fonts and the diagram module: kept once used.

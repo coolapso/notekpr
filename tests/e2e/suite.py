@@ -10,6 +10,7 @@ independent headless Chromium profiles as different users.
 Screenshots are written to $NOTEKPR_E2E_OUT (default target/e2e).
 """
 import argparse, base64, json, os, shutil, socket, sqlite3, subprocess, sys, tempfile, time, traceback
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -778,6 +779,12 @@ def test_attachments(env):
         b.wait("return (document.querySelector('.app-version')?.textContent || '').includes('the server:')", 10, "the versions")
         version = api_get(b, "/info")["version"]
         check(b.text(".app-version") == f"This app: {version} · the server: {version}", "account settings say which version the app and the server are")
+        check(b.js("const a = document.querySelector('.licenses-link'); return a.getAttribute('href') === '/licenses.html' && a.target === '_blank'"),
+              "account settings link the licences page, in a tab of its own")
+        with urllib.request.urlopen(env.url + "licenses.html", timeout=10) as r:
+            page = r.read().decode()
+        check(f"This is notekpr {version}." in page and "AGPL-3.0-or-later" in page and "@VERSION@" not in page,
+              "the licences page opens without signing in and says its version")
         b.wait("return !document.querySelector('.toast')", 15, "the export's notices gone")
         b.click_el(b.find_text(".settings-body button", "Sign out", 10))
         b.find(".dev-box input", 15)
@@ -2166,6 +2173,9 @@ def test_offline_start(env):
         b.wait("return !!navigator.serviceWorker.controller && Object.keys(localStorage).some(k => k.startsWith('notekpr.offline.data.'))", 20,
                "the offline setting to take effect")
         check(True, "offline use can be turned on")
+        # A page of its own doesn't take the app's place in its copy.
+        b.go(env.url + "licenses.html")
+        b.wait("return document.querySelector('h1')?.textContent === 'Licences'", 10, "the licences page")
         env.stop_server()
         b.go(note_url)
         b.wait("return document.querySelector('.ed') && document.querySelector('.ed').textContent.includes('pack the tent')", 30,

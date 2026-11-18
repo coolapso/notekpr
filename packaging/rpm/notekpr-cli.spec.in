@@ -31,6 +31,8 @@ and can keep them as a folder of Markdown files for any editor.
 
 %prep
 %autosetup -n notekpr-@VERSION@
+# The notices of everyone else's code in it (scripts/licenses.py).
+cp docs/licenses.md THIRD_PARTY_LICENSES.md
 
 %build
 export NOTEKPR_VERSION=@VERSION@
@@ -48,7 +50,7 @@ install -Dm644 completions/notekpr.fish %{buildroot}%{_datadir}/fish/vendor_comp
 install -Dm644 packaging/systemd/notekpr-sync@.service %{buildroot}%{_userunitdir}/notekpr-sync@.service
 
 %files
-%license LICENSE
+%license LICENSE THIRD_PARTY_LICENSES.md
 %doc README.md docs/cli.md
 %{_bindir}/notekpr
 %{_datadir}/bash-completion/completions/notekpr

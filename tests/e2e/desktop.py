@@ -431,6 +431,17 @@ def main():
         a.find_text(".tree-item", "From disk", 20)
         check(True, "a new file becomes a note")
 
+        # ---- the licences: the app's own page, in its window, and back
+        a.route("/settings/account")
+        a.find(".licenses-link", 10)
+        check(a.js("return !document.querySelector('.licenses-link').target"), "the licences link opens in the app's window (it opens no others)")
+        a.click(".licenses-link")
+        wait_for("the licences page", lambda: a.js("return document.querySelector('h1')?.textContent || ''") == "Licences")
+        check("@VERSION@" not in a.js("return document.body.textContent"), "the app has its licences page, with its version")
+        a.click(".back a")
+        a.find(".sb-bottom", 20)
+        check(True, "the licences page leads back to the app")
+
         # ---- signing out stops it; signing in again resumes it
         a.route("/settings/account")
         a.click_el(a.find_text(".settings-body button", "Sign out", 10))

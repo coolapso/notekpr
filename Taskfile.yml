@@ -18,6 +18,10 @@ vars:
   # Cloudflare Pages project.
   DOCS_PORT: "8091"
   DOCS_PROJECT: notekpr-docs
+  # The release the docs site is built from, which its Licences page names
+  # (docs/site/content/_content.gotmpl): exact on a release's tag.
+  DOCS_RELEASE:
+    sh: git describe --tags --match 'v[0-9]*' --dirty 2>/dev/null | sed 's/^v//' || true
   # `task demo`: its own server, database and CLI profiles, next to `task dev`.
   DEMO_LISTEN: 127.0.0.1:8099
   DEMO_DIR: data/demo
@@ -39,10 +43,13 @@ vars:
   COPR_CLI_VERSION: "2.6"
   # What an installed package of the CLI must do and hold (test:packages,
   # test:srpm).
+  # (Its third-party notices by the package's list: Debian's and Ubuntu's
+  # images leave out what goes to /usr/share/doc.)
   PACKAGE_CHECK: >-
     notekpr --version && notekpr completions zsh > /dev/null
     && test -f /usr/share/bash-completion/completions/notekpr
     && test -f /usr/lib/systemd/user/notekpr-sync@.service
+    && { dpkg -L notekpr-cli 2>/dev/null || rpm -ql notekpr-cli; } | grep -q /THIRD_PARTY_LICENSES.md
   # And of the desktop app: every library it links found, the tray's (which
   # it loads when it shows a tray) there, its desktop entry and icon.
   DESKTOP_PACKAGE_CHECK: >-
@@ -51,6 +58,7 @@ vars:
     && ldconfig -p | grep -q libayatana-appindicator3.so.1
     && test -f /usr/share/applications/md.notekpr.Notekpr.desktop
     && test -f /usr/share/icons/hicolor/scalable/apps/md.notekpr.Notekpr.svg
+    && { dpkg -L notekpr-desktop 2>/dev/null || rpm -ql notekpr-desktop; } | grep -q /THIRD_PARTY_LICENSES.md
   # The desktop app's Flatpak is built with GNOME's runtime (packaging/flatpak's
   # runtime-version) and the Rust extension of the freedesktop SDK under it.
   FLATPAK_GNOME: "51"
@@ -116,6 +124,11 @@ tasks:
             echo "· for the desktop app's browser test (task test:e2e, skipped without): sway, WebKitWebDriver and dbus-run-session (Arch: sway webkit2gtk-4.1 dbus; Debian, Ubuntu: sway webkit2gtk-driver dbus)"
           fi
           command -v cargo-deny >/dev/null && echo "✓ cargo-deny (task audit)" || echo "· for task audit and task ci: cargo-deny (Arch: cargo-deny; or cargo install cargo-deny --locked)"
+          if python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+            echo "✓ python3 (task licenses, task docs:check)"
+          else
+            echo "· for task licenses, task docs:check and task ci: python3, 3.11 or newer (Arch: python)"
+          fi
           command -v docker >/dev/null && echo "✓ docker (container image, Docker dev stack)" || echo "· for the docker:* tasks, task load and task ci: docker + compose (Arch: docker docker-compose docker-buildx)"
           command -v semrel >/dev/null && command -v jq >/dev/null && echo "✓ semrel + jq (task release)" || echo "· for task release: semrel (task tools:release, needs Go) and jq (Arch: jq)"
           command -v copr-cli >/dev/null && echo "✓ copr-cli (task release, Fedora's COPR)" || echo "· for task release: copr-cli (Arch: copr-cli; or task tools:copr, needs pipx)"
@@ -134,16 +147,22 @@ tasks:
 
   docs:serve:
     desc: "Preview the docs site (docs.notekpr.md: docs/*.md with Hugo, docs/site) on http://localhost:{{.DOCS_PORT}}, updated as the docs change (another port: DOCS_PORT=…)"
+    env:
+      HUGO_NOTEKPR_VERSION: "{{.DOCS_RELEASE}}"
     cmds:
       - hugo server --source docs/site --bind 127.0.0.1 --port {{.DOCS_PORT}} --baseURL http://localhost:{{.DOCS_PORT}}/
 
   docs:build:
     desc: Build the docs site into dist/docs, as it is published
+    env:
+      HUGO_NOTEKPR_VERSION: "{{.DOCS_RELEASE}}"
     cmds:
       - hugo --source docs/site --destination "{{.ROOT_DIR}}/dist/docs" --cleanDestinationDir --minify
 
   docs:check:
     desc: "Build the docs site and check it: every doc is on it, every link and #anchor goes somewhere"
+    env:
+      HUGO_NOTEKPR_VERSION: "{{.DOCS_RELEASE}}"
     cmds:
       - python3 scripts/check-docs.py
 
@@ -436,6 +455,33 @@ tasks:
       - cargo deny check
       - cargo deny --manifest-path crates/diagram/Cargo.toml --config deny.toml check
 
+  # Every build carries the notices of everyone else's code in it: one list
+  # for all of them, docs/licenses.md (packages: THIRD_PARTY_LICENSES.md)
+  # and the web app's page, crates/web/static/licenses.html. A change of
+  # dependencies changes them: licenses:check (in ci:check) says so.
+  licenses:
+    desc: "Write the third-party notices of every build (docs/licenses.md, the web app's licenses.html) from the crates' own files: after changing dependencies"
+    deps: [rust]
+    cmds:
+      - python3 scripts/licenses.py
+
+  licenses:check:
+    desc: Fail if the third-party notices aren't up to date with the dependencies (task licenses writes them)
+    deps: [rust]
+    cmds:
+      - python3 scripts/licenses.py --check
+
+  # Rust's standard library is made of crates too, which cargo doesn't show:
+  # a copy of their notices, for the Rust the Dockerfiles build with
+  # (licenses:check fails when they move to another one).
+  licenses:std:
+    desc: "Copy the notices of Rust's standard library of RUST (task licenses:std RUST=1.99.1: the Dockerfiles' Rust, its latest patch) from GitHub and crates.io into scripts/licenses/std, and write the notices again"
+    requires:
+      vars: [RUST]
+    deps: [rust]
+    cmds:
+      - python3 scripts/licenses.py --std {{.RUST}}
+
   ci:
     desc: "Exactly what CI runs (it installs the tooling, then this): ci:check, ci:image and ci:clients"
     cmds:
@@ -447,7 +493,7 @@ tasks:
   # passes: one machine's disk (14 GB guaranteed on GitHub's runners) doesn't
   # hold the test builds and the image or release builds.
   ci:check:
-    desc: "Format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check, the docs site's links"
+    desc: "Format check, lint, every test, the wasm build, the editor's and the browser tests, the supply-chain check, the third-party notices, the docs site's links"
     cmds:
       - task: fmt:check
       - task: lint
@@ -457,6 +503,7 @@ tasks:
       - task: test:editor
       - task: test:e2e
       - task: audit
+      - task: licenses:check
       - task: docs:check
 
   ci:image:
@@ -611,7 +658,9 @@ tasks:
       - flatpak build builddir notekpr-desktop --version
       - >-
         flatpak build builddir sh -c 'test -e /app/lib/libayatana-appindicator3.so.1
-        && test -e /app/share/metainfo/md.notekpr.Notekpr.metainfo.xml && ! test -e /app/tools'
+        && test -e /app/share/metainfo/md.notekpr.Notekpr.metainfo.xml && ! test -e /app/tools
+        && test -e /app/share/licenses/md.notekpr.Notekpr/notekpr-desktop/LICENSE
+        && test -e /app/share/licenses/md.notekpr.Notekpr/notekpr-desktop/THIRD_PARTY_LICENSES.md'
 
   release:flatpak:
     desc: "The desktop app's Flatpak as one file, for the release tagged at HEAD (release:clients makes it, and GoReleaser attaches it): built as Flathub builds it, from that tag on GitHub, into target-release/flatpak-release/bundle/<version>/notekpr-desktop_<arch>.flatpak"

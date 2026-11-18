@@ -2,7 +2,8 @@
 # A page is its doc exactly as GitHub shows it; its title is the doc's "# " heading.
 #   section/title/description: the section's address (/<section>/), name and one line about it
 #   file: the doc; nav: its name in the sidebar and on cards; slug: its address in the section
-#   (default: file); description: one line, under the title and in search engines
+#   (default: file); description: one line, under the title and in search engines;
+#   release: true to say at its top which release it is for (the one the site is built from)
 # A doc that isn't listed here isn't on the site: links to it go to GitHub.
 
 - section: use
@@ -75,6 +76,10 @@
     - file: comments
       nav: Comments
       description: How comments on notes work, from the threads to the keys, and what the server learns.
+    - file: licenses
+      nav: Licences
+      description: The other people's code in notekpr's server, apps and CLI, and the licences and notices it comes with.
+      release: true
 
 - section: contributing
   title: Contributing

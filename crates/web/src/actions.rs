@@ -219,9 +219,13 @@ pub async fn set_vault_picture_to(vault: &str, p: Picture) -> bool {
 /// The middle square of an image, at most `size` pixels, encoded again —
 /// WebP where the browser can — and smaller until it fits.
 pub async fn picture_from(file: &web_sys::File, size: PictureSize) -> Result<Picture, String> {
-    let img = util::load_picture_source(file, size.side)
-        .await
-        .ok_or("That file isn't an image this browser can open.")?;
+    let img = util::load_picture_source(file, size.side).await.ok_or(
+        if crate::desktop::is_desktop() {
+            "That file isn't an image notekpr can open."
+        } else {
+            "That file isn't an image this browser can open."
+        },
+    )?;
     let largest = img.natural_width().min(img.natural_height()).min(size.side);
     let mut sides = vec![largest];
     sides.extend(
@@ -2206,10 +2210,10 @@ pub async fn move_to_vault(
         (Unmovable::Loading, _) => {
             "Some of it hasn't arrived from the server yet: try again in a moment.".to_string()
         }
-        (Unmovable::NeedsNewerApp, _) => {
-            "It holds things a newer version of notekpr added: reload the page to move it."
-                .to_string()
-        }
+        (Unmovable::NeedsNewerApp, _) => format!(
+            "It holds things a newer version of notekpr added: {} to move it.",
+            crate::desktop::get_newer()
+        ),
     })?;
     // The drawings need room there (each vault holds so many).
     let (count, limit) = crate::drawings::usage(to);

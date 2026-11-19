@@ -152,7 +152,12 @@ pub fn drawing(code: &str, view: View) -> Drawing {
                     Module::Idle
                 } else {
                     Module::Failed(
-                        "drawing diagrams stopped working; reload the page".into(),
+                        if crate::desktop::is_desktop() {
+                            "drawing diagrams stopped working; quit notekpr and open it again"
+                        } else {
+                            "drawing diagrams stopped working; reload the page"
+                        }
+                        .into(),
                         None,
                     )
                 };

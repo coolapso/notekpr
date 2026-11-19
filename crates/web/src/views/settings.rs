@@ -133,6 +133,9 @@ fn Account() -> impl IntoView {
         match server_version.get() {
             None => format!("This app: {app}"),
             Some(s) if s == app => format!("This app: {app} · the server: {s}"),
+            // The desktop app's files are its own: Desktop app → Version
+            // says when a newer release is out.
+            Some(s) if crate::desktop::is_desktop() => format!("This app: {app} · the server: {s}"),
             Some(s) => format!(
                 "This app: {app} · the server: {s} — reload the page to use the server's version"
             ),

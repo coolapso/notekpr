@@ -20,7 +20,7 @@ fn role_badge(role: &Role, shared: bool) -> AnyView {
         (Role::Admin, _) => view! { <span class="badge" title="Shared with you — you can edit and empty the trash"><Icon name="users"/></span> }.into_any(),
         (Role::Editor, _) => view! { <span class="badge" title="Shared with you — you can edit"><Icon name="users"/></span> }.into_any(),
         (Role::Viewer, _) => view! { <span class="badge" title="Shared with you — read only"><Icon name="eye"/></span> }.into_any(),
-        (Role::Other(_), _) => view! { <span class="badge" title="Shared with you — read only until you reload the page"><Icon name="eye"/></span> }.into_any(),
+        (Role::Other(_), _) => view! { <span class="badge" title=format!("Shared with you — read only until you {}", crate::desktop::get_newer())><Icon name="eye"/></span> }.into_any(),
     }
 }
 

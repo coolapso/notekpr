@@ -111,7 +111,10 @@ fn verify_stored(vault_id: &str, entries: Vec<LogEntry>) -> Result<MemberLog, Un
 
 fn log_refused(e: LogError) -> String {
     match e {
-        LogError::Newer(_) => "Who is in this vault was changed by a newer version of notekpr: reload the page to open it.".to_string(),
+        LogError::Newer(_) => format!(
+            "Who is in this vault was changed by a newer version of notekpr: {} to open it.",
+            crate::desktop::get_newer()
+        ),
         e => format!(
             "Security warning: this vault's membership history doesn't check out ({e}). The server may have been tampered with; tell the vault's owners and your administrator."
         ),

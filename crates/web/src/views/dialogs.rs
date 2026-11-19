@@ -585,12 +585,12 @@ const ADMIN_HINT: &str = "Can edit, empty the trash and see the activity log";
 const OWNER_HINT: &str = "Manages people, keys and settings, and can delete the vault — like you";
 
 /// A role from a newer version, shown as its name until the page is
-/// reloaded (it can't be chosen).
+/// reloaded (the app updated): it can't be chosen.
 fn other_role(role: &Role) -> Option<impl IntoView + use<>> {
     let Role::Other(name) = role else { return None };
     let name = name.clone();
     Some(
-        view! { <option value="" selected disabled title="A role from a newer version of notekpr: reload the page to see it">{name}</option> },
+        view! { <option value="" selected disabled title=format!("A role from a newer version of notekpr: {} to see it", crate::desktop::get_newer())>{name}</option> },
     )
 }
 
@@ -1330,13 +1330,14 @@ fn VaultStorage(vault: String, admin: bool) -> impl IntoView {
                 }
             })}
             {move || if full.get() {
+                let wait = crate::desktop::in_here();
                 Some(if admin {
-                    "It is full: edits wait in your browser until it has room. Delete things in it for good (empty its trash), or ask your server's administrator to raise its limit — give them the vault id."
+                    format!("It is full: edits wait {wait} until it has room. Delete things in it for good (empty its trash), or ask your server's administrator to raise its limit — give them the vault id.")
                 } else {
-                    "It is full: edits wait in your browser until it has room. Ask its owner to delete something in it for good, or your server's administrator to raise its limit — give them the vault id."
+                    format!("It is full: edits wait {wait} until it has room. Ask its owner to delete something in it for good, or your server's administrator to raise its limit — give them the vault id.")
                 })
             } else if limited.get() {
-                Some("For more room, give your server's administrator the vault id: they find the vault by it (they never see its name or what's in it).")
+                Some("For more room, give your server's administrator the vault id: they find the vault by it (they never see its name or what's in it).".to_string())
             } else {
                 None
             }.map(|t| view! { <p class="muted small storage-help">{t}</p> })}

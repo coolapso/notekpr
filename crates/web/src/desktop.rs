@@ -524,3 +524,13 @@ pub fn in_here() -> &'static str {
         "in this browser"
     }
 }
+
+/// How to get a newer version of notekpr: "reload the page", or in the
+/// desktop app, whose files are its own, "update the app".
+pub fn get_newer() -> &'static str {
+    if is_desktop() {
+        "update the app"
+    } else {
+        "reload the page"
+    }
+}

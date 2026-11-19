@@ -47,6 +47,8 @@ pub fn Home() -> impl IntoView {
                             (Role::Admin, _) => ("Shared with you · admin", "users"),
                             (Role::Editor, _) => ("Shared with you", "users"),
                             (Role::Viewer, _) => ("Shared with you · read only", "eye"),
+                            // A role from a newer version.
+                            (Role::Other(_), _) if crate::desktop::is_desktop() => ("Shared with you · read only until you update the app", "eye"),
                             (Role::Other(_), _) => ("Shared with you · read only until you reload", "eye"),
                         };
                         let count = {

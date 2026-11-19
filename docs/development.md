@@ -254,7 +254,9 @@ with a home folder of its own, driven by WebKitGTK's own WebDriver
 lets it). The system's dialogs (the folder picker, its questions) are out of
 a WebDriver's reach: debug builds answer them from
 `NOTEKPR_DESKTOP_TEST_FOLDER` (yes, and that folder), release builds don't
-read it. WebKitWebDriver reads elements' text as empty: the test finds
+read it; likewise the system's notifications, which debug builds write to
+the file `NOTEKPR_DESKTOP_TEST_NOTIFICATIONS` names and click at once.
+WebKitWebDriver reads elements' text as empty: the test finds
 elements by their text in the page instead.
 
 Property tests (`proptest`) run with `cargo test`; `PROPTEST_CASES=20000`

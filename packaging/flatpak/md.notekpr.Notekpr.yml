@@ -20,6 +20,8 @@ finish-args:
   - --share=network
   # The tray (a StatusNotifierItem).
   - --talk-name=org.kde.StatusNotifierWatcher
+  # Notifications of mentions (crates/desktop/src/notify.rs).
+  - --talk-name=org.freedesktop.Notifications
   # The Markdown folder, wherever one picks it, kept in sync both ways while
   # the app runs; exports and attachments saved into Downloads.
   - --filesystem=home

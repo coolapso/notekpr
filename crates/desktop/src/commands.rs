@@ -9,7 +9,8 @@
 //! one's window has storage of its own. The one thing done outside folders
 //! picked is taking over a Markdown folder the CLI keeps for the same
 //! account ([`folder_take_from_cli`], docs/desktop.md "From the CLI"),
-//! after a yes too.
+//! after a yes too. A notification it has the app show
+//! ([`notify_mention`]) is text as notekpr's, cut short.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +30,7 @@ use crate::app::{AppState, show_window};
 use crate::folder::Check;
 use crate::from_cli::{self, Service, Systemd};
 use crate::links;
-use crate::status::{CliWait, Status};
+use crate::status::{CliWait, Opened, Status};
 
 type Res<T> = Result<T, String>;
 
@@ -972,6 +973,67 @@ pub fn dismiss_update(state: State<'_, Arc<AppState>>, version: String) -> Res<(
 #[tauri::command]
 pub fn update_help() -> Res<()> {
     tauri_plugin_opener::open_url(crate::update::HELP, None::<&str>).map_err(text)
+}
+
+/// Notifications of mentions turned on: the system is to show notekpr's
+/// (macOS asks the person, once). The error says why it won't.
+#[tauri::command]
+pub async fn notifications_allow() -> Res<()> {
+    crate::notify::allow().await
+}
+
+/// Where a mention is: ids all.
+#[derive(Deserialize)]
+pub struct MentionAt {
+    vault: String,
+    note: String,
+    thread: String,
+}
+
+impl MentionAt {
+    fn valid(&self) -> bool {
+        [&self.vault, &self.note, &self.thread].iter().all(|id| {
+            !id.is_empty()
+                && id.len() <= 64
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+    }
+}
+
+/// A system notification of a mention (docs/desktop.md "Notifications"):
+/// clicking it brings the window back, even from the tray, and has it open
+/// the thread (`Status::opened`). A script can show no more than text, as
+/// notekpr's and cut short, and hand the window back ids.
+#[tauri::command]
+pub async fn notify_mention(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    title: String,
+    body: String,
+    at: MentionAt,
+) -> Res<()> {
+    if !at.valid() {
+        return Err("not a mention".into());
+    }
+    let updates = state.updates.clone();
+    let on_click = Box::new(move || {
+        show_window(&app);
+        updates.update(|s| {
+            s.opened = Some(Opened {
+                n: s.opened.as_ref().map_or(0, |o| o.n) + 1,
+                vault: at.vault,
+                note: at.note,
+                thread: at.thread,
+            });
+        });
+    });
+    let (title, body) = (
+        crate::notify::cap(&title, 200),
+        crate::notify::cap(&body, 400),
+    );
+    crate::notify::show(&title, &body, on_click).await
 }
 
 /// Stop keeping the folder in sync, once the person said yes: the app

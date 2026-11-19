@@ -24,6 +24,9 @@ and no account.
 * **A Markdown folder.** Your vaults as a folder of ordinary Markdown files,
   synced both ways while the app runs, for Obsidian, VS Code, Neovim or any
   other editor (more in [Your own editor](own-editor.md)).
+* **Notifications.** When someone mentions you in a comment while the
+  window isn't in front, or is in the tray, a notification from your
+  system says so; clicking it opens the thread ([notifications](#notifications)).
 * **Tells you of a new version.** When your server runs a newer release
   than the app, the app says so; it never updates itself
   ([update it](#update-it)).
@@ -332,6 +335,30 @@ The tray's menu: *Open notekpr*, *Open the Markdown folder*, *Settings* and
 *Quit notekpr*. When your server runs a newer release, *Update available*
 comes first: it opens [how to update](#update-it) in your browser.
 
+## Notifications
+
+*Settings → Editor → Mentions → Notify me when someone mentions me* has the
+app show a notification when someone mentions you in a comment while its
+window isn't in front, or is hidden in the tray: who mentioned you, in which
+note, and the start of the comment. Clicking it brings the window back and
+opens the thread. The sidebar's **@** lists your mentions either way.
+
+The app shows them through your system, as other apps' notifications:
+
+* **Linux**: your desktop's notification service (GNOME, KDE, and on other
+  desktops a notification daemon such as dunst or mako), from the Flatpak
+  too. Without one running, turning them on says so.
+* **Windows**: as other apps' notifications; *Settings → System →
+  Notifications* turns notekpr's off and on. The app registers itself for
+  them with Windows the first time (`HKEY_CURRENT_USER\Software\Classes\AppUserModelId\md.notekpr.Notekpr`,
+  and its icon beside the app's data); uninstalling removes it.
+* **macOS**: Notification Center. macOS asks once whether notekpr may
+  show them; *System Settings → Notifications → notekpr* changes that
+  later.
+
+The setting is per computer, like the browser's per browser. Your system
+may keep notifications in its list until you clear them.
+
 ## Where it keeps things
 
 | What | Where (Linux) |
@@ -386,6 +413,8 @@ with these differences:
   and KDE can; Hyprland, for one, can't): the app then says so.
 * The CLI and the app still refuse each other's Markdown folders, whichever
   way each is installed: each looks for the other in both places.
+* It may talk to your desktop's notification service
+  ([notifications](#notifications)).
 
 ## Build it
 

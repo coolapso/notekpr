@@ -589,6 +589,8 @@ pub fn run(args: Args) -> Result<()> {
             crate::commands::setup_done,
             crate::commands::dismiss_update,
             crate::commands::update_help,
+            crate::commands::notifications_allow,
+            crate::commands::notify_mention,
             crate::commands::next_event,
         ])
         .setup(move |app| {

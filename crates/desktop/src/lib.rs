@@ -11,6 +11,7 @@ pub mod folder;
 pub mod from_cli;
 pub mod links;
 pub mod local;
+pub mod notify;
 pub mod paths;
 pub mod settings;
 pub mod signin;

@@ -5,9 +5,10 @@
 ; app's window) when the computer doesn't have it yet — Windows 11 does, as
 ; do most Windows 10 computers. Installing a newer one over it has the
 ; running app quit first and replaces it. Uninstalling removes the program,
-; its Start menu entry and its starting at login; the app's settings and
-; data (%APPDATA%\notekpr-desktop, %LOCALAPPDATA%\notekpr-desktop) and the
-; Markdown folder stay.
+; its Start menu entry, its starting at login and what registers it for
+; notifications (the app writes that itself, before its first); the app's
+; settings and data (%APPDATA%\notekpr-desktop, %LOCALAPPDATA%\notekpr-desktop)
+; and the Markdown folder stay.
 
 !include "${__FILEDIR__}/common.nsh"
 
@@ -15,6 +16,8 @@
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\notekpr-desktop"
 !define RUN_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
 !define STARTUP_APPROVED_KEY "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+; Toasts: the app's id, registered by the app (crates/desktop/src/notify.rs).
+!define NOTIFICATIONS_KEY "Software\Classes\AppUserModelId\md.notekpr.Notekpr"
 ; WebView2's Evergreen Bootstrapper, from Microsoft: it installs the latest
 ; runtime, which keeps itself up to date.
 !define WEBVIEW2_ID "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
@@ -132,6 +135,7 @@ Section "Uninstall"
     ${EndIf}
   ${Loop}
 
+  DeleteRegKey HKCU "${NOTIFICATIONS_KEY}"
   Delete "$SMPROGRAMS\notekpr.lnk"
   Delete "$INSTDIR\${EXE}"
   Delete "$INSTDIR\LICENSE.txt"

@@ -1123,7 +1123,7 @@ authorization of the copyright holder.
 
 ## Crates
 
-The 790 Rust crates notekpr's programs are built from, Rust's standard library's among them, and which programs have each. Their licence texts follow, each with the crates it is for.
+The 792 Rust crates notekpr's programs are built from, Rust's standard library's among them, and which programs have each. Their licence texts follow, each with the crates it is for.
 
 | Crate | Version | Licence | In |
 |---|---|---|---|
@@ -1536,6 +1536,7 @@ The 790 Rust crates notekpr's programs are built from, Rust's standard library's
 | [objc2-quartz-core](https://crates.io/crates/objc2-quartz-core/0.3.2) | 0.3.2 | Zlib OR Apache-2.0 OR MIT | desktop app |
 | [objc2-security](https://crates.io/crates/objc2-security/0.3.2) | 0.3.2 | Zlib OR Apache-2.0 OR MIT | desktop app |
 | [objc2-service-management](https://crates.io/crates/objc2-service-management/0.3.2) | 0.3.2 | Zlib OR Apache-2.0 OR MIT | desktop app |
+| [objc2-user-notifications](https://crates.io/crates/objc2-user-notifications/0.3.2) | 0.3.2 | Zlib OR Apache-2.0 OR MIT | desktop app |
 | [objc2-web-kit](https://crates.io/crates/objc2-web-kit/0.3.2) | 0.3.2 | Zlib OR Apache-2.0 OR MIT | desktop app |
 | [object](https://crates.io/crates/object/0.39.1) | 0.39.1 | Apache-2.0 OR MIT | Rust's standard library |
 | [object\_store](https://crates.io/crates/object_store/0.14.2) | 0.14.2 | MIT/Apache-2.0 | server and desktop app |
@@ -1770,6 +1771,7 @@ The 790 Rust crates notekpr's programs are built from, Rust's standard library's
 | [tauri-runtime-wry](https://crates.io/crates/tauri-runtime-wry/2.12.3) | 2.12.3 | Apache-2.0 OR MIT | desktop app |
 | [tauri-utils](https://crates.io/crates/tauri-utils/2.10.2) | 2.10.2 | Apache-2.0 OR MIT | desktop app |
 | [tauri-winres](https://crates.io/crates/tauri-winres/0.3.7) | 0.3.7 | MIT | desktop app |
+| [tauri-winrt-notification](https://crates.io/crates/tauri-winrt-notification/0.8.1) | 0.8.1 | MIT OR Apache-2.0 | desktop app |
 | [tendril](https://crates.io/crates/tendril/0.5.1) | 0.5.1 | MIT OR Apache-2.0 | web app and desktop app |
 | [thiserror](https://crates.io/crates/thiserror/1.0.69) | 1.0.69 | MIT OR Apache-2.0 | server, web app and desktop app |
 | [thiserror](https://crates.io/crates/thiserror/2.0.21) | 2.0.21 | MIT OR Apache-2.0 | server, web app, CLI and desktop app |
@@ -15827,7 +15829,7 @@ the License, but only in their entirety and only with respect to the Combined
 Software.
 ```
 
-**tauri 2.12.5** (LICENSE-MIT), **tauri-build 2.7.4** (LICENSE-MIT), **tauri-codegen 2.7.4** (LICENSE-MIT), **tauri-macros 2.7.4** (LICENSE-MIT), **tauri-plugin-autostart 2.7.0** (LICENSE\_MIT), **tauri-plugin-dialog 2.8.4** (LICENSE\_MIT), **tauri-plugin-fs 2.7.1** (LICENSE\_MIT), **tauri-plugin-opener 2.7.3** (LICENSE\_MIT), **tauri-runtime 2.12.2** (LICENSE-MIT), **tauri-runtime-wry 2.12.3** (LICENSE-MIT), **tauri-utils 2.10.2** (LICENSE-MIT):
+**tauri 2.12.5** (LICENSE-MIT), **tauri-build 2.7.4** (LICENSE-MIT), **tauri-codegen 2.7.4** (LICENSE-MIT), **tauri-macros 2.7.4** (LICENSE-MIT), **tauri-plugin-autostart 2.7.0** (LICENSE\_MIT), **tauri-plugin-dialog 2.8.4** (LICENSE\_MIT), **tauri-plugin-fs 2.7.1** (LICENSE\_MIT), **tauri-plugin-opener 2.7.3** (LICENSE\_MIT), **tauri-runtime 2.12.2** (LICENSE-MIT), **tauri-runtime-wry 2.12.3** (LICENSE-MIT), **tauri-utils 2.10.2** (LICENSE-MIT), **tauri-winrt-notification 0.8.1** (LICENSE\_MIT):
 
 ```
 MIT License
@@ -15935,6 +15937,30 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+```
+
+**tauri-winrt-notification 0.8.1** (LICENSE.spdx):
+
+```
+SPDXVersion: SPDX-2.1
+DataLicense: CC0-1.0
+PackageName: winrt-notification
+DataFormat: SPDXRef-1
+PackageSupplier: Organization: The Tauri Programme in the Commons Conservancy
+PackageHomePage: https://tauri.app
+PackageLicenseDeclared: Apache-2.0
+PackageLicenseDeclared: MIT
+PackageCopyrightText: 2022-2022, The Tauri Programme in the Commons Conservancy
+PackageSummary: <text>An incomplete wrapper over the WinRT toast api.
+                </text>
+PackageComment: <text>The package includes the following libraries; see
+Relationship information.
+                </text>
+Created: 2019-05-20T09:00:00Z
+PackageDownloadLocation: git://github.com/tauri-apps/winrt-notification
+PackageDownloadLocation: git+https://github.com/tauri-apps/winrt-notification.git
+PackageDownloadLocation: git+ssh://github.com/tauri-apps/winrt-notification.git
+Creator: Person: Daniel Thompson-Yvetot
 ```
 
 **tendril 0.5.1** (LICENSE-MIT):
@@ -17221,7 +17247,7 @@ Redistribution and use in source and binary forms, with or without modification,
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-These crates are under MIT but ship no text of it: this is the standard one, their authors (as their Cargo.toml names them) holding the copyright: **any\_spawner 0.3.0** (Greg Johnston), **block2 0.6.2** (Mads Marquart), **const\_str\_slice\_concat 0.1.0** (Greg Johnston), **convert\_case\_extras 0.2.0** (rutrum), **crc-catalog 2.5.0** (Akhil Velagapudi), **dispatch2 0.3.1** (Mads Marquart, Mary), **dlopen2 0.8.2** (Szymon Wieloch, Ahmed Masud, OpenByte), **dlopen2\_derive 0.4.3** (Szymon Wieloch, OpenByte), **drain\_filter\_polyfill 0.1.3** (its authors), **either\_of 0.1.9** (Greg Johnston), **erased 0.1.2** (Jonathan Brouwer, Jonathan Dönszelmann), **gloo-net 0.6.0** (Rust and WebAssembly Working Group, Elina), **gloo-utils 0.2.0** (Rust and WebAssembly Working Group), **governor 0.10.4** (Andreas Fuchs), **hydration\_context 0.3.2** (Greg Johnston), **leptos 0.8.22** (Greg Johnston), **leptos\_config 0.8.10** (Greg Johnston), **leptos\_dom 0.8.8** (Greg Johnston), **leptos\_hot\_reload 0.8.7** (Greg Johnston), **leptos\_macro 0.8.19** (Greg Johnston), **leptos\_server 0.8.8** (Greg Johnston), **libappindicator-sys 0.9.0** (its authors), **math-core 0.9.0** (Hiromu Sugiura, Thomas MK), **math-core-renderer-internal 0.9.0** (Hiromu Sugiura, Thomas MK), **next\_tuple 0.1.0** (Greg Johnston), **objc2 0.6.5** (Mads Marquart), **objc2-app-kit 0.3.2** (its authors), **objc2-core-foundation 0.3.2** (its authors), **objc2-core-graphics 0.3.2** (its authors), **objc2-encode 4.1.0** (Mads Marquart), **objc2-exception-helper 0.1.1** (Mads Marquart), **objc2-foundation 0.3.2** (its authors), **objc2-io-surface 0.3.2** (its authors), **objc2-quartz-core 0.3.2** (its authors), **objc2-security 0.3.2** (its authors), **objc2-service-management 0.3.2** (its authors), **objc2-web-kit 0.3.2** (its authors), **oco\_ref 0.2.1** (Danik Vitek, Greg Johnston), **or\_poisoned 0.1.0** (Greg Johnston), **reactive\_graph 0.2.16** (Greg Johnston), **reactive\_stores 0.4.4** (Greg Johnston), **reactive\_stores\_macro 0.4.4** (Greg Johnston), **rstml 0.13.1** (vldm, stoically), **server\_fn 0.8.13** (Greg Johnston, Ben Wishovich), **server\_fn\_macro 0.8.12** (Greg Johnston), **server\_fn\_macro\_default 0.8.6** (Greg Johnston), **tachys 0.2.19** (Greg Johnston), **tauri-plugin 2.7.2** (Tauri Programme within The Commons Conservancy), **throw\_error 0.3.1** (Greg Johnston), **wasm\_split\_helpers 0.2.3** (Greg Johnston, Jeremy Maitin-Shepard, Martin Molzer), **wasm\_split\_macros 0.2.2** (Greg Johnston, Jeremy Maitin-Shepard, Martin Molzer), **webview2-com 0.39.1** (its authors), **webview2-com-macros 0.8.1** (its authors), **webview2-com-sys 0.39.1** (its authors), **yrs 0.28.0** (Kevin Jahns, Bartosz Sypytkowski).
+These crates are under MIT but ship no text of it: this is the standard one, their authors (as their Cargo.toml names them) holding the copyright: **any\_spawner 0.3.0** (Greg Johnston), **block2 0.6.2** (Mads Marquart), **const\_str\_slice\_concat 0.1.0** (Greg Johnston), **convert\_case\_extras 0.2.0** (rutrum), **crc-catalog 2.5.0** (Akhil Velagapudi), **dispatch2 0.3.1** (Mads Marquart, Mary), **dlopen2 0.8.2** (Szymon Wieloch, Ahmed Masud, OpenByte), **dlopen2\_derive 0.4.3** (Szymon Wieloch, OpenByte), **drain\_filter\_polyfill 0.1.3** (its authors), **either\_of 0.1.9** (Greg Johnston), **erased 0.1.2** (Jonathan Brouwer, Jonathan Dönszelmann), **gloo-net 0.6.0** (Rust and WebAssembly Working Group, Elina), **gloo-utils 0.2.0** (Rust and WebAssembly Working Group), **governor 0.10.4** (Andreas Fuchs), **hydration\_context 0.3.2** (Greg Johnston), **leptos 0.8.22** (Greg Johnston), **leptos\_config 0.8.10** (Greg Johnston), **leptos\_dom 0.8.8** (Greg Johnston), **leptos\_hot\_reload 0.8.7** (Greg Johnston), **leptos\_macro 0.8.19** (Greg Johnston), **leptos\_server 0.8.8** (Greg Johnston), **libappindicator-sys 0.9.0** (its authors), **math-core 0.9.0** (Hiromu Sugiura, Thomas MK), **math-core-renderer-internal 0.9.0** (Hiromu Sugiura, Thomas MK), **next\_tuple 0.1.0** (Greg Johnston), **objc2 0.6.5** (Mads Marquart), **objc2-app-kit 0.3.2** (its authors), **objc2-core-foundation 0.3.2** (its authors), **objc2-core-graphics 0.3.2** (its authors), **objc2-encode 4.1.0** (Mads Marquart), **objc2-exception-helper 0.1.1** (Mads Marquart), **objc2-foundation 0.3.2** (its authors), **objc2-io-surface 0.3.2** (its authors), **objc2-quartz-core 0.3.2** (its authors), **objc2-security 0.3.2** (its authors), **objc2-service-management 0.3.2** (its authors), **objc2-user-notifications 0.3.2** (its authors), **objc2-web-kit 0.3.2** (its authors), **oco\_ref 0.2.1** (Danik Vitek, Greg Johnston), **or\_poisoned 0.1.0** (Greg Johnston), **reactive\_graph 0.2.16** (Greg Johnston), **reactive\_stores 0.4.4** (Greg Johnston), **reactive\_stores\_macro 0.4.4** (Greg Johnston), **rstml 0.13.1** (vldm, stoically), **server\_fn 0.8.13** (Greg Johnston, Ben Wishovich), **server\_fn\_macro 0.8.12** (Greg Johnston), **server\_fn\_macro\_default 0.8.6** (Greg Johnston), **tachys 0.2.19** (Greg Johnston), **tauri-plugin 2.7.2** (Tauri Programme within The Commons Conservancy), **throw\_error 0.3.1** (Greg Johnston), **wasm\_split\_helpers 0.2.3** (Greg Johnston, Jeremy Maitin-Shepard, Martin Molzer), **wasm\_split\_macros 0.2.2** (Greg Johnston, Jeremy Maitin-Shepard, Martin Molzer), **webview2-com 0.39.1** (its authors), **webview2-com-macros 0.8.1** (its authors), **webview2-com-sys 0.39.1** (its authors), **yrs 0.28.0** (Kevin Jahns, Bartosz Sypytkowski).
 
 ```
 Permission is hereby granted, free of charge, to any person obtaining a copy

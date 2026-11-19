@@ -30,6 +30,8 @@ const COMMANDS: &[&str] = &[
     "setup_done",
     "dismiss_update",
     "update_help",
+    "notifications_allow",
+    "notify_mention",
     "next_event",
 ];
 

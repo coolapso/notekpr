@@ -143,6 +143,19 @@ pub struct Status {
     /// it").
     #[serde(default)]
     pub update: Option<Update>,
+    /// The last notification of a mention clicked ([`notify_mention`]): its
+    /// thread opens.
+    #[serde(default)]
+    pub opened: Option<Opened>,
+}
+
+/// A mention's thread, to open: `n` goes up with each click.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Opened {
+    pub n: u64,
+    pub vault: String,
+    pub note: String,
+    pub thread: String,
 }
 
 /// A newer release than this app.
@@ -435,6 +448,23 @@ pub fn dismiss_update(version: &str) {
 /// How to update, on the docs' page, in the default browser.
 pub fn update_help() {
     fire("update_help", json!({}));
+}
+
+/// Notifications of mentions turned on: the app has the system show its
+/// (macOS asks the person, once), or says why it won't.
+pub async fn notifications_allow() -> Result<(), String> {
+    invoke("notifications_allow", json!({})).await
+}
+
+/// A system notification of a mention, shown by the app (the window's own
+/// can't bring it back from the tray, and macOS's have none): clicking it
+/// brings the window back and opens the thread ([`Status::opened`]).
+pub fn notify_mention(title: &str, body: &str, vault: &str, note: &str, thread: &str) {
+    fire(
+        "notify_mention",
+        json!({ "title": title, "body": body,
+                "at": { "vault": vault, "note": note, "thread": thread } }),
+    );
 }
 
 pub async fn folder_off() -> Result<(), String> {

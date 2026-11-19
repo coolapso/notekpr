@@ -544,7 +544,11 @@ browser. What it adds to the above:
   Markdown folder for the person, and where. Switching between the app's accounts (below) doesn't ask, and
   neither does adding *On this computer* (no server is involved): a
   script that switches gains nothing (it ends with its window, and the
-  next account's window has storage of its own). Downloads (exports, attachments) go to the Downloads folder under
+  next account's window has storage of its own). System notifications of
+  mentions ([desktop.md](desktop.md#notifications)) are shown by the app
+  for the window: a script can make it show text as notekpr's (cut short)
+  and nothing more, and what a click hands back to the window is a vault,
+  note and thread id, checked to be ids. Downloads (exports, attachments) go to the Downloads folder under
   a name of their own, never over a file, as in a browser — a script could
   put files there too, as on the web. Its CSP is the web app's, with the
   chosen server (and Tauri's IPC) in `connect-src`; Tauri's prototype

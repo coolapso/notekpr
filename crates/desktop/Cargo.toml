@@ -48,6 +48,29 @@ zbus = { version = "5", default-features = false, features = ["blocking-api", "a
 futures-lite = "2"
 glib = "0.18"
 
+# System notifications (notify.rs): toasts, the app registered for them.
+[target.'cfg(windows)'.dependencies]
+tauri-winrt-notification = "0.8"
+windows = { version = "0.62", features = ["Data_Xml_Dom", "Foundation", "UI_Notifications"] }
+windows-registry = "0.6"
+
+# System notifications (notify.rs): Notification Center.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSError", "NSString"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "UNNotification",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationResponse",
+  "UNNotificationSound",
+  "UNNotificationTrigger",
+  "UNUserNotificationCenter",
+] }
+
 [dev-dependencies]
 tempfile = "3"
 reqwest = { version = "0.13", default-features = false }

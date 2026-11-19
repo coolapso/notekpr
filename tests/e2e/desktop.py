@@ -177,6 +177,9 @@ def main():
                    # The app and its server taken to be these releases: a
                    # newer one is out (crates/desktop/src/update.rs).
                    NOTEKPR_DESKTOP_TEST_VERSIONS="0.1.0,0.2.0",
+                   # System notifications written there, and clicked at
+                   # once (crates/desktop/src/notify.rs).
+                   NOTEKPR_DESKTOP_TEST_NOTIFICATIONS=f"{home}/notifications",
                    NOTEKPR_DESKTOP_CONFIG_DIR=desk_config, NOTEKPR_DESKTOP_DATA_DIR=desk_data,
                    HOME=f"{home}/home", XDG_CONFIG_HOME=f"{home}/home/.config",
                    XDG_DATA_HOME=f"{home}/home/.local/share", NOTEKPR_LOG="info",
@@ -377,7 +380,8 @@ def main():
                     NOTEKPR_DESKTOP_CONFIG_DIR=desk_config, NOTEKPR_DESKTOP_DATA_DIR=desk_data)
         cli = lambda *args: subprocess.run([os.path.abspath(a_cli), *args], env=cenv, capture_output=True,
                                            text=True, timeout=60)
-        r = cli("login", "--server", url, "--dev-user", uniq("cleo"), "--device-name", "laptop")
+        cleo = uniq("cleo")
+        r = cli("login", "--server", url, "--dev-user", cleo, "--device-name", "laptop")
         check(r.returncode == 0, "a CLI user signs in on the same computer")
         r = cli("sync", "--dir", notes, "--once", "--plaintext-ok")
         check(r.returncode != 0 and "the desktop app" in r.stderr,
@@ -478,6 +482,49 @@ def main():
         a.route("/settings/app")
         wait_for("the folder after signing in", lambda: "Keeping" in a.folder_status())
         check(True, "signing in again: the folder goes on with the new session")
+
+        # ---- mentions: the app shows the system's notification itself
+        # (docs/desktop.md "Notifications"), also from the tray; clicking it
+        # brings the window back and opens the thread
+        a.route("/settings/editor")
+        said = a.js("return document.querySelector('.mention-notify-toggle').closest('label').textContent")
+        check("browser" not in said and "tray" in said, f"the setting speaks of the app, not a browser ({said})")
+        a.click(".mention-notify-toggle")
+        time.sleep(1)
+        check(a.js("return document.querySelector('.mention-notify-toggle').checked")
+              and not a.js("return [...document.querySelectorAll('.toast')].some(t => /notifications/.test(t.textContent))"),
+              "notifications of mentions turn on, with no browser to allow them")
+        r = invoke("notify_mention", {"title": "t", "body": "b", "at": {"vault": "../x", "note": "n", "thread": "t"}})
+        check("err" in r, f"what a notification hands back to the window is ids, nothing else ({r})")
+        team = uniq("Team")
+        cli("vault", "create", team)
+        r = subprocess.run([os.path.abspath(a_cli), "write", team, "Plans.md"], env=cenv, input="# Plans\n\nShip it soon.\n",
+                           capture_output=True, text=True, timeout=60)
+        check(r.returncode == 0, f"another person writes a note in a vault of theirs ({r.stderr.strip()[-160:]})")
+        cli("vault", "share", team, f"{name}@example.com", "--role", "editor")
+        # (Once it has slid in: until then it is out of the window.)
+        a.wait("const b = document.querySelector('.invitation-banner:not(.accepted)');"
+               "return !!b && b.getAnimations().length === 0", 20, "the invitation")
+        a.click(".accept-invitation")
+        a.find(".invitation-banner.accepted", 10)
+        cli("invitations", "list")  # (their app adds the person who accepted)
+        team_id = next(v["id"] for v in json.loads(cli("--json", "vault", "list").stdout) if v["name"] == team)
+        a.route(f"/v/{team_id}")
+        a.find_text(".tree-item", "Plans", 20)
+        # Not in front: what a window behind another, or in the tray, says.
+        a.js("document.hasFocus = () => false")
+        r = cli("comments", "add", team, "Plans.md", "--on", "soon", f"@{name} is this still on?")
+        check(r.returncode == 0, f"they mention the app's user in a comment ({r.stderr.strip()[-160:]})")
+        shown = wait_for("the notification", lambda: os.path.exists(f"{home}/notifications")
+                         and [json.loads(l) for l in open(f"{home}/notifications")], 30)
+        check(shown == [{"title": f"{cleo.capitalize()} mentioned you in Plans", "body": f"@{name} is this still on?"}],
+              f"the app shows a system notification: who, where, what ({shown})")
+        a.wait("return !!document.querySelector('.cm-thread .mention.me')", 20, "the mention's thread")
+        check(a.js("return location.pathname").startswith(f"/v/{team_id}/"),
+              "clicking it opens the note and the thread the mention is in")
+        a.js("delete document.hasFocus")
+        # (Its messages gone, before they cover what comes next.)
+        a.wait("return !document.querySelector('.toast')", 30, "the messages to go")
 
         # ---- forgetting this computer forgets the folder's keys; the files stay
         a.route("/settings/account")

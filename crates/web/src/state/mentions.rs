@@ -1,8 +1,9 @@
 //! Mentions of us in comments (docs/comments.md §1): found in the comments
 //! this browser synced — the server never learns who is mentioned — listed
 //! in the sidebar's inbox, announced as they arrive (a toast, and a system
-//! notification if asked for), and marked read in the encrypted
-//! preferences, so that what is read on one device is read on all.
+//! notification if asked for: the browser's, or the desktop app's), and
+//! marked read in the encrypted preferences, so that what is read on one
+//! device is read on all.
 
 use leptos::prelude::*;
 use notekpr_core::comments::{self, Mention};
@@ -199,21 +200,34 @@ fn snippet(body: &str) -> String {
     }
 }
 
-/// Whether the browser lets us show system notifications.
+/// Whether system notifications can be shown: the browser allows them,
+/// or in the desktop app (it shows them itself, [`crate::desktop`]).
 pub fn notifications_allowed() -> bool {
-    js_sys::Reflect::has(&util::window(), &"Notification".into()).unwrap_or(false)
-        && web_sys::Notification::permission() == web_sys::NotificationPermission::Granted
+    crate::desktop::is_desktop()
+        || (has_notifications()
+            && web_sys::Notification::permission() == web_sys::NotificationPermission::Granted)
 }
 
-/// Whether this browser has system notifications at all.
+/// Whether there are system notifications here at all.
 pub fn notifications_supported() -> bool {
+    crate::desktop::is_desktop() || has_notifications()
+}
+
+/// The browser has them.
+fn has_notifications() -> bool {
     js_sys::Reflect::has(&util::window(), &"Notification".into()).unwrap_or(false)
 }
 
-/// Turn system notifications for mentions on (asking the browser first) or
-/// off, for this browser.
+/// Turn system notifications for mentions on (asking the browser, or the
+/// desktop app, first) or off, for this browser (computer).
 pub async fn set_mention_notifications(on: bool) {
-    if on && !notifications_allowed() {
+    if on && crate::desktop::is_desktop() {
+        if let Err(e) = crate::desktop::notifications_allow().await {
+            super::error(e);
+            super::set_ui_prefs(|p| p.mention_notifications = false);
+            return;
+        }
+    } else if on && !notifications_allowed() {
         let granted = match web_sys::Notification::request_permission() {
             Ok(p) => wasm_bindgen_futures::JsFuture::from(p)
                 .await
@@ -235,6 +249,8 @@ pub async fn set_mention_notifications(on: bool) {
 
 /// A system notification for a mention, when asked for and the app isn't
 /// in front (otherwise the toast is enough). Clicking it opens the thread.
+/// In the desktop app, the app shows it (also while the window is hidden
+/// in the tray), and a click brings the window back.
 fn notify(m: &MentionView) {
     let doc = util::document();
     if !ui().ui_prefs.with_untracked(|p| p.mention_notifications)
@@ -243,10 +259,15 @@ fn notify(m: &MentionView) {
     {
         return;
     }
-    let opts = web_sys::NotificationOptions::new();
-    opts.set_body(&snippet(&m.mention.body));
-    opts.set_tag(&m.mention.comment);
     let title = format!("{} mentioned you in {}", m.name, m.note_title);
+    let body = snippet(&m.mention.body);
+    if crate::desktop::is_desktop() {
+        crate::desktop::notify_mention(&title, &body, &m.vault, &m.note, &m.mention.thread);
+        return;
+    }
+    let opts = web_sys::NotificationOptions::new();
+    opts.set_body(&body);
+    opts.set_tag(&m.mention.comment);
     let Ok(n) = web_sys::Notification::new_with_options(&title, &opts) else {
         return;
     };

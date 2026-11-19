@@ -36,8 +36,9 @@ change the note's text.
   can't be mentioned; they may mention the note's owner and the people who
   commented on it. The mentioned person's own devices notice it (§3,
   *Mentions*): a mentions inbox in the sidebar with the number of new ones, a
-  message when one arrives, and — if they turn it on in this browser — a
-  system notification while the app is open but not in front.
+  message when one arrives, and — if they turn it on in this browser or the
+  desktop app — a system notification while the app is open but not in
+  front (the desktop app's also while it is in the tray).
 * **Own editors and the CLI:** comments are not written into the Markdown
   files (they would stop being plain Markdown; Notion's export drops them
   too). `notekpr comments …` lists, adds, replies to and resolves them
@@ -139,7 +140,9 @@ after a rename and among people with the same name.
   the trash. The web app shows them in the sidebar's inbox, says so when
   one arrives (not for those that were there before a vault's first
   catch-up in a session) and, if asked to in this browser, shows a system
-  notification while the app is open but not in front; `notekpr mentions`
+  notification while the app is open but not in front — the desktop app
+  has the system show it, also from the tray, and a click brings the
+  window back ([desktop.md](desktop.md#notifications)); `notekpr mentions`
   lists them.
 * **Read or not** is kept in the person's encrypted preferences (which the
   server stores as ciphertext and their devices sync): per vault, read up
@@ -210,7 +213,7 @@ records people the note is shared with can't read yet.
   is in it (`data-o`), so a selection there is commented on as in the
   editor. `@` in a comment box offers people to mention; the sidebar's `@`
   is the mentions inbox; Settings → Editor → *Mentions* turns system
-  notifications on for this browser.
+  notifications on for this browser (in the desktop app, this computer).
 * **CLI and gateway:** `comments list|add|reply|resolve|reopen|edit|delete`
   (`add --on "quoted text"` finds the text to anchor to), the same as
   `shared comments …` for notes shared with you, `mentions [--unread]

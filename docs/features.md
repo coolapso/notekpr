@@ -252,7 +252,8 @@ notes](writing.md) and [Drawings](drawings.md).
 * @mentions: type `@` in a comment to mention a member of the vault. Their
   devices find it — the server never learns who is mentioned — and show it
   in the sidebar's mentions inbox, with a message when it arrives and, if
-  they like, a system notification. Read on one device, read on all;
+  they like, a system notification (in the desktop app also while it is in
+  the tray; a click opens the thread). Read on one device, read on all;
   `notekpr mentions` lists them.
 * You're told when someone invites you and when a note is shared with you;
   owners and admins have an activity log per vault.
@@ -299,6 +300,9 @@ notes](writing.md) and [Drawings](drawings.md).
   that; a Flatpak and packages for Arch (AUR), Debian and Ubuntu (`.deb`)
   and Fedora (COPR), an installer for Windows and a disk image for macOS
   (not fully tested yet) ([desktop app](desktop.md)).
+* The desktop app's notifications: someone mentioning you shows as a
+  notification from your system while its window isn't in front or is in
+  the tray; clicking it opens the thread ([notifications](desktop.md#notifications)).
 * The desktop app tells you when your server runs a newer release: a bar
   in its window, dismissed per release, and *Update available* in the
   tray. It never updates itself; you install the new version as you

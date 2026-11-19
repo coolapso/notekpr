@@ -22,6 +22,18 @@ pub struct Status {
     /// A newer release is out: the open account's server runs it
     /// ([`crate::update`]).
     pub update: Option<crate::update::Update>,
+    /// The last notification of a mention clicked ([`crate::notify`]):
+    /// the window opens its thread.
+    pub opened: Option<Opened>,
+}
+
+/// A mention's thread, to open: `n` goes up with each click.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Opened {
+    pub n: u64,
+    pub vault: String,
+    pub note: String,
+    pub thread: String,
 }
 
 /// The CLI still runs the profile whose folder is being taken over.

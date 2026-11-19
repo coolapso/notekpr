@@ -471,10 +471,16 @@ fn run_later() {
 }
 
 /// What the desktop app says now ([`crate::desktop::watch`]): shown in its
-/// settings; from the tray, "Settings" opens them.
+/// settings; from the tray, "Settings" opens them; a notification of a
+/// mention clicked opens its thread.
 pub fn desktop_status(s: crate::desktop::Status) {
     let ui = ui();
-    let asked = s.show_settings > ui.desktop.get_untracked().show_settings;
+    let before = ui.desktop.get_untracked();
+    let asked = s.show_settings > before.show_settings;
+    let opened = s
+        .opened
+        .clone()
+        .filter(|o| before.opened.as_ref().is_none_or(|b| o.n > b.n));
     ui.desktop.set(s);
     if asked {
         match ui.phase.get_untracked() {
@@ -483,6 +489,11 @@ pub fn desktop_status(s: crate::desktop::Status) {
             Phase::Fatal(_) => ui.phase.set(Phase::Connect { error: None }),
             _ => {}
         }
+    }
+    if let Some(o) = opened
+        && ui.phase.get_untracked() == Phase::Ready
+    {
+        mentions::open_mention(&o.vault, &o.note, &o.thread);
     }
 }
 

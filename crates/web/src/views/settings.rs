@@ -714,11 +714,19 @@ fn EditorPrefs() -> impl IntoView {
     }
 }
 
-/// System notifications when someone mentions us (this browser).
+/// System notifications when someone mentions us (this browser, or in the
+/// desktop app this computer).
 #[component]
 fn MentionPrefs() -> impl IntoView {
     let ui = ui();
     let supported = state::notifications_supported();
+    let what = if crate::desktop::is_desktop() {
+        " — a system notification while notekpr's window isn't in front, also while it is in the tray (the sidebar's @ lists mentions either way)"
+    } else if supported {
+        " — a system notification from this browser while notekpr is open but not in front (the sidebar's @ lists mentions either way)"
+    } else {
+        " — this browser can't show notifications"
+    };
     view! {
         <h3>"Mentions"</h3>
         <label class="check">
@@ -729,11 +737,7 @@ fn MentionPrefs() -> impl IntoView {
                     leptos::task::spawn_local(state::set_mention_notifications(on));
                 }/>
             " Notify me when someone mentions me"
-            <span class="muted small">{if supported {
-                " — a system notification from this browser while notekpr is open but not in front (the sidebar's @ lists mentions either way)"
-            } else {
-                " — this browser can't show notifications"
-            }}</span>
+            <span class="muted small">{what}</span>
         </label>
     }
 }

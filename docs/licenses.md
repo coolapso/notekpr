@@ -1235,7 +1235,7 @@ The 792 Rust crates notekpr's programs are built from, Rust's standard library's
 | [convert\_case](https://crates.io/crates/convert_case/0.6.0) | 0.6.0 | MIT | web app |
 | [convert\_case](https://crates.io/crates/convert_case/0.11.0) | 0.11.0 | MIT | web app |
 | [convert\_case\_extras](https://crates.io/crates/convert_case_extras/0.2.0) | 0.2.0 | MIT | web app |
-| [cookie](https://crates.io/crates/cookie/0.18.2) | 0.18.2 | MIT OR Apache-2.0 | desktop app |
+| [cookie](https://crates.io/crates/cookie/0.18.3) | 0.18.3 | MIT OR Apache-2.0 | desktop app |
 | [core-foundation](https://crates.io/crates/core-foundation/0.10.1) | 0.10.1 | MIT OR Apache-2.0 | CLI and desktop app |
 | [core-foundation-sys](https://crates.io/crates/core-foundation-sys/0.8.7) | 0.8.7 | MIT OR Apache-2.0 | CLI and desktop app |
 | [core-graphics](https://crates.io/crates/core-graphics/0.25.0) | 0.25.0 | MIT OR Apache-2.0 | desktop app |
@@ -1332,7 +1332,7 @@ The 792 Rust crates notekpr's programs are built from, Rust's standard library's
 | [foreign-types](https://crates.io/crates/foreign-types/0.5.0) | 0.5.0 | MIT/Apache-2.0 | desktop app |
 | [foreign-types-macros](https://crates.io/crates/foreign-types-macros/0.2.4) | 0.2.4 | MIT/Apache-2.0 | desktop app |
 | [foreign-types-shared](https://crates.io/crates/foreign-types-shared/0.3.1) | 0.3.1 | MIT/Apache-2.0 | desktop app |
-| [form\_urlencoded](https://crates.io/crates/form_urlencoded/1.2.2) | 1.2.2 | MIT OR Apache-2.0 | server, web app, CLI and desktop app |
+| [form\_urlencoded](https://crates.io/crates/form_urlencoded/1.2.3) | 1.2.3 | MIT OR Apache-2.0 | server, web app, CLI and desktop app |
 | [fs\_extra](https://crates.io/crates/fs_extra/1.3.0) | 1.3.0 | MIT | server, CLI and desktop app |
 | [fsevent-sys](https://crates.io/crates/fsevent-sys/4.1.0) | 4.1.0 | MIT | CLI and desktop app |
 | [futures](https://crates.io/crates/futures/0.3.34) | 0.3.34 | MIT OR Apache-2.0 | server, web app, CLI and desktop app |
@@ -1833,7 +1833,7 @@ The 792 Rust crates notekpr's programs are built from, Rust's standard library's
 | [unicode-xid](https://crates.io/crates/unicode-xid/0.2.6) | 0.2.6 | MIT OR Apache-2.0 | web app |
 | [universal-hash](https://crates.io/crates/universal-hash/0.6.1) | 0.6.1 | MIT OR Apache-2.0 | server, web app, CLI and desktop app |
 | [untrusted](https://crates.io/crates/untrusted/0.9.0) | 0.9.0 | ISC | server, CLI and desktop app |
-| [url](https://crates.io/crates/url/2.5.8) | 2.5.8 | MIT OR Apache-2.0 | server, web app, CLI and desktop app |
+| [url](https://crates.io/crates/url/2.5.9) | 2.5.9 | MIT OR Apache-2.0 | server, web app, CLI and desktop app |
 | [urlpattern](https://crates.io/crates/urlpattern/0.6.0) | 0.6.0 | MIT | desktop app |
 | [utf8\_iter](https://crates.io/crates/utf8_iter/1.0.4) | 1.0.4 | Apache-2.0 OR MIT | server, web app, CLI and desktop app |
 | [utf8\_iter](https://crates.io/crates/utf8_iter/1.1.0) | 1.1.0 | Apache-2.0 OR MIT | web app |
@@ -5173,7 +5173,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-**cookie 0.18.2** (LICENSE-MIT):
+**cookie 0.18.3** (LICENSE-MIT):
 
 ```
 Copyright (c) 2017 Sergio Benitez
@@ -6922,7 +6922,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-**data-url 0.3.2** (LICENSE-MIT), **idna 1.1.0** (LICENSE-MIT), **percent-encoding 2.3.2** (LICENSE-MIT), **url 2.5.8** (LICENSE-MIT):
+**data-url 0.3.2** (LICENSE-MIT), **idna 1.1.0** (LICENSE-MIT), **percent-encoding 2.3.2** (LICENSE-MIT), **url 2.5.9** (LICENSE-MIT):
 
 ```
 Copyright (c) 2013-2025 The rust-url developers
@@ -8146,7 +8146,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-**form\_urlencoded 1.2.2** (LICENSE-MIT):
+**form\_urlencoded 1.2.3** (LICENSE-MIT):
 
 ```
 Copyright (c) 2013-2016 The rust-url developers

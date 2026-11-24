@@ -1,10 +1,10 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{HeaderMap, HeaderValue, header};
+use axum::http::HeaderMap;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use governor::clock::{Clock, DefaultClock};
@@ -104,8 +104,26 @@ fn peer(req: &Request) -> Option<SocketAddr> {
         .map(|c| c.0)
 }
 
+/// What the limits per address count by: an IPv4 address, or an IPv6
+/// address's /64 network — one connection usually gets a whole /64, so
+/// counting single addresses would let it go round the limits. (An IPv4
+/// address written as IPv6 counts as itself.)
+fn limit_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6(Ipv6Addr::from_bits(v6.to_bits() & !((1u128 << 64) - 1))),
+        },
+    }
+}
+
 pub async fn api_limit(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let ip = client_ip(req.headers(), peer(&req), state.config.trust_proxy);
+    let ip = limit_key(client_ip(
+        req.headers(),
+        peer(&req),
+        state.config.trust_proxy,
+    ));
     let limiters = state.instance.limiters();
     if let Err(until) = limiters.current().api.check_key(&ip) {
         metrics::counter!("notekpr_rate_limited_total", "scope" => "api").increment(1);
@@ -115,7 +133,11 @@ pub async fn api_limit(State(state): State<AppState>, req: Request, next: Next) 
 }
 
 pub async fn auth_limit(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let ip = client_ip(req.headers(), peer(&req), state.config.trust_proxy);
+    let ip = limit_key(client_ip(
+        req.headers(),
+        peer(&req),
+        state.config.trust_proxy,
+    ));
     let limiters = state.instance.limiters();
     if let Err(until) = limiters.current().auth.check_key(&ip) {
         metrics::counter!("notekpr_rate_limited_total", "scope" => "auth").increment(1);
@@ -127,16 +149,13 @@ pub async fn auth_limit(State(state): State<AppState>, req: Request, next: Next)
 /// `429` with `Retry-After`: the request wasn't handled at all, so the client
 /// may send it again, unchanged, after that many seconds.
 fn limited(wait: Duration) -> Response {
-    let mut r = AppError::RateLimited.into_response();
-    let secs = wait.as_secs() + u64::from(wait.subsec_nanos() > 0);
-    r.headers_mut()
-        .insert(header::RETRY_AFTER, HeaderValue::from(secs.max(1)));
-    r
+    AppError::RateLimitedFor(wait).into_response()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::header;
 
     #[test]
     fn says_when_to_come_back_in_whole_seconds() {
@@ -171,6 +190,16 @@ mod tests {
         assert!(sign_in());
         assert!(sign_in());
         assert!(!sign_in());
+    }
+
+    #[test]
+    fn counts_ipv6_by_its_network() {
+        let key = |s: &str| limit_key(s.parse().unwrap()).to_string();
+        assert_eq!(key("2001:db8:1:2:aaaa::1"), "2001:db8:1:2::");
+        assert_eq!(key("2001:db8:1:2:ffff:ffff:ffff:ffff"), "2001:db8:1:2::");
+        assert_ne!(key("2001:db8:1:3::1"), key("2001:db8:1:2::1"));
+        assert_eq!(key("203.0.113.7"), "203.0.113.7");
+        assert_eq!(key("::ffff:203.0.113.7"), "203.0.113.7");
     }
 
     #[test]

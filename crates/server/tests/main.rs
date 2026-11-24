@@ -13,6 +13,7 @@ mod files;
 mod handover;
 mod oidc;
 mod page;
+mod person_limits;
 mod s3;
 
 /// With `autotests = false`, a file in tests/ that isn't a module here would

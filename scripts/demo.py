@@ -443,6 +443,7 @@ HOME = [
         - [ ] A new device: sign in as **alice** in a private window and choose *Approve from another device*. Here a bar at the top of the page says it is waiting, however far you scroll, and this tab's title counts it — until the demo approves it a moment later (started with `--no-approve`, it waits for your *Review*)
         - [ ] Sign the command line in with a code: `task demo:cli -- --profile mine login --server http://localhost:8099` prints a link; opening it here shows when, and from which address, the code was asked for
         - [ ] Settings → Administration: you run this server in the demo. *Instance* sets limits (accounts, vaults, agents, and per person; *Limits* next to someone gives them their own) and read-only mode: switch it on with **bob** signed in in another tab, edit there, and his edits wait in his browser until you switch it off. *Oldest app version* tells apps older than it to update (they keep their unsent edits) — development builds like this demo's never are. *Server* has what used to need a restart, in force at once: *Seconds between versions* is 0 here (the demo writes faster than anyone types); set *Attachment size* to 1 and attach a larger file (refused), or *Suggested when sharing* to *Everyone, by name*, and *Share vault* suggests anyone by the start of their name (by default, only people you already share with; anyone else is invited by address). *Admin clients* has the *billing* script that gave every vault 100 MiB and everyone's quick notes 20 MiB — yours 50 (*Limits* next to you; *Quick notes* shows how much of it they take)
+        - [ ] Limits per person, for a server many people share: the billing script lets everyone change 500 MiB a day (*Changes per person a day* under *Instance*) — dave 2 GiB (*Limits* next to him: *Changes a day*). Give **bob** 0 there, edit a note as him in another tab, and his edit waits in his browser, which says from when it goes; tick *Limited* above the accounts and only he is listed, with how often he was turned away (never what for). Then *Suspend for a day* next to him: his tab says until when, and keeps his edits; *Lift suspension* lets him back. A script that keeps going past its limits is suspended by the server itself, for *Suspend for (minutes)* under *Server*
         - [ ] Your *Scans* vault is full: the billing script gave it only 1 MiB, and three scanned letters take more. The banner says so; edit a note there and the edit waits in your browser. *Vault settings* shows how much of its room it uses and its id (*Copy*). As the administrator, paste the id into *Find* under Settings → Administration → *Vaults* (every vault by size, with its owner — never its name) and give it more with *Limit*; or delete a letter for good from its trash. Either way the waiting edit goes out
         - [ ] Settings → AI agents: the *Home assistant* agent, which writes in *Assistant*
         - [ ] Your notes as plain Markdown files, synced both ways: `task demo:cli -- --profile alice sync --dir /tmp/alice-notes`. One keeper per folder: while it runs (or after), `task demo:cli -- --profile bob sync --dir /tmp/alice-notes` is refused, naming who keeps it (its hidden `.notekpr-folder` says so); `sync --no-dir` gives it back
@@ -1910,7 +1911,8 @@ def seed(cli, url, data, server_bin):
         cli.attach(a, "Scans", f"attachments/{name}-letter.png", scan(i + 1))
 
     step("a billing script (an admin client): 100 MiB and 20 drawings per vault, 1 MiB for Scans "
-         "(now full), 1 drawing for Family (full), 20 MiB of personal storage (alice: 50)")
+         "(now full), 1 drawing for Family (full), 20 MiB of personal storage (alice: 50), "
+         "500 MiB of changes a day per person (dave: 2 GiB)")
     token = subprocess.run(
         [str(server_bin), "--data-dir", str(data / "server"), "admin-client", "create",
          "--name", "billing", "--scopes", "settings,accounts"],
@@ -1919,11 +1921,14 @@ def seed(cli, url, data, server_bin):
     scans = next(v["id"] for v in vaults if v["name"] == "Scans")
     family = next(v["id"] for v in vaults if v["name"] == "Family")
     admin_api(url, token, "/admin/settings",
-              {"storage_per_vault_mb": 100, "drawings_per_vault": 20, "quick_notes_storage_mb": 20})
+              {"storage_per_vault_mb": 100, "drawings_per_vault": 20, "quick_notes_storage_mb": 20,
+               "writes_per_day_mb": 500})
     admin_api(url, token, f"/admin/vaults/{scans}", {"storage_allowance": 1})
     admin_api(url, token, f"/admin/vaults/{family}", {"drawing_allowance": 1})
     alice = admin_api(url, token, "/admin/users?identity=dev:alice")[0]["id"]
     admin_api(url, token, f"/admin/users/{alice}", {"quick_notes_storage_allowance": 50})
+    dave = admin_api(url, token, "/admin/users?identity=dev:dave")[0]["id"]
+    admin_api(url, token, f"/admin/users/{dave}", {"write_allowance": 2048})
     return keys
 
 

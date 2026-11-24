@@ -20,6 +20,7 @@ pub mod hub;
 pub mod instance;
 pub mod oidc;
 pub mod page;
+pub mod person_limits;
 pub mod process;
 pub mod ratelimit;
 pub mod repo;
@@ -115,6 +116,7 @@ pub async fn build_for_tests(config: Config) -> anyhow::Result<(axum::Router, Ap
     let change = notekpr_core::protocol::InstanceSettingsUpdate {
         rate_limit_rps: Some(10_000),
         auth_rate_limit_per_min: Some(10_000),
+        person_rate_limit_rps: Some(10_000),
         snapshot_cooldown_secs: Some(0),
         ..Default::default()
     };
@@ -168,6 +170,7 @@ fn spawn_maintenance(state: AppState) {
                 return;
             };
             state.instance.limiters().cleanup();
+            state.instance.people().cleanup();
             let now = db::now();
             let month = 30 * 24 * 3600 * 1000;
             let db = &state.db;

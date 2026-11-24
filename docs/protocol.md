@@ -20,7 +20,14 @@ outdated key — the vault's or an individually shared note's; reload keys and
 re-encrypt; pushes list it per update instead, §6), `too_large`,
 `rate_limited` (429; with `Retry-After: <seconds>` when the request wasn't
 handled at all, so the same request may be sent again then — the CLI waits
-and retries up to 30 s),
+and retries up to 30 s; per client address and per person, §9),
+`write_limit` (429 with `Retry-After`: the person — an agent's owner — has
+sent as many changes as their daily write allowance lets them for now,
+§9; nothing was done. Clients keep note edits and send them after
+`Retry-After`, without retrying before; other writes fail until then),
+`suspended` (429 with `Retry-After`: the account — an agent's owner's — is
+suspended until then, §9, and every request with its sessions is refused;
+clients keep note edits and try again after `Retry-After`),
 `device_revoked` (404 from `GET /devices/{id}/envelope` and
 `PUT /me/session/device`: the device was removed from the account or never
 belonged to it — the only 404 after which a client may forget a device's
@@ -235,7 +242,11 @@ differs:
 `grant_type=client_credentials` with HTTP Basic (`client_id:client_secret`) or
 form fields. Tokens are short-lived (default 1 h). Missing or wrong
 credentials (or a revoked secret, a disabled agent or owner) get `401
-invalid_client`.
+invalid_client`. Tokens count against the owner's limits (§9): none while
+the owner is suspended (`429 suspended`), at most `auth_rate_limit_per_min`
+a minute per owner from every address (`429 rate_limited`; both with
+`Retry-After`), and an agent keeps at most 20 that work — getting another
+ends the oldest.
 
 Errors from `/oauth/token` are RFC 6749 `{error, error_description?}` (`400`
 unless noted), not the `{error, message}` shape above; an unknown
@@ -749,7 +760,8 @@ Server → client: `ready {user_id, session_id, conn_id}`,
 `vault_event {vault_id, event}` (`members_changed`, `key_rotated`, `meta_changed`, `deleted`, `access_revoked`, `role_changed`),
 `object_event {vault_id, object_id, event}` (`shared`, `key_rotated`, `meta_changed`, `shares_changed`, `access_revoked`, `deleted`),
 `user_event {event}` (`device_pending`, `devices_changed`, `vaults_changed`, `shares_changed`, `invitations_changed` — §5.6 —, `session_revoked`),
-`error {code, message, vault_id?}`, `pong {nonce}`.
+`error {code, message, vault_id?, retry_after?}` (`retry_after`: seconds,
+with `write_limit` and `suspended`), `pong {nonce}`.
 
 Only `update` and `awareness` skip the connection they came from (your own
 pushes come back as `ack`); `snapshot` and `snapshot_created` reach every
@@ -806,6 +818,30 @@ only relays them. Limits per connection:
 * messages and frames up to 2 × `max_update_bytes` + 1 MiB (a larger one
   ends the connection); binary frames get an `error`.
 
+And per person — an account with its agents, over all their connections:
+
+* at most 50 connections at once; another `auth` gets `error {code:
+  "rate_limited"}` and the connection closes (clients reconnect with
+  backoff, as after any failure);
+* each push counts as a request against the person's request rate, like a
+  REST call (§9), and (un)subscriptions share a budget of their own (20 per
+  second, bursts of 1000: a reconnect of many tabs subscribes to every
+  vault at once); beyond either, `error {code: "rate_limited", vault_id?,
+  retry_after}`, the message dropped. Clients keep the changes pending and
+  send them — or subscribe again — after `retry_after`;
+* awareness: 60 per second, bursts of 120, dropped beyond;
+* a push beyond the daily write allowance gets `error {code:
+  "write_limit", vault_id, retry_after}`; clients keep its changes and push
+  again after `retry_after`, not before.
+
+While the account is suspended (§9), `auth` gets `error {code:
+"suspended", retry_after}` and the connection closes; a suspension ends
+every connection it has the same way. Clients don't reconnect before
+`retry_after`. (Apps older than these limits don't know `write_limit`,
+`suspended` or `retry_after`: they keep the refused changes but send them
+only once they connect again, and a suspended one keeps reconnecting —
+§9 says what a server setting a write allowance does about them.)
+
 The server pings every 30 s and checks the session again every 60 s; once it
 is no longer valid, the server sends `user_event {event: "session_revoked"}`
 and closes the connection.
@@ -855,8 +891,8 @@ role can't be given: `400`): only admin clients administer it.
 
 | Endpoint | Notes |
 |---|---|
-| `GET /admin/users?email=&identity=` | `read`: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault (member of; quick notes not counted) and device counts, `owned_vault_count`, `agent_count`, `quick_note_count`, `storage_bytes` (what the vaults they own take), `quick_notes_storage_bytes` (what their Personal storage takes), `vault_allowance`, `agent_allowance`, `quick_note_allowance`, `quick_notes_storage_allowance` (MiB, their Personal storage's) — no content. `email` (any case) or `identity` (`issuer\|subject`, or `dev:<name>` in development mode) finds one person |
-| `PATCH /admin/users/{id} {disabled?, is_admin?, vault_allowance?, agent_allowance?, quick_note_allowance?, quick_notes_storage_allowance?}` | `accounts` (`admins` for `is_admin`): disable (ends the person's sessions and their agents') or enable (counts against `max_users`), (un)make administrator, set a person's own limits: `"default"` (the instance's), `"unlimited"` or a number. Agents have no allowance (`400`). A new quick-note allowance is announced to the person's apps (`vaults_changed`); their quick notes' subscribers get `vault_full` if a new storage allowance fills them or makes room |
+| `GET /admin/users?email=&identity=` | `read`: accounts with kind, e-mail, owner (agents), admin and disabled flags, last sign-in, vault (member of; quick notes not counted) and device counts, `owned_vault_count`, `agent_count`, `quick_note_count`, `storage_bytes` (what the vaults they own take), `quick_notes_storage_bytes` (what their Personal storage takes), `vault_allowance`, `agent_allowance`, `quick_note_allowance`, `quick_notes_storage_allowance` (MiB, their Personal storage's), `rate_allowance` (requests per second), `write_allowance` (MiB per day), `suspended_until` (ms, while suspended), `refused {requests, writes}` (how many of their requests the person's rate and write limits refused in the last 24 hours, kept in memory: since the server started, if that's less; below) — no content. `email` (any case) or `identity` (`issuer\|subject`, or `dev:<name>` in development mode) finds one person; `limited=true` lists only people refused or suspended in the last 24 hours, the most refused first |
+| `PATCH /admin/users/{id} {disabled?, is_admin?, vault_allowance?, agent_allowance?, quick_note_allowance?, quick_notes_storage_allowance?, rate_allowance?, write_allowance?, suspended_until?}` | `accounts` (`admins` for `is_admin`): disable (ends the person's sessions and their agents') or enable (counts against `max_users`), (un)make administrator, set a person's own limits: `"default"` (the instance's), `"unlimited"` or a number (`rate_allowance` at least 1). Agents have no allowance (`400`): theirs are their owner's. A new quick-note allowance is announced to the person's apps (`vaults_changed`); their quick notes' subscribers get `vault_full` if a new storage allowance fills them or makes room. `suspended_until`: suspend the person (and their agents) until then (ms; ends their connections), or lift a suspension (a time past, such as `0`); not for agents, nor oneself (`400`) |
 | `GET /admin/vaults?id=&owner=` | `read`: vaults by size, the largest first (at most 200): `AdminVault {id, owner_id, owner_name, storage_bytes, storage_allowance, drawing_count, drawing_allowance, created_at}` — never a name, member or anything in them; not quick notes (their limits are the person's, above). `id` finds the one with that id (its members read it in its settings), `owner` (an account id) those someone owns |
 | `PATCH /admin/vaults/{id} {storage_allowance?, drawing_allowance?}` | `accounts`: give a vault its own storage limit in MiB, or its own drawings limit: `"default"` (the instance's `storage_per_vault_mb`, `drawings_per_vault`), `"unlimited"` or a number (`404`: no such vault, or someone's quick notes). Its subscribers get `vault_full` if a storage limit fills it or makes room; a drawings limit is announced to its members' apps (`vaults_changed`) |
 | `GET /admin/stats` | `read`: the server's `version` (as in `GET /info`), counts of users, agents, vaults, objects, updates, snapshots and attachments, and the instance's storage (`storage_bytes`: the database's pages in use plus the attachments in the file store) |
@@ -904,8 +940,11 @@ and nothing of it is kept:
 | `snapshot_cooldown_secs` | seconds between two snapshots of a note by one person (default 30; `0`: none) |
 | `purge_undo_days` | days during which deleting for good can be undone (default 30; `0`: at once); `GET /info`'s `purge_undo_days`. A shorter period applies to what was deleted already |
 | `keep_deleted_files_days` | days the file store keeps a file the database let go of (default 14) |
-| `rate_limit_rps` | API requests per second per client address, bursts of 4 × (default 50, at least 1); a change starts every address afresh |
-| `auth_rate_limit_per_min` | sign-in and token requests per minute per client address (default 30, at least 1) |
+| `rate_limit_rps` | API requests per second per client address, bursts of 4 × (default 50, at least 1); a change starts every address afresh. IPv6 addresses count by their /64 network |
+| `auth_rate_limit_per_min` | sign-in and token requests per minute per client address (default 30, at least 1); looking up and deciding on device codes, and agents' tokens, per person too |
+| `person_rate_limit_rps` | requests per second per person — an account with its agents, from every address — unless they have their own `rate_allowance` (default 50, bursts of 4 ×, at least 1; below) |
+| `writes_per_day_mb` | MiB of changes a person (with their agents) may send in a day, unless they have their own `write_allowance` (default unlimited; below) |
+| `auto_suspend_minutes` | how long the server suspends someone whose apps keep sending requests their limits refuse, not waiting as told (default 60; `0`: it never does; below) |
 | `user_directory` | whom `GET /users/search` suggests when sharing: `"private"` (the default) people the caller already shares a vault or a note with; `"search"`, for families and companies: anyone, by display-name prefix or exact e-mail (and they can be looked up, `GET /users/{id}`). The stored `"exact_email"` of older releases reads as `"private"` |
 | `invitations_pending` | invitations a person may have waiting for an answer at once (default 50, §5.6) |
 | `invitations_per_day` | invitations a person may send in a day, cancelled ones too (default 50) |
@@ -953,6 +992,72 @@ vault at once: while the database is at it, every vault is full
 (`vault_full` with `server: true`), whatever its own limit; deleting for
 good and the rest go on. (Older servers turned read-only instead, which
 also refused deleting.)
+
+**Limits per person.** On a server many people share, limits per client
+address aren't enough: one person can come from many. So each person — an
+account together with its agents, which can't add to it — also has:
+
+* **A request rate**: their `rate_allowance`, else `person_rate_limit_rps`,
+  per second with bursts of 4 ×, over every authenticated request (REST,
+  administration by people with the admin role too) and every WebSocket
+  push. Beyond it: `429 rate_limited` with `Retry-After`, before anything
+  is done. Admin clients and requests without a session count only per
+  address.
+* **A daily write allowance**: their `write_allowance`, else
+  `writes_per_day_mb`, in MiB. Every change they or their agents send
+  counts what it sends — the request body (its `Content-Length`; one
+  without counts as the largest the server takes), or the message of a
+  WebSocket push —, at least 1 KiB each, whether or not it is stored: a
+  change is a `POST`, `PUT` or `PATCH` that read-only mode refuses (below),
+  so updates, revisions, files, keys, membership-log entries, vaults,
+  shares and invitations; not signing in or out, devices, the account's
+  keys and settings, or deleting anything. Notes travel as base64, so they
+  count about 4/3 of their size. It refills evenly over 24 hours, so a full
+  allowance can be used at once and is back a day later; a new one applies
+  at once to what was used (more room now, or less). A change is
+  counted before it is handled, and accepted while any allowance is left
+  (the last one may go past it, by its own size at most); beyond it: `429
+  write_limit` with `Retry-After` (when some is back), nothing done. It
+  closes what limits on storage leave open: what is deleted for good stops
+  counting at once, but the server keeps it for `purge_undo_days`, so
+  filling a vault, emptying its trash and filling it again would otherwise
+  grow the server without bound; and things that count toward no limit
+  (rotating a vault's key adds envelopes; the membership log only grows)
+  can't be repeated without end either.
+* **Suspension**: a suspended account (and its agents) is refused every
+  request with `429 suspended` and `Retry-After` until it ends — signing in
+  still works, nothing after it does —, and its WebSocket connections end
+  (§7). Administrators suspend and lift (`suspended_until`, above; not
+  themselves). Unless `auto_suspend_minutes` is `0`, the server suspends
+  someone for that long when one of their sessions — a device, a browser,
+  an agent — keeps sending requests the limits per person refuse, as a
+  script that doesn't wait as told does: each refusal on a session (by the
+  request rate, over REST; by any of the WebSocket's budgets for pushes and
+  (un)subscriptions, of the connection or the person) adds one to that
+  session's count — on the WebSocket, that connection's: a browser's tabs
+  share a session —, which drains by 20 per second; at 12 000 (ten minutes
+  of 20 a second) the person is suspended. Apps that wait as `Retry-After`
+  says are refused at most once a second for each request they have going
+  at once, far below it, however low their rate; a script sending 100
+  requests a second past its rate gets there in two and a half minutes.
+  Refusals while suspended, by the daily write allowance, or of awareness
+  (which is only dropped) don't count. Each suspension, and each lifting,
+  is in the person's audit log (`GET /me/audit`: `account.suspended` with
+  until when, by the server or by whom; `account.unsuspended`).
+
+The request rate, the write allowance and the counts are kept in memory: a
+restart starts everyone afresh. A suspension is kept in the database. `GET
+/admin/users` shows each person's refusals of the last 24 hours (in memory
+too) and their suspension, and `limited=true` lists only those refused or
+suspended in that time, the most refused first, so administrators can see
+who runs into the limits and give them more room, less, or suspend them.
+
+Apps older than these limits don't know `write_limit` or `suspended`: they
+keep refused changes, but send them again only when they reconnect or are
+reloaded (the CLI gives up on the request after 30 s), and a suspended one
+keeps reconnecting until the suspension ends. A server that sets a write
+allowance should also raise `oldest_app_version` to the first release that
+knows them, so older apps are told to update instead.
 
 ## 10. Operations endpoints
 

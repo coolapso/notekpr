@@ -117,6 +117,7 @@ async fn an_admin_client_manages_the_instance_but_never_reaches_a_vault() {
     let tests = InstanceSettings {
         rate_limit_rps: 10_000,
         auth_rate_limit_per_min: 10_000,
+        person_rate_limit_rps: 10_000,
         snapshot_cooldown_secs: 0,
         ..Default::default()
     };

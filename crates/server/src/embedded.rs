@@ -79,6 +79,7 @@ impl Embedded {
                     &state.db,
                     &InstanceSettingsUpdate {
                         rate_limit_rps: Some(10_000),
+                        person_rate_limit_rps: Some(10_000),
                         ..Default::default()
                     },
                 )

@@ -408,6 +408,16 @@ notes](writing.md) and [Drawings](drawings.md).
   more; the admin page lists vaults by size with their ids and owners, never
   their names. Each person's Personal storage (quick notes, saved shapes)
   has a size of its own, by default and for one person.
+* Limits per person, for a server many people share: requests per second
+  and how much someone may change in a day, from all their devices and
+  agents (by default and for one person). Past the day's allowance their
+  edits wait in their apps, which say from when they go. Someone whose
+  apps keep sending what these refuse — a script not waiting as told — is
+  suspended for a while (an hour by default; it can be turned off), and
+  administrators suspend someone or lift it themselves; the apps say until
+  when and keep the edits. *Limited* on the admin page lists who ran into
+  the limits lately, how often — never what for. Limits per address count
+  an IPv6 address by its /64 network.
   From the admin page, or from scripts (a billing system, say) as admin
   clients: each with its own scopes and tokens, rotated and revoked without
   a restart, and never reaching a vault. An instance can leave everything to

@@ -96,6 +96,10 @@ pub struct PutOutcome {
     /// They wait because the vault is full, until it has room.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub vault_full: bool,
+    /// They wait because the server holds this person's changes back for
+    /// a while (`crate::api::Held`).
+    #[serde(skip)]
+    pub held: Option<crate::api::Held>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -359,6 +363,7 @@ async fn finish(hub: &Hub, vault_id: &str, res: WriteResult, content: &[u8]) -> 
         pending_changes: push.remaining,
         read_only: push.read_only,
         vault_full: push.vault_full,
+        held: push.held,
     }
 }
 
@@ -1031,6 +1036,8 @@ pub struct LibraryChange {
     pub read_only: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub vault_full: bool,
+    #[serde(skip)]
+    pub held: Option<crate::api::Held>,
 }
 
 /// Change the saved shapes, in the Personal storage, with `change` (given
@@ -1068,6 +1075,7 @@ async fn change_library(
         pending_changes: push.remaining,
         read_only: push.read_only,
         vault_full: push.vault_full,
+        held: push.held,
     })
 }
 
@@ -1119,6 +1127,8 @@ pub struct LibraryImport {
     pub read_only: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub vault_full: bool,
+    #[serde(skip)]
+    pub held: Option<crate::api::Held>,
 }
 
 /// Add the items of an `.excalidrawlib` file to the saved shapes (in the
@@ -1156,6 +1166,7 @@ pub async fn import_library(hub: &Hub, file: &str) -> OpResult<LibraryImport> {
         pending_changes: push.remaining,
         read_only: push.read_only,
         vault_full: push.vault_full,
+        held: push.held,
     })
 }
 

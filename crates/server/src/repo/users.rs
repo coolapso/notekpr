@@ -467,6 +467,7 @@ pub async fn admin_list(
     let rows = sqlx::query(
         "SELECT u.id, u.display_name, u.email, u.kind, u.owner_id, u.is_admin, u.disabled, u.created_at, u.last_login_at,
                 u.vault_allowance, u.agent_allowance, u.quick_note_allowance, u.quick_notes_storage_allowance,
+                u.rate_allowance, u.write_allowance, u.suspended_until,
                 (SELECT COUNT(*) FROM vault_members m JOIN vaults v ON v.id = m.vault_id
                  WHERE m.user_id = u.id AND v.kind = 'regular') AS vault_count,
                 (SELECT COUNT(*) FROM devices d WHERE d.user_id = u.id AND d.status = 'active') AS device_count,
@@ -513,6 +514,11 @@ pub async fn admin_list(
             agent_allowance: allowance(r.get("agent_allowance")),
             quick_note_allowance: allowance(r.get("quick_note_allowance")),
             quick_notes_storage_allowance: allowance(r.get("quick_notes_storage_allowance")),
+            rate_allowance: allowance(r.get("rate_allowance")),
+            write_allowance: allowance(r.get("write_allowance")),
+            suspended_until: r.get("suspended_until"),
+            // Counted in memory (`person_limits.rs`), filled in by the route.
+            refused: Default::default(),
         })
         .collect())
 }
@@ -565,6 +571,49 @@ pub async fn set_agent_allowance(
         .execute(db)
         .await?;
     Ok(())
+}
+
+/// A person's own request rate (requests per second).
+pub async fn set_rate_allowance(
+    db: impl SqliteExecutor<'_>,
+    id: &str,
+    a: Allowance,
+) -> AppResult<()> {
+    sqlx::query("UPDATE users SET rate_allowance = ? WHERE id = ? AND kind = 'human'")
+        .bind(allowance_column(a))
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// A person's own daily write allowance (MiB).
+pub async fn set_write_allowance(
+    db: impl SqliteExecutor<'_>,
+    id: &str,
+    a: Allowance,
+) -> AppResult<()> {
+    sqlx::query("UPDATE users SET write_allowance = ? WHERE id = ? AND kind = 'human'")
+        .bind(allowance_column(a))
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Suspend a person until then (ms), or lift it (`None`): whether there is
+/// such a person (agents have no suspension of their own).
+pub async fn set_suspended(
+    db: impl SqliteExecutor<'_>,
+    id: &str,
+    until: Option<i64>,
+) -> AppResult<bool> {
+    let r = sqlx::query("UPDATE users SET suspended_until = ? WHERE id = ? AND kind = 'human'")
+        .bind(until)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(r.rows_affected() > 0)
 }
 
 pub async fn set_quick_note_allowance(

@@ -277,6 +277,18 @@ fn Banners() -> impl IntoView {
                     ReadOnly::StorageFull => "The server's storage is full.",
                 }}{format!(" Your edits are kept {} and sent as soon as it accepts changes again.", crate::desktop::in_here())}</span></div>
         })}
+        {move || ui.held.get().map(|h| {
+            let when = util::about_when(h.until);
+            let here = crate::desktop::in_here();
+            view! {
+                <div class="banner warn held-banner"><Icon name="cloud-off"/>
+                    <span>{if h.suspended {
+                        format!("Your account on this server is suspended until {when}. Your edits are kept {here} and sent then.")
+                    } else {
+                        format!("You've changed as much as this server allows for now. Your edits are kept {here} and sent from {when}.")
+                    }}</span></div>
+            }
+        })}
         <VaultFullBanner/>
         {move || ui.warning.get().map(|w| view! {
             <div class="banner warn"><Icon name="alert"/><span>{w}</span>
@@ -376,6 +388,8 @@ pub fn SyncStatus() -> impl IntoView {
         <span class="sync" title=move || match (ui.conn.get(), ui.pending.get()) {
             (_, n) if ui.outdated.get() && crate::desktop::is_desktop() => format!("This app is out of date: changes to {n} document(s) are kept on this computer and sync once you've installed the new version"),
             (_, n) if ui.outdated.get() => format!("This page is out of date: changes to {n} document(s) are kept in this browser and sync after a reload"),
+            (_, n) if ui.held.get().is_some_and(|h| h.suspended) => format!("Your account is suspended: changes to {n} document(s) are kept and will sync when it ends"),
+            (_, n) if ui.held.get().is_some() => format!("You've changed as much as this server allows for now: changes to {n} document(s) are kept and will sync later"),
             (ConnState::Open, n) if ui.read_only.get().is_some() => format!("The server is read-only: changes to {n} document(s) are kept and will sync when it accepts changes again"),
             (ConnState::Open, n) if n > 0 && !ui.full.with(|f| f.is_empty()) => format!("A vault is full: changes to {n} document(s) are kept and will sync once it has room"),
             (ConnState::Open, 0) => "All changes synced (end-to-end encrypted)".to_string(),
@@ -386,6 +400,10 @@ pub fn SyncStatus() -> impl IntoView {
         }>
             {move || match (ui.conn.get(), ui.pending.get()) {
                 (_, n) if ui.outdated.get() => view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{if n > 0 { format!("Out of date · {n}") } else { "Out of date".into() }}</span> }.into_any(),
+                (_, n) if ui.held.get().is_some() => {
+                    let what = if ui.held.get().is_some_and(|h| h.suspended) { "Suspended" } else { "Waiting" };
+                    view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{if n > 0 { format!("{what} · {n}") } else { what.into() }}</span> }.into_any()
+                }
                 (ConnState::Open, n) if ui.read_only.get().is_some() => view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{if n > 0 { format!("Read-only · {n}") } else { "Read-only".into() }}</span> }.into_any(),
                 (ConnState::Open, n) if n > 0 && !ui.full.with(|f| f.is_empty()) => view! { <Icon name="cloud-off" class="warn"/><span class="lbl">{format!("Vault full · {n}")}</span> }.into_any(),
                 (ConnState::Open, 0) => view! { <Icon name="cloud" class="ok"/><span class="lbl">"Synced"</span> }.into_any(),

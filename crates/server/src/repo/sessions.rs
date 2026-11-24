@@ -24,6 +24,11 @@ pub struct SessionAuth {
     pub disabled: bool,
     /// For agents: whether the owning person's account is disabled.
     pub owner_disabled: bool,
+    /// The person's own limits (for agents, their owner's), as stored:
+    /// `users.rate_allowance`, `write_allowance`, `suspended_until`.
+    pub rate_allowance: Option<i64>,
+    pub write_allowance: Option<i64>,
+    pub suspended_until: Option<i64>,
 }
 
 pub async fn by_token_hash(
@@ -33,7 +38,10 @@ pub async fn by_token_hash(
     Ok(sqlx::query(
         "SELECT s.id, s.user_id, s.device_id, s.kind AS skind, s.expires_at, s.revoked_at, s.last_used_at,
                 u.kind AS ukind, u.display_name, u.is_admin, u.disabled, u.owner_id,
-                COALESCE(o.disabled, 0) AS owner_disabled
+                COALESCE(o.disabled, 0) AS owner_disabled,
+                CASE WHEN u.owner_id IS NULL THEN u.rate_allowance ELSE o.rate_allowance END AS rate_allowance,
+                CASE WHEN u.owner_id IS NULL THEN u.write_allowance ELSE o.write_allowance END AS write_allowance,
+                CASE WHEN u.owner_id IS NULL THEN u.suspended_until ELSE o.suspended_until END AS suspended_until
          FROM sessions s JOIN users u ON u.id = s.user_id
          LEFT JOIN users o ON o.id = u.owner_id
          WHERE s.token_hash = ?",
@@ -55,6 +63,9 @@ pub async fn by_token_hash(
         owner_id: row.get("owner_id"),
         disabled: row.get("disabled"),
         owner_disabled: row.get("owner_disabled"),
+        rate_allowance: row.get("rate_allowance"),
+        write_allowance: row.get("write_allowance"),
+        suspended_until: row.get("suspended_until"),
     }))
 }
 
@@ -254,6 +265,30 @@ pub async fn revoke_for_issuer(
     .execute(db)
     .await?
     .rows_affected())
+}
+
+/// An agent's sessions after it got a new one: those that ended go, and of
+/// the others only the newest `keep` stay (older tokens stop working), so
+/// minting tokens can't grow the table without bound.
+pub async fn keep_latest_agent_sessions(
+    db: impl SqliteExecutor<'_>,
+    agent_id: &str,
+    now: i64,
+    keep: i64,
+) -> AppResult<()> {
+    sqlx::query(
+        "DELETE FROM sessions WHERE user_id = ?1 AND kind = 'agent' AND (
+            expires_at <= ?2 OR revoked_at IS NOT NULL
+            OR id NOT IN (SELECT id FROM sessions
+                          WHERE user_id = ?1 AND kind = 'agent' AND revoked_at IS NULL AND expires_at > ?2
+                          ORDER BY created_at DESC, id LIMIT ?3))",
+    )
+    .bind(agent_id)
+    .bind(now)
+    .bind(keep)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 /// Forget sessions that expired or were revoked before `before`.

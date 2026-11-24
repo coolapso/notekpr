@@ -131,6 +131,10 @@ pub struct CredentialLogin {
     pub agent_disabled: bool,
     /// `None` if the agent has no owner row (it always should).
     pub owner_disabled: Option<bool>,
+    /// Whose limits per person its tokens count against.
+    pub owner_id: Option<String>,
+    /// Until when its owner is suspended, if they are or were.
+    pub owner_suspended_until: Option<i64>,
 }
 
 pub async fn credential_login(
@@ -138,7 +142,8 @@ pub async fn credential_login(
     client_id: &str,
 ) -> AppResult<Option<CredentialLogin>> {
     Ok(sqlx::query(
-        "SELECT c.agent_id, c.secret_hash, c.revoked_at, a.disabled AS agent_disabled, o.disabled AS owner_disabled
+        "SELECT c.agent_id, c.secret_hash, c.revoked_at, a.disabled AS agent_disabled, o.disabled AS owner_disabled,
+                a.owner_id, o.suspended_until AS owner_suspended_until
          FROM agent_credentials c JOIN users a ON a.id = c.agent_id LEFT JOIN users o ON o.id = a.owner_id
          WHERE c.client_id = ?",
     )
@@ -151,6 +156,8 @@ pub async fn credential_login(
         revoked_at: row.get("revoked_at"),
         agent_disabled: row.get("agent_disabled"),
         owner_disabled: row.get("owner_disabled"),
+        owner_id: row.get("owner_id"),
+        owner_suspended_until: row.get("owner_suspended_until"),
     }))
 }
 

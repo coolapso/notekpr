@@ -173,6 +173,20 @@ pub fn clock_time(ms: i64) -> String {
     format!("{:02}:{:02}", d.get_hours(), d.get_minutes())
 }
 
+/// When a time to come is, in words: "about 15:04" today, "tomorrow at
+/// about 15:04", else its date too.
+pub fn about_when(ms: i64) -> String {
+    let day = |ms: i64| date(ms);
+    let at = clock_time(ms);
+    if day(ms) == day(now_ms()) {
+        format!("about {at}")
+    } else if day(ms) == day(now_ms() + 86_400_000) {
+        format!("tomorrow at about {at}")
+    } else {
+        format!("{} at about {at}", date(ms))
+    }
+}
+
 /// "1 note", "3 notes".
 pub fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })

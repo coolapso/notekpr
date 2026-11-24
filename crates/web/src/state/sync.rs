@@ -32,9 +32,9 @@ pub fn send(c: &Core, m: &ClientMessage) -> bool {
     }
 }
 
-pub(super) fn subscribe(c: &Core, vault_id: &str) {
+pub(super) fn subscribe(c: &mut Core, vault_id: &str) {
     if let Some(since) = c.replicas.get(vault_id).map(|r| r.seq) {
-        send(
+        let sent = send(
             c,
             &ClientMessage::Subscribe {
                 vault_id: vault_id.to_string(),
@@ -42,6 +42,9 @@ pub(super) fn subscribe(c: &Core, vault_id: &str) {
                 object_id: None,
             },
         );
+        if sent {
+            c.awaiting.insert((vault_id.to_string(), None));
+        }
     }
 }
 
@@ -52,6 +55,7 @@ pub(super) fn on_server_message(m: ServerMessage) {
             let offline_start = step(|c| {
                 c.conn_id = conn_id;
                 c.presence_note = None;
+                c.awaiting.clear();
                 // Subscribing again, we hear afresh which vaults are full.
                 c.full.clear();
                 ui().full.set(BTreeSet::new());
@@ -302,10 +306,29 @@ pub(super) fn on_server_message(m: ServerMessage) {
             code,
             message,
             vault_id,
+            retry_after,
         } => {
             // (Older servers refuse whole pushes; newer ones list single
             // refused updates in the acknowledgement, see `react`.)
-            if code == ERROR_VAULT_FULL {
+            if code == ERROR_WRITE_LIMIT || code == ERROR_SUSPENDED {
+                // Held back for a while (a suspension also ends the
+                // connection): the push waits in this browser until then.
+                step(|c| {
+                    if let Some(o) = vault_id.as_ref().and_then(|v| c.outboxes.get_mut(v)) {
+                        o.connection_reset();
+                    }
+                    set_held(c, retry_after, code == ERROR_SUSPENDED);
+                });
+            } else if code == ERROR_RATE_LIMITED {
+                // Refused before it was handled (too many at once): the push,
+                // or the subscription, again in a moment.
+                step(|c| {
+                    if let Some(o) = vault_id.as_ref().and_then(|v| c.outboxes.get_mut(v)) {
+                        o.connection_reset();
+                    }
+                    retry_refused(c, retry_after);
+                });
+            } else if code == ERROR_VAULT_FULL {
                 // It filled up while this push was on its way (a `vault_full`
                 // saying so follows): the push waits for room.
                 if let Some(v) = vault_id {
@@ -399,6 +422,64 @@ fn set_vault_full(c: &mut Core, vault_id: &str, full: bool) {
 
 /// After a push refused as read-only without a `mode` saying so: try again.
 const READ_ONLY_RETRY_MS: i32 = 15_000;
+
+/// Changes held back are tried again after this long at most, even if the
+/// server said later: an administrator may give more room, or lift a
+/// suspension, meanwhile.
+const HELD_RETRY_MS: i64 = 15 * 60_000;
+
+/// The server holds this person's changes back for `retry_after` seconds
+/// (their daily write allowance is used up, or the account is suspended:
+/// docs/protocol.md §9): edits wait in this browser, and say until when;
+/// then — or after [`HELD_RETRY_MS`] — everything is sent again.
+pub(super) fn set_held(c: &mut Core, retry_after: Option<u64>, suspended: bool) {
+    let wait = retry_after.unwrap_or(60).max(1) as i64 * 1000;
+    let held = Held {
+        until: util::now_ms() + wait,
+        suspended,
+    };
+    c.held = Some(held);
+    ui().held.set(Some(held));
+    update_pending_count(c);
+    util::set_timeout((wait.min(HELD_RETRY_MS) + 1000) as i32, move || {
+        step(|c| {
+            // Unless another hold came meanwhile.
+            if c.held == Some(held) {
+                c.held = None;
+                ui().held.set(None);
+                flush_now(c);
+                // Changes set aside to go out in a revision, too.
+                let vaults: Vec<String> = c.outboxes.keys().cloned().collect();
+                for v in vaults {
+                    carry(c, &v);
+                }
+            }
+        })
+    });
+}
+
+/// The server refused a push or a subscription for now: after `retry_after`
+/// seconds, the subscriptions that haven't said `synced` are sent again and
+/// so are the pushes — once, however many were refused meanwhile.
+fn retry_refused(c: &mut Core, retry_after: Option<u64>) {
+    if std::mem::replace(&mut c.retrying, true) {
+        return;
+    }
+    let wait = retry_after.unwrap_or(1).clamp(1, 60) as i32 * 1000;
+    util::set_timeout(wait + (js_sys::Math::random() * 500.0) as i32, || {
+        step(|c| {
+            c.retrying = false;
+            let awaiting: Vec<(String, Option<String>)> = c.awaiting.iter().cloned().collect();
+            for (v, note) in awaiting {
+                match note {
+                    None => subscribe(c, &v),
+                    Some(n) => subscribe_share(c, &v, &n),
+                }
+            }
+            flush_now(c);
+        })
+    });
+}
 
 /// The server says whether it accepts changes. While it doesn't, edits stay
 /// queued (and stored in this browser); once it does, they all go out.
@@ -523,6 +604,7 @@ pub(super) fn drop_rejected(c: &mut Core, vault_id: &str) -> bool {
 /// The first catch-up of a vault (or a later one) is complete (an edge).
 pub(super) fn on_synced(vault_id: &str, head: i64) {
     let (rolled_back, applied, first_sync) = step(|c| {
+        c.awaiting.remove(&(vault_id.to_string(), None));
         c.loaded.insert(vault_id.to_string());
         let first = c.synced.insert(vault_id.to_string());
         if first {
@@ -736,8 +818,8 @@ pub(super) fn resend_pending(c: &mut Core, vault_id: &str) {
 /// edits meanwhile.
 pub(super) fn send_planned(c: &mut Core, vault_id: &str) {
     // The server would refuse it: wait until it says it accepts changes,
-    // or that the vault has room.
-    if c.read_only.is_some() || c.full.contains(vault_id) {
+    // or that the vault has room, or until it said it holds them back.
+    if c.read_only.is_some() || c.full.contains(vault_id) || c.held.is_some() {
         update_pending_count(c);
         return;
     }
@@ -788,6 +870,9 @@ pub(super) fn send_planned(c: &mut Core, vault_id: &str) {
 /// carry them to everyone (`notekpr_sync::carrier_now`). One per note
 /// at a time, and within the server's snapshot cooldown.
 fn carry(c: &mut Core, vault_id: &str) {
+    if c.held.is_some() {
+        return;
+    }
     let candidates = c
         .outboxes
         .get(vault_id)
@@ -922,7 +1007,8 @@ pub(super) fn adopt_stored_new_keys(c: &mut Core, vault_id: &str) -> Vec<String>
 /// Register new notes' keys, then send their content.
 async fn register_keys(vault_id: String, keys: Vec<notekpr_sync::NewKey>) {
     let mut decided = false;
-    for k in keys {
+    let mut keys = keys.into_iter();
+    while let Some(k) = keys.next() {
         let path = format!("/vaults/{vault_id}/objects/{}/key", k.object_id);
         match api::put::<_, ()>(&path, &k.update).await {
             Ok(()) => {
@@ -936,6 +1022,17 @@ async fn register_keys(vault_id: String, keys: Vec<notekpr_sync::NewKey>) {
             // Offline or a server problem: tried again with a later plan
             // (the next edit or reconnect).
             Err(e) if e.status == 0 || e.status >= 500 => {}
+            // Held back for a while (too many at once, the daily allowance
+            // used up, suspended): this one and the rest of the batch wait
+            // for a later plan (the end of the hold, the next edit).
+            Err(e) if e.status == 429 => {
+                step(|c| {
+                    for k in std::iter::once(k).chain(keys.by_ref()) {
+                        c.registering.remove(&(vault_id.clone(), k.object_id));
+                    }
+                });
+                break;
+            }
             // The quick notes are full, or the drawings: the note or
             // drawing stays on this device until there's room.
             Err(e)
@@ -1441,7 +1538,7 @@ const SNAPSHOT_COOLDOWN_MS: i64 = 30_000;
 
 /// Store a snapshot of a note (in the background).
 pub fn snapshot(c: &mut Core, vault_id: &str, object_id: &str) {
-    if c.read_only.is_some() || c.full.contains(vault_id) {
+    if c.read_only.is_some() || c.full.contains(vault_id) || c.held.is_some() {
         return;
     }
     let key = (vault_id.to_string(), object_id.to_string());

@@ -57,7 +57,7 @@ fn inserted(r: Result<SqliteQueryResult, sqlx::Error>) -> AppResult<bool> {
 
 /// An allowance (a person's or vault's own limit) is stored as NULL (the
 /// instance's default), -1 (unlimited) or the number.
-fn allowance(v: Option<i64>) -> Allowance {
+pub(crate) fn allowance(v: Option<i64>) -> Allowance {
     match v {
         None => Allowance::Default,
         Some(n) if n < 0 => Allowance::Unlimited,

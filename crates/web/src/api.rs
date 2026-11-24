@@ -2,7 +2,9 @@
 
 use std::cell::RefCell;
 
-use notekpr_core::protocol::{APP_HEADER, ApiError, ERROR_UPDATE_REQUIRED, app_id};
+use notekpr_core::protocol::{
+    APP_HEADER, ApiError, ERROR_SUSPENDED, ERROR_UPDATE_REQUIRED, ERROR_WRITE_LIMIT, app_id,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use wasm_bindgen::{JsCast, JsValue};
@@ -74,6 +76,7 @@ thread_local! {
     static TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
     static ON_UNAUTHORIZED: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
     static ON_OUTDATED: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+    static ON_HELD: RefCell<Option<Box<dyn Fn(Option<u64>, bool)>>> = const { RefCell::new(None) };
 }
 
 pub fn set_token(t: Option<String>) {
@@ -105,6 +108,13 @@ pub fn unauthorized() {
 /// ([`ERROR_UPDATE_REQUIRED`], over REST or the WebSocket).
 pub fn on_outdated(f: impl Fn() + 'static) {
     ON_OUTDATED.with(|x| *x.borrow_mut() = Some(Box::new(f)));
+}
+
+/// What to do when the server holds this person's changes back
+/// (`write_limit`, `suspended`): for how many seconds, and whether because
+/// the account is suspended.
+pub fn on_held(f: impl Fn(Option<u64>, bool) + 'static) {
+    ON_HELD.with(|x| *x.borrow_mut() = Some(Box::new(f)));
 }
 
 pub fn outdated() {
@@ -142,6 +152,12 @@ async fn send(
         return Ok(resp);
     }
     let status = resp.status();
+    let retry_after: Option<u64> = resp
+        .headers()
+        .get("Retry-After")
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse().ok());
     let text = match resp.text() {
         Ok(p) => JsFuture::from(p)
             .await
@@ -159,6 +175,13 @@ async fn send(
     }
     if code == ERROR_UPDATE_REQUIRED {
         outdated();
+    }
+    if status == 429 && (code == ERROR_WRITE_LIMIT || code == ERROR_SUSPENDED) {
+        ON_HELD.with(|x| {
+            if let Some(f) = &*x.borrow() {
+                f(retry_after, code == ERROR_SUSPENDED)
+            }
+        });
     }
     Err(Error {
         status,

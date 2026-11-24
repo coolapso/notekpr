@@ -57,6 +57,10 @@ pub struct PushOutcome {
     pub read_only: bool,
     /// The vault is full: everything stays queued until it has room.
     pub vault_full: bool,
+    /// The server holds this person's changes back for this long (their
+    /// daily write allowance is used up, or their account is suspended):
+    /// everything stays queued, and nothing is sent before then.
+    pub held: Option<crate::api::Held>,
     /// Updates set aside in this push because the server can't accept them.
     pub quarantined: usize,
     /// Notes whose set-aside updates went out in a snapshot carrying them.
@@ -853,6 +857,11 @@ impl Session {
                     out.remaining = v.replica.pending.len();
                     return Ok(out);
                 }
+                Err(e) if e.held().is_some() => {
+                    out.held = e.held();
+                    out.remaining = vault.lock().await.replica.pending.len();
+                    return Ok(out);
+                }
                 Err(e) if e.is_read_only() || e.is_offline() => {
                     out.read_only = e.is_read_only();
                     out.offline = !out.read_only;
@@ -899,6 +908,10 @@ impl Session {
                     }
                     Err(e) if e.is_offline() => {
                         out.offline = true;
+                        break 'rounds;
+                    }
+                    Err(e) if e.held().is_some() => {
+                        out.held = e.held();
                         break 'rounds;
                     }
                     // No room in the quick notes, or for another drawing:
@@ -999,6 +1012,11 @@ impl Session {
                         out.read_only = true;
                         break 'rounds;
                     }
+                    Err(e) if e.held().is_some() => {
+                        not_sent(&mut *vault.lock().await, pushes);
+                        out.held = e.held();
+                        break 'rounds;
+                    }
                     Err(e) if e.is_vault_full() => {
                         let mut v = vault.lock().await;
                         not_sent(&mut v, pushes);
@@ -1056,8 +1074,10 @@ impl Session {
                 }
             }
         }
-        if !out.offline && !out.read_only && !out.vault_full {
-            out.carried = self.carry(vault).await?;
+        if !out.offline && !out.read_only && !out.vault_full && out.held.is_none() {
+            let (carried, held) = self.carry(vault).await?;
+            out.carried = carried;
+            out.held = held;
         }
         out.remaining = vault.lock().await.replica.pending.len();
         Ok(out)
@@ -1065,19 +1085,20 @@ impl Session {
 
     /// Updates set aside as too large go out in snapshots of their notes,
     /// which carry them to everyone (`notekpr_sync::carrier_now`).
-    /// Returns how many notes went out.
-    async fn carry(&self, vault: &SharedVault) -> Result<usize> {
+    /// Returns how many notes went out, and whether the server holds changes
+    /// back now.
+    async fn carry(&self, vault: &SharedVault) -> Result<(usize, Option<crate::api::Held>)> {
         let (id, candidates) = {
             let v = vault.lock().await;
             (v.id().to_string(), v.outbox.carry_candidates())
         };
         if candidates.is_empty() {
-            return Ok(0);
+            return Ok((0, None));
         }
         // A snapshot's `covers_seq` is our cursor: catch up first (protocol §6).
         match self.catch_up(vault).await {
             Ok(_) => {}
-            Err(e) if e.is_offline() => return Ok(0),
+            Err(e) if e.is_offline() => return Ok((0, None)),
             Err(e) => return Err(anyhow!(e).context("catching up before a snapshot")),
         }
         let mut n = 0;
@@ -1095,6 +1116,8 @@ impl Session {
                     v.save()?;
                     n += 1;
                 }
+                // Held back for a while: the rest waits too.
+                Err(e) if e.held().is_some() => return Ok((n, e.held())),
                 // Offline, or the server's snapshot cooldown: the next push.
                 Err(e) if e.is_offline() || e.status() == Some(429) => {}
                 Err(e) => {
@@ -1102,7 +1125,7 @@ impl Session {
                 }
             }
         }
-        Ok(n)
+        Ok((n, None))
     }
 
     /// Upload compacted snapshots for objects with many updates. `jitter`

@@ -30,6 +30,8 @@ pub struct Socket {
     /// When the server said it's restarting (ms; 0 = it didn't): retrying
     /// quickly for a while since then.
     restart_at: Cell<i64>,
+    /// Not before then (ms): the account is suspended until about then.
+    held_until: Cell<i64>,
     last_rx: Cell<i64>,
     stopped: Cell<bool>,
     on_message: OnMessage,
@@ -46,6 +48,10 @@ pub struct Socket {
 /// and to show "connecting" rather than "offline" meanwhile.
 const RESTART_WINDOW_MS: i64 = 60_000;
 const RESTART_QUIET_MS: i64 = 15_000;
+
+/// After the server said the account is suspended, connect again when it
+/// ends — or after this long at most, as it may be lifted meanwhile.
+const SUSPENDED_RETRY_MS: i64 = 15 * 60_000;
 
 fn ws_url() -> String {
     // The desktop app: at the server the person chose.
@@ -83,6 +89,7 @@ impl Socket {
             ready: Cell::new(false),
             attempts: Cell::new(0),
             restart_at: Cell::new(0),
+            held_until: Cell::new(0),
             last_rx: Cell::new(now_ms()),
             stopped: Cell::new(false),
             on_message,
@@ -211,6 +218,15 @@ impl Socket {
             };
             match serde_json::from_str::<ServerMessage>(&text) {
                 Ok(m) => {
+                    if let ServerMessage::Error {
+                        code, retry_after, ..
+                    } = &m
+                        && code == notekpr_core::protocol::ERROR_SUSPENDED
+                    {
+                        let wait =
+                            (retry_after.unwrap_or(60) as i64 * 1000).min(SUSPENDED_RETRY_MS);
+                        s.held_until.set(now_ms() + wait);
+                    }
                     if let ServerMessage::Ready { .. } = &m {
                         s.ready.set(true);
                         s.restart_at.set(0);
@@ -257,7 +273,11 @@ impl Socket {
             return;
         }
         let restart = this.restart_at.get();
-        let delay = if restart > 0 && now_ms() - restart < RESTART_WINDOW_MS {
+        let held = this.held_until.get() - now_ms();
+        let delay = if held > 0 {
+            // Suspended: not before it ends (spread out a little).
+            held as i32 + (js_sys::Math::random() * 5000.0) as i32
+        } else if restart > 0 && now_ms() - restart < RESTART_WINDOW_MS {
             // The server is restarting: about every second, spread out so
             // not everyone comes back in the same instant.
             (250.0 + js_sys::Math::random() * 1000.0) as i32

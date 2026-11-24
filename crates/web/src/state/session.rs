@@ -71,6 +71,11 @@ pub async fn boot() {
             step(super::sync::outdated);
         }
     });
+    // Any request refused because the server holds changes back: nothing
+    // more is sent until then (`sync::set_held`).
+    api::on_held(|retry_after, suspended| {
+        step(|c| super::sync::set_held(c, retry_after, suspended))
+    });
     api::on_unauthorized(|| {
         let ui = self::ui();
         if ui.phase.get_untracked() != (Phase::SignedOut { error: None }) {

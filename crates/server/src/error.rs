@@ -1,9 +1,11 @@
+use std::time::Duration;
+
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use notekpr_core::protocol::{
-    ApiError, ERROR_LIMIT_REACHED, ERROR_READ_ONLY, ERROR_RESTARTING, ERROR_UPDATE_REQUIRED,
-    ERROR_VAULT_FULL, ReadOnly,
+    ApiError, ERROR_LIMIT_REACHED, ERROR_RATE_LIMITED, ERROR_READ_ONLY, ERROR_RESTARTING,
+    ERROR_SUSPENDED, ERROR_UPDATE_REQUIRED, ERROR_VAULT_FULL, ERROR_WRITE_LIMIT, ReadOnly,
 };
 use notekpr_core::version::Version;
 
@@ -30,8 +32,22 @@ pub enum AppError {
     /// Clients may then forget its keys; any other 404 must not make them.
     #[error("this device was removed from the account")]
     DeviceRevoked,
+    /// An answer, not a busy server (a snapshot within its cooldown): no
+    /// `Retry-After`.
     #[error("too many requests")]
     RateLimited,
+    /// A rate limit refused the request before it was handled: the same
+    /// request works after this long (`Retry-After`).
+    #[error("too many requests; try again in a moment")]
+    RateLimitedFor(Duration),
+    /// The person (an agent's owner) has sent as many changes as their daily
+    /// write allowance lets them for now (`person_limits.rs`); nothing was
+    /// done. Clients keep the change and send it after this long.
+    #[error("you have changed as much as this server allows for now; try again later")]
+    WriteLimit(Duration),
+    /// The account (an agent's owner's) is suspended until then (ms).
+    #[error("this account is suspended for now")]
+    Suspended(i64),
     /// The server refuses changes for now (see `instance.rs`); clients keep
     /// them and send them when it's writable again.
     #[error("{}", read_only_message(*.0))]
@@ -80,7 +96,9 @@ impl AppError {
             AppError::StaleKey(_) => "stale_key",
             AppError::TooLarge => "too_large",
             AppError::DeviceRevoked => "device_revoked",
-            AppError::RateLimited => "rate_limited",
+            AppError::RateLimited | AppError::RateLimitedFor(_) => ERROR_RATE_LIMITED,
+            AppError::WriteLimit(_) => ERROR_WRITE_LIMIT,
+            AppError::Suspended(_) => ERROR_SUSPENDED,
             AppError::ReadOnly(_) => ERROR_READ_ONLY,
             AppError::LimitReached(_) => ERROR_LIMIT_REACHED,
             AppError::VaultFull => ERROR_VAULT_FULL,
@@ -101,7 +119,10 @@ impl AppError {
             AppError::StaleKey(_) => StatusCode::PRECONDITION_FAILED,
             AppError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::DeviceRevoked => StatusCode::NOT_FOUND,
-            AppError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            AppError::RateLimited
+            | AppError::RateLimitedFor(_)
+            | AppError::WriteLimit(_)
+            | AppError::Suspended(_) => StatusCode::TOO_MANY_REQUESTS,
             AppError::ReadOnly(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::LimitReached(_) => StatusCode::FORBIDDEN,
             AppError::VaultFull => StatusCode::INSUFFICIENT_STORAGE,
@@ -109,6 +130,20 @@ impl AppError {
             AppError::Unavailable(_) | AppError::Restarting => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
+    }
+
+    /// When the same request may be made again, in whole seconds (at least
+    /// one): `Retry-After`, the WebSocket error's `retry_after`.
+    pub fn retry_after(&self) -> Option<u64> {
+        let wait = match self {
+            AppError::RateLimitedFor(d) | AppError::WriteLimit(d) => *d,
+            AppError::Suspended(until) => {
+                Duration::from_millis(until.saturating_sub(crate::db::now()).max(0) as u64)
+            }
+            AppError::Restarting => Duration::from_secs(1),
+            _ => return None,
+        };
+        Some((wait.as_secs() + u64::from(wait.subsec_nanos() > 0)).max(1))
     }
 
     pub fn body(&self) -> ApiError {
@@ -134,12 +169,12 @@ impl IntoResponse for AppError {
             tracing::error!(error = %e, "internal error");
         }
         let mut resp = (self.status(), Json(self.body())).into_response();
-        if let AppError::Restarting = self {
-            // Only here: what else says 503 (read-only mode) won't change
-            // by trying again.
+        // Only these: what else says 503 (read-only mode) or 429 (a
+        // snapshot's cooldown) won't change by trying again.
+        if let Some(secs) = self.retry_after() {
             resp.headers_mut().insert(
                 axum::http::header::RETRY_AFTER,
-                axum::http::HeaderValue::from_static("1"),
+                axum::http::HeaderValue::from(secs),
             );
         }
         resp

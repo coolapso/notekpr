@@ -329,6 +329,8 @@ pub struct Ui {
     pub conn: RwSignal<ConnState>,
     /// Set while the server refuses changes (`Core::read_only`).
     pub read_only: RwSignal<Option<ReadOnly>>,
+    /// Set while the server holds this person's changes back (`Core::held`).
+    pub held: RwSignal<Option<Held>>,
     /// Vaults at their storage limit (`Core::full`).
     pub full: RwSignal<BTreeSet<String>>,
     /// Whether they are full because the server's storage is (every vault
@@ -400,6 +402,7 @@ pub fn init_ui() -> Ui {
         content_rev: RwSignal::new(0),
         conn: RwSignal::new(ConnState::Connecting),
         read_only: RwSignal::new(None),
+        held: RwSignal::new(None),
         full: RwSignal::new(BTreeSet::new()),
         server_full: RwSignal::new(false),
         outdated: RwSignal::new(false),
@@ -595,6 +598,15 @@ pub struct PresenceEntry {
     pub seen: i64,
 }
 
+/// Changes the server holds back (docs/protocol.md §9, "Limits per
+/// person"): until when (ms), and whether because the account is suspended
+/// (else the person's daily write allowance is used up).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Held {
+    pub until: i64,
+    pub suspended: bool,
+}
+
 #[derive(Default)]
 pub struct Core {
     pub user_id: String,
@@ -614,6 +626,15 @@ pub struct Core {
     /// The server refuses changes for now, as the socket last said
     /// (`ServerMessage::Mode`): edits stay queued until it accepts them.
     pub read_only: Option<ReadOnly>,
+    /// The server holds this person's changes back for a while
+    /// (`sync::set_held`): edits stay queued until then.
+    pub held: Option<Held>,
+    /// Subscriptions sent on this connection that haven't said `synced`
+    /// (vault, and note for one shared on its own): sent again when the
+    /// server refused one for now (`sync::retry_refused`).
+    pub awaiting: BTreeSet<(String, Option<String>)>,
+    /// A retry of refused subscriptions and pushes is due (one at a time).
+    pub retrying: bool,
     /// Vaults at their storage limit, as the socket last said
     /// (`ServerMessage::VaultFull`, or a push refused with `vault_full`):
     /// their edits stay queued until they have room again.

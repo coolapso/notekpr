@@ -150,6 +150,11 @@ pub enum Control {
     RevokeObject(String, String),
     /// Session revoked (logout, device removal): close the connection.
     SessionRevoked(String),
+    /// The account (or an agent's owner) is suspended until then (ms):
+    /// close every connection, saying so.
+    Suspended(i64),
+    /// An administrator changed the person's own limits: read them again.
+    LimitsChanged,
     User(UserEventKind),
 }
 

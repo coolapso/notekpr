@@ -8,6 +8,11 @@
 //! 3. server streams `changes` pages, then `synced`, then live events in
 //!    sequence order; the client's own pushes come back as `ack` in that order.
 //!
+//! Every connection counts against its person's limits (`person_limits.rs`):
+//! how many they have at once, their request rate (pushes), budgets for
+//! (un)subscriptions and awareness, and the write allowance (pushes). A
+//! suspension ends them.
+//!
 //! When the server shuts down it closes every connection with
 //! [`CLOSE_RESTARTING`]: clients come back as soon as it's up again, or to
 //! the next version that takes over (`writer.rs`).
@@ -28,8 +33,10 @@ use tokio::task::JoinHandle;
 
 use crate::access;
 use crate::auth::{self, Principal};
-use crate::error::AppError;
+use crate::db;
+use crate::error::{AppError, AppResult};
 use crate::hub::{Control, RecvError, VaultEvent, VaultSubscription};
+use crate::person_limits::{self, Refusal};
 use crate::state::AppState;
 use crate::sync;
 
@@ -87,6 +94,7 @@ fn error_msg(e: &AppError, vault_id: Option<&str>) -> ServerMessage {
         code: body.error,
         message: body.message,
         vault_id: vault_id.map(str::to_string),
+        retry_after: e.retry_after(),
     }
 }
 
@@ -105,15 +113,29 @@ async fn connection(socket: WebSocket, state: AppState) {
         Ok(()) => auth::authenticate(&state, &token).await,
         Err(e) => Err(e),
     };
-    let who = match who {
-        Ok(p) => p,
-        Err(e) => {
-            let m = serde_json::to_string(&error_msg(&e, None)).unwrap();
-            let _ = sink.send(Message::Text(m.into())).await;
-            let _ = sink.close().await;
-            return;
+    let who = who.and_then(|who| match who.limits.suspended(db::now()) {
+        Some(until) => Err(AppError::Suspended(until)),
+        None => Ok(who),
+    });
+    let refused = match &who {
+        Ok(who) if !state.instance.people().connect(&who.limits.person) => {
+            Some(ServerMessage::Error {
+                code: AppError::RateLimited.code().into(),
+                message: "too many connections at once".into(),
+                vault_id: None,
+                retry_after: None,
+            })
         }
+        Ok(_) => None,
+        Err(e) => Some(error_msg(e, None)),
     };
+    if let Some(m) = refused {
+        let m = serde_json::to_string(&m).unwrap();
+        let _ = sink.send(Message::Text(m.into())).await;
+        let _ = sink.close().await;
+        return;
+    }
+    let who = who.expect("checked");
 
     let (conn_id, mut control) = state.hub.connect(&who.user_id);
     let (out_tx, mut out_rx) = mpsc::channel::<Out>(OUTBOUND_QUEUE);
@@ -224,6 +246,15 @@ async fn connection(socket: WebSocket, state: AppState) {
                     break;
                 }
                 Control::SessionRevoked(_) => {}
+                Control::Suspended(until) => {
+                    conn.send(error_msg(&AppError::Suspended(until), None)).await;
+                    break;
+                }
+                Control::LimitsChanged => {
+                    if !conn.revalidate().await {
+                        break;
+                    }
+                }
                 Control::User(event) => conn.send(ServerMessage::UserEvent { event }).await,
             },
             _ = keepalive.tick() => {
@@ -232,8 +263,7 @@ async fn connection(socket: WebSocket, state: AppState) {
                 }
             }
             _ = revalidate.tick() => {
-                if auth::authenticate(&state, &conn.token).await.is_err() {
-                    conn.send(ServerMessage::UserEvent { event: UserEventKind::SessionRevoked }).await;
+                if !conn.revalidate().await {
                     break;
                 }
             }
@@ -265,6 +295,7 @@ async fn connection(socket: WebSocket, state: AppState) {
     let _ = writer.await;
     // Gone only now that the close went out (a shutdown waits for it).
     state.hub.disconnect(&conn.who.user_id, conn_id);
+    state.instance.people().disconnect(&conn.who.limits.person);
     metrics::gauge!("notekpr_ws_connections").decrement(1.0);
 }
 
@@ -292,6 +323,62 @@ impl Conn {
         let _ = self.out.send(Out::Msg(m)).await;
     }
 
+    /// Check the session again, with the person's limits as they are now.
+    /// Returns false if the connection should close (it said why).
+    async fn revalidate(&mut self) -> bool {
+        match auth::authenticate(&self.state, &self.token).await {
+            Ok(fresh) => match fresh.limits.suspended(db::now()) {
+                Some(until) => {
+                    self.send(error_msg(&AppError::Suspended(until), None))
+                        .await;
+                    false
+                }
+                None => {
+                    self.who.limits = fresh.limits;
+                    true
+                }
+            },
+            Err(_) => {
+                self.send(ServerMessage::UserEvent {
+                    event: UserEventKind::SessionRevoked,
+                })
+                .await;
+                false
+            }
+        }
+    }
+
+    /// A push or (un)subscription: the connection's budget, then the
+    /// person's (`person_limits.rs`); a push of `bytes` counts against the
+    /// person's write allowance too.
+    async fn admit(&mut self, msg: &ClientMessage, bytes: usize) -> AppResult<()> {
+        let push = matches!(msg, ClientMessage::Push { .. });
+        let people = self.state.instance.people();
+        // Strikes count per connection: a browser's tabs share a session,
+        // and each waits as told on its own.
+        let strikes = format!("{}#{}", self.who.session_id, self.conn_id);
+        let (limits, session) = (&self.who.limits, strikes.as_str());
+        let refusal = if !self.requests.take() {
+            Some(Refusal {
+                wait: Duration::from_secs(1),
+                suspend: people.refused_on_connection(&limits.person, session),
+            })
+        } else if push {
+            let rate = limits.rate(&self.state.instance.settings());
+            people.request(&limits.person, session, rate).err()
+        } else {
+            people.subscription(&limits.person, session).err()
+        };
+        if let Some(r) = refusal {
+            person_limits::refused(&self.state, "ws", &limits.person, r.suspend).await;
+            return Err(AppError::RateLimitedFor(r.wait));
+        }
+        if push {
+            person_limits::reserve(&self.state, &self.who, bytes as u64)?;
+        }
+        Ok(())
+    }
+
     /// Returns false if the connection should close.
     async fn handle_text(&mut self, text: &str) -> bool {
         let msg: ClientMessage = match serde_json::from_str(text) {
@@ -305,15 +392,16 @@ impl Conn {
                 return true;
             }
         };
-        if matches!(
-            msg,
-            ClientMessage::Push { .. }
-                | ClientMessage::Subscribe { .. }
-                | ClientMessage::Unsubscribe { .. }
-        ) && !self.requests.take()
+        let vault = match &msg {
+            ClientMessage::Push { vault_id, .. }
+            | ClientMessage::Subscribe { vault_id, .. }
+            | ClientMessage::Unsubscribe { vault_id, .. } => Some(vault_id.clone()),
+            _ => None,
+        };
+        if let Some(v) = vault
+            && let Err(e) = self.admit(&msg, text.len()).await
         {
-            metrics::counter!("notekpr_rate_limited_total", "scope" => "ws").increment(1);
-            self.send(error_msg(&AppError::RateLimited, None)).await;
+            self.send(error_msg(&e, Some(&v))).await;
             return true;
         }
         match msg {
@@ -429,7 +517,13 @@ impl Conn {
                 if !allowed || payload.len() > MAX_AWARENESS_BYTES || object_id.len() > 64 {
                     return true;
                 }
-                if !self.awareness.take() {
+                if !self.awareness.take()
+                    || !self
+                        .state
+                        .instance
+                        .people()
+                        .awareness(&self.who.limits.person)
+                {
                     return true;
                 }
                 if !object_id.is_empty() && self.announced.len() < MAX_SUBSCRIPTIONS {

@@ -119,6 +119,12 @@ pub struct Hub {
     online: AtomicBool,
     /// Whether the server refuses changes, as the live connection last said.
     server_read_only: std::sync::Mutex<Option<ReadOnly>>,
+    /// Until when the server holds this person's changes back (their daily
+    /// write allowance is used up, or the account is suspended): nothing is
+    /// pushed before then.
+    held_until: std::sync::Mutex<Option<(std::time::Instant, bool)>>,
+    /// A new hold, not said yet ([`Hub::take_held_news`]).
+    held_news: std::sync::Mutex<Option<crate::api::Held>>,
     /// Whether "the server's storage is full" was said (once for all its
     /// vaults).
     pub(crate) server_full: AtomicBool,
@@ -152,6 +158,8 @@ impl Hub {
             push_locks: Default::default(),
             online: AtomicBool::new(false),
             server_read_only: std::sync::Mutex::new(None),
+            held_until: std::sync::Mutex::new(None),
+            held_news: std::sync::Mutex::new(None),
             server_full: AtomicBool::new(false),
             push_now: AtomicBool::new(true),
             waiting_for_keys: Default::default(),
@@ -478,6 +486,38 @@ impl Hub {
         *self.server_read_only.lock().unwrap()
     }
 
+    /// Whether, and how much longer, the server holds changes back
+    /// ([`Hub::hold`]).
+    pub fn held(&self) -> Option<crate::api::Held> {
+        let (until, suspended) = (*self.held_until.lock().unwrap())?;
+        until
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|d| !d.is_zero())
+            .map(|wait| crate::api::Held { wait, suspended })
+    }
+
+    /// The server holds changes back: nothing is pushed until then (or
+    /// [`crate::api::Held::retry_in`]). A hold that is news (none, or one
+    /// that ended sooner, or for another reason) is said once
+    /// ([`Hub::take_held_news`]).
+    pub fn hold(&self, h: crate::api::Held) {
+        let until = std::time::Instant::now() + h.retry_in();
+        let mut held = self.held_until.lock().unwrap();
+        let news = held.is_none_or(|(t, suspended)| {
+            suspended != h.suspended || t + std::time::Duration::from_secs(1) < until
+        });
+        if news {
+            *held = Some((until, h.suspended));
+            *self.held_news.lock().unwrap() = Some(h);
+        }
+    }
+
+    /// A new hold, once, as the server said it — even if it is over by now:
+    /// to say it, and to push again when it ends.
+    pub fn take_held_news(&self) -> Option<crate::api::Held> {
+        self.held_news.lock().unwrap().take()
+    }
+
     /// What the live connection says. Returns whether it changed.
     pub fn set_server_read_only(&self, read_only: Option<ReadOnly>) -> bool {
         let changed =
@@ -668,9 +708,20 @@ impl Hub {
                 ..Default::default()
             });
         }
+        // Not before the server said (the live loop pushes then).
+        if let Some(held) = self.held() {
+            return Ok(PushOutcome {
+                remaining: v.lock().await.replica.pending.len(),
+                held: Some(held),
+                ..Default::default()
+            });
+        }
         let out = self.session.push(&v).await?;
         if out.offline {
             self.set_online(false);
+        }
+        if let Some(h) = out.held {
+            self.hold(h);
         }
         Ok(out)
     }
@@ -696,7 +747,7 @@ impl Hub {
                 local: true,
             });
         }
-        if !out.offline && !out.read_only && !out.vault_full {
+        if !out.offline && !out.read_only && !out.vault_full && out.held.is_none() {
             if let Err(e) = self.session.compact(&v, None).await {
                 tracing::warn!("compaction failed: {e:#}");
             }

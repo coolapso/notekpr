@@ -9,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use notekpr_core::protocol::{
     AdminClientInfo, AdminScope, AdminSettings, AdminStats, AdminUpdateUser, AdminUpdateVault,
-    AdminUser, AdminVault, CreateAdminClient, CreatedAdminToken, InstanceSettingsUpdate,
+    AdminUser, AdminVault, Allowance, CreateAdminClient, CreatedAdminToken, InstanceSettingsUpdate,
     PrincipalKind, UpdateAdminClient, UserEventKind,
 };
 use serde::Deserialize;
@@ -20,6 +20,7 @@ use crate::auth::Admin;
 use crate::db;
 use crate::error::{AppError, AppResult, bad, forbidden};
 use crate::hub::{Control, VaultEvent};
+use crate::person_limits;
 use crate::repo;
 use crate::routes::me::notify_user;
 use crate::state::AppState;
@@ -32,6 +33,10 @@ pub struct UsersQuery {
     /// Only the account signing in with this OIDC identity, written as in
     /// `NOTEKPR_ADMINS`: `issuer|subject`, or `dev:<name>` in development mode.
     identity: Option<String>,
+    /// Only people the limits per person refused, or who were suspended, in
+    /// the last 24 hours: the most refused first.
+    #[serde(default)]
+    limited: bool,
 }
 
 /// An audit entry by an administrator (the admin client's name in its details).
@@ -74,9 +79,22 @@ pub async fn users(
         }),
     };
     let email = q.email.as_deref().map(str::trim).filter(|e| !e.is_empty());
-    Ok(Json(
-        repo::users::admin_list(&state.db, email, identity).await?,
-    ))
+    let mut users = repo::users::admin_list(&state.db, email, identity).await?;
+    let people = state.instance.people();
+    let now = db::now();
+    for u in &mut users {
+        u.refused = people.refused(&u.id);
+    }
+    if q.limited {
+        let since = now - 24 * 3600 * 1000;
+        users.retain(|u| u.refused.any() || u.suspended_until.is_some_and(|t| t > since));
+        users.sort_by_key(|u| std::cmp::Reverse(u.refused.requests + u.refused.writes));
+    }
+    // Shown only while it lasts.
+    for u in &mut users {
+        u.suspended_until = u.suspended_until.filter(|t| *t > now);
+    }
+    Ok(Json(users))
 }
 
 pub async fn update_user(
@@ -88,9 +106,14 @@ pub async fn update_user(
     let allowances = req.vault_allowance.is_some()
         || req.agent_allowance.is_some()
         || req.quick_note_allowance.is_some()
-        || req.quick_notes_storage_allowance.is_some();
-    if req.disabled.is_some() || allowances {
+        || req.quick_notes_storage_allowance.is_some()
+        || req.rate_allowance.is_some()
+        || req.write_allowance.is_some();
+    if req.disabled.is_some() || allowances || req.suspended_until.is_some() {
         admin.require(AdminScope::Accounts)?;
+    }
+    if req.rate_allowance == Some(Allowance::Max(0)) {
+        return Err(bad("rate_allowance is at least 1"));
     }
     if req.is_admin.is_some() {
         admin.require(AdminScope::Admins)?;
@@ -106,6 +129,12 @@ pub async fn update_user(
     {
         return Err(bad("you cannot disable or demote yourself"));
     }
+    if let Admin::Person { who, .. } = &admin
+        && id == who.user_id
+        && req.suspended_until.is_some_and(|t| t > db::now())
+    {
+        return Err(bad("you cannot suspend yourself"));
+    }
     {
         let _w = state.write_lock.lock().await?;
         let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
@@ -116,6 +145,11 @@ pub async fn update_user(
         if allowances && !person {
             return Err(bad(
                 "only people have allowances; agents count for their owner",
+            ));
+        }
+        if req.suspended_until.is_some() && !person {
+            return Err(bad(
+                "only people are suspended; agents are with their owner",
             ));
         }
         // Enabling an account counts against the accounts limit like a new one.
@@ -136,6 +170,12 @@ pub async fn update_user(
         }
         if let Some(a) = req.quick_note_allowance {
             repo::users::set_quick_note_allowance(&mut *tx, &id, a).await?;
+        }
+        if let Some(a) = req.rate_allowance {
+            repo::users::set_rate_allowance(&mut *tx, &id, a).await?;
+        }
+        if let Some(a) = req.write_allowance {
+            repo::users::set_write_allowance(&mut *tx, &id, a).await?;
         }
         // Their quick notes may fill up or have room again.
         let mut quick_notes = None;
@@ -165,6 +205,21 @@ pub async fn update_user(
             storage_changed(&state, &q, was_full).await;
         }
     }
+    // Their live connections (and their agents') count with the new limits
+    // at once.
+    if req.rate_allowance.is_some() || req.write_allowance.is_some() {
+        let agents = repo::agents::ids(&state.db, &id).await?;
+        for who in std::iter::once(id.clone()).chain(agents) {
+            state.hub.control(&who, Control::LimitsChanged);
+        }
+    }
+    if let Some(until) = req.suspended_until {
+        let mut details = serde_json::json!({});
+        if let (Some(name), Some(d)) = (admin.client_name(), details.as_object_mut()) {
+            d.insert("admin_client".into(), name.into());
+        }
+        person_limits::suspend(&state, &id, until, Some((admin.actor_id(), details))).await?;
+    }
     // Their apps reload their quick notes' limit.
     if req.quick_note_allowance.is_some() {
         notify_user(&state, &id, UserEventKind::VaultsChanged);
@@ -182,6 +237,9 @@ pub async fn update_user(
             "agent_allowance": req.agent_allowance,
             "quick_note_allowance": req.quick_note_allowance,
             "quick_notes_storage_allowance": req.quick_notes_storage_allowance,
+            "rate_allowance": req.rate_allowance,
+            "write_allowance": req.write_allowance,
+            "suspended_until": req.suspended_until,
         }),
     )
     .await;

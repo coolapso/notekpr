@@ -28,6 +28,8 @@ ADMIN = "ada"
 # Another administrator, for a test after the one that made ADMIN's keys
 # (a second browser can't sign up as the same person).
 ADMIN2 = "otto"
+# And a third, for the limits per person.
+ADMIN3 = "uma"
 
 
 class Env:
@@ -46,10 +48,10 @@ class Env:
 
     def start_server(self):
         log = open(os.path.join(self.data, "server.log"), "a")
-        # ADMIN and ADMIN2 are administrators whichever test signs in first.
+        # ADMIN, ADMIN2 and ADMIN3 are administrators whichever test signs in first.
         self.server = subprocess.Popen([self.server_bin, "--dev-mode", "--web-dir", self.web, "--data-dir", self.data,
                                         "--listen", f"127.0.0.1:{self.port}", "--public-url", self.url[:-1],
-                                        "--admin", f"dev:{ADMIN},dev:{ADMIN2}"],
+                                        "--admin", f"dev:{ADMIN},dev:{ADMIN2},dev:{ADMIN3}"],
                                        stdout=log, stderr=log)
         for _ in range(100):
             try:
@@ -3770,6 +3772,8 @@ def test_admin(env):
         def server_settings(size, directory):
             a.js(number, ".max-attachment-mb .limit-num", str(size))
             a.js(choose, ".user-directory select", directory)
+            # (Clear of the toast at the bottom.)
+            a.js("document.querySelector('.save-server-settings').scrollIntoView({block: 'center'})")
             a.click(".save-server-settings")
             deadline = time.time() + 10
             while (lambda s: (s["max_attachment_mb"], s["user_directory"]))(
@@ -3943,6 +3947,78 @@ def test_vault_storage(env):
     finally:
         # Other tests share this server.
         api_patch(a, "/admin/settings", {"max_storage_mb": "unlimited"})
+        a.close()
+        b.close()
+
+
+
+def test_person_limits(env):
+    """Limits per person: past their daily allowance someone's edits wait in
+    the browser, which says until when; a suspension says so too; and
+    administrators see who ran into the limits."""
+    a, b = Browser(), Browser()
+    pending = "return Object.keys(localStorage).filter(k => k.startsWith('notekpr.pending.') && localStorage.getItem(k) !== '[]').length"
+    choose = "const s = document.querySelector(arguments[0]); s.value = arguments[1]; s.dispatchEvent(new Event('change', {bubbles: true}));"
+    number = "const i = document.querySelector(arguments[0]); i.value = arguments[1]; i.dispatchEvent(new Event('input', {bubbles: true}));"
+    uid = None
+    try:
+        signup(a, ADMIN3)
+        ula = uniq("ula")
+        signup(b, ula)
+        new_note(b, "Many words", "first words")
+        b.wait(pending + " === 0", 20, "the note is synced")
+        uid = api_get(b, "/me")["user"]["id"]
+
+        # No changes a day for her: her open page hears it at once.
+        a.go(env.url + "settings/admin")
+        person = f"[data-user='{ula.capitalize()}']"
+        a.find(person, 15)
+        a.click(f"{person} .limits-btn")
+        a.js(choose, f"{person} .write-allowance .limit-kind", "max")
+        a.find(f"{person} .write-allowance .limit-num", 5)
+        a.js(number, f"{person} .write-allowance .limit-num", "0")
+        a.click(f"{person} .save-allowances")
+        a.wait(f"return !!document.querySelector(\"{person}\") && !document.querySelector(\"{person} .save-allowances\")", 10, "the limit is saved")
+        b.keys(" and more")
+        b.find(".held-banner", 15)
+        check("as much as this server allows" in b.text(".held-banner"), "past their daily allowance, people are told, and from when their edits go")
+        time.sleep(1)
+        check(b.js(pending) > 0 and "Waiting" in b.text(".sync"), "edits are kept in the browser, not sent")
+        b.shot("held-banner")
+
+        # Administrators see who was turned away.
+        a.click(".limited-toggle input")
+        a.wait(f"return document.querySelectorAll('.admin-users .list-row').length === 1 && !!document.querySelector(\"{person}\")", 10, "only she is listed")
+        check("by their daily allowance" in a.text(f"{person} .refused"), "administrators see how often the limits turned someone away, not what for")
+        a.shot("admin-limited")
+
+        # More room: the kept edits go out.
+        a.click(f"{person} .limits-btn")
+        a.js(choose, f"{person} .write-allowance .limit-kind", "default")
+        a.click(f"{person} .save-allowances")
+        a.wait(f"return !document.querySelector(\"{person} .save-allowances\")", 10, "the limit is saved")
+        b.js("location.reload()")
+        b.wait(pending + " === 0", 20, "the kept edits are sent")
+        check(True, "with more room, kept edits are sent")
+
+        # Suspended for a day: her page says until when, and keeps edits.
+        a.click(f"{person} .suspend-btn")
+        b.find_text(".held-banner", "suspended until", 15)
+        a.wait(f"return !!document.querySelector(\"{person} .pill.suspended\")", 10, "the accounts list shows it")
+        check("Suspended" in b.text(".sync"), "a suspended account is told so, and until when")
+        b.shot("suspended-banner")
+        a.click(f"{person} .suspend-btn")
+        a.wait(f"return !document.querySelector(\"{person} .pill.suspended\")", 10, "lifted")
+        b.js("location.reload()")
+        b.wait("return !document.querySelector('.held-banner') && (document.querySelector('.sync')?.textContent || '').includes('Synced')", 20, "back")
+        check(True, "lifted, everything works again")
+        # Refused on purpose: her pushes and what her page asked while suspended.
+        refused = ["status of 429"]
+        check(all(any(r in m for r in refused) for m in severe_logs(a, b)), "no browser errors but what was refused on purpose")
+    finally:
+        # Other tests share this server.
+        if uid:
+            api_patch(a, f"/admin/users/{uid}", {"write_allowance": "default", "suspended_until": 0})
         a.close()
         b.close()
 
@@ -4288,7 +4364,7 @@ def test_app_sign_in(env):
             app.shutdown()
 
 
-TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_invitations, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_new_vault_signed_from_its_start, test_note_recipient_never_added, test_note_key_without_owner_proof, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_vault_admins, test_owners, test_undo_purge, test_device_code, test_app_sign_in]
+TESTS = [test_onboarding, test_collab, test_devices_and_recovery, test_features, test_attachments, test_attachments_beside_notes, test_export_import, test_notion_import, test_delete_account, test_move_to_vault, test_note_sharing, test_invitations, test_tables, test_code_blocks, test_html, test_callouts, test_math, test_diagrams, test_colors, test_code_wrapping, test_vim, test_line_numbers, test_bullets, test_editor_mouse, test_editor_safety, test_local_copy, test_ui_basics, test_offline_tabs, test_offline_start, test_mobile, test_home_screen, test_quick_notes, test_vault_cards, test_vault_icons, test_entry_icons, test_tree_order, test_session_ended_while_away, test_outdated, test_membership_log_withheld, test_new_vault_signed_from_its_start, test_note_recipient_never_added, test_note_key_without_owner_proof, test_comments, test_mentions, test_dates, test_graph, test_recovered_copy, test_note_width, test_admin, test_vault_storage, test_person_limits, test_vault_admins, test_owners, test_undo_purge, test_device_code, test_app_sign_in]
 
 
 def main():

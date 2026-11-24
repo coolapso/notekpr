@@ -1081,6 +1081,95 @@ async fn a_full_server_keeps_edits_in_every_vault_until_there_is_room() {
     live.stop().await;
 }
 
+/// Changes the server holds back — the person's daily write allowance used
+/// up, or their account suspended — stay here, are said of once with when
+/// they go, and aren't sent before then; a suspension keeps the live
+/// connection away too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn changes_the_server_holds_back_wait_for_when_it_says() {
+    use notekpr_core::protocol::{AdminUpdateUser, InstanceSettingsUpdate, Limit};
+    let srv = start().await;
+    // The first person in administers the server too.
+    let alice = login(&srv, "alice").await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&bob, "Notes").await.unwrap();
+    let live = live(hub(&bob).await).await;
+    let v = live.hub.resolve("Notes").await.unwrap();
+    let id = v.lock().await.id().to_string();
+    let change = InstanceSettingsUpdate {
+        writes_per_day_mb: Some(Limit::Max(0)),
+        ..Default::default()
+    };
+    let _: serde_json::Value = alice.api.patch("/admin/settings", &change).await.unwrap();
+
+    let out = ops::put_document(&live.hub, "Notes", "Kept.md", "written meanwhile\n", None)
+        .await
+        .unwrap();
+    let held = out.held.expect("held back");
+    assert!(!held.suspended && held.wait.as_secs() > 3600, "{held:?}");
+    assert!(
+        held.explain(1).contains("uploaded in about"),
+        "{}",
+        held.explain(1)
+    );
+    assert!(out.pending_changes > 0);
+    // Not tried again before then (a quarter of an hour at most).
+    let again = live.hub.push(&id).await.unwrap();
+    assert!(again.held.is_some() && again.remaining > 0, "{again:?}");
+    assert!(live.hub.held().is_some());
+
+    // Room again: what tries now goes out.
+    let change = InstanceSettingsUpdate {
+        writes_per_day_mb: Some(Limit::Unlimited),
+        ..Default::default()
+    };
+    let _: serde_json::Value = alice.api.patch("/admin/settings", &change).await.unwrap();
+    let o = live.hub.session.push(&v).await.unwrap();
+    assert!(o.held.is_none() && o.remaining == 0, "{o:?}");
+
+    // Suspended: the live connection ends and stays away until it does.
+    let bob_id = bob.user_id.clone();
+    let suspend = AdminUpdateUser {
+        suspended_until: Some(notekpr_core::now_ms() + 3_600_000),
+        ..Default::default()
+    };
+    let _: serde_json::Value = alice
+        .api
+        .patch(&format!("/admin/users/{bob_id}"), &suspend)
+        .await
+        .unwrap();
+    eventually(10, "the suspension is heard", || async {
+        live.hub.held().is_some_and(|h| h.suspended) && !live.hub.is_online()
+    })
+    .await;
+    live.stop().await;
+}
+
+/// A local edit made while the server holds changes back waits, and goes
+/// out by itself once the hold is over: the live loop sees to it, whatever
+/// made the push (here, writing a note).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn edits_held_back_go_out_by_themselves_once_the_hold_is_over() {
+    let srv = start().await;
+    let bob = login(&srv, "bob").await;
+    manage::create_vault(&bob, "Notes").await.unwrap();
+    let live = live(hub(&bob).await).await;
+    let v = live.hub.resolve("Notes").await.unwrap();
+    live.hub.hold(notekpr_cli::api::Held {
+        wait: std::time::Duration::from_secs(2),
+        suspended: false,
+    });
+    let out = ops::put_document(&live.hub, "Notes", "Later.md", "held a moment\n", None)
+        .await
+        .unwrap();
+    assert!(out.held.is_some() && out.pending_changes > 0);
+    eventually(10, "the held edit goes out", || async {
+        v.lock().await.replica.pending.is_empty()
+    })
+    .await;
+    live.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_full_vault_keeps_edits_until_it_has_room() {
     use notekpr_core::protocol::{AdminUpdateVault, Allowance};

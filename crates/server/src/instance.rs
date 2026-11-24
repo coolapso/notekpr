@@ -55,6 +55,7 @@ use tokio::sync::watch;
 use crate::apps::OLDEST_APP_VERSION;
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult};
+use crate::person_limits::People;
 use crate::ratelimit::Limiters;
 use crate::repo;
 
@@ -90,6 +91,7 @@ pub struct Instance {
     storage_full: AtomicBool,
     mode: watch::Sender<Option<ReadOnly>>,
     limiters: Limiters,
+    people: People,
 }
 
 impl Instance {
@@ -97,6 +99,7 @@ impl Instance {
         let settings = repo::settings::load(db).await?;
         let instance = Instance {
             limiters: Limiters::new(&settings),
+            people: People::new(),
             settings: RwLock::new(settings),
             storage_full: AtomicBool::new(false),
             mode: watch::Sender::new(None),
@@ -113,6 +116,11 @@ impl Instance {
     /// Requests per client address, at the settings' rates.
     pub fn limiters(&self) -> &Limiters {
         &self.limiters
+    }
+
+    /// Requests, changes and connections per person (`person_limits.rs`).
+    pub fn people(&self) -> &People {
+        &self.people
     }
 
     /// The oldest version of the apps the server accepts: its build's, or

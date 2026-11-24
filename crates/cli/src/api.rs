@@ -21,6 +21,8 @@ pub enum ApiError {
         status: u16,
         code: String,
         message: String,
+        /// Its `Retry-After`, in seconds.
+        retry_after: Option<u64>,
     },
     #[error("cannot reach the server: {0}")]
     Network(String),
@@ -66,6 +68,28 @@ impl ApiError {
         matches!(self, ApiError::Status { code, .. } if code == notekpr_core::protocol::ERROR_VAULT_FULL)
     }
 
+    /// The server holds this person's changes back for a while — their
+    /// daily write allowance is used up, or their account is suspended —:
+    /// for how long. Keep them, and send nothing before then.
+    pub fn held(&self) -> Option<Held> {
+        match self {
+            ApiError::Status {
+                status: 429,
+                code,
+                retry_after,
+                ..
+            } if code == notekpr_core::protocol::ERROR_WRITE_LIMIT
+                || code == notekpr_core::protocol::ERROR_SUSPENDED =>
+            {
+                Some(Held {
+                    wait: Duration::from_secs(retry_after.unwrap_or(60).max(1)),
+                    suspended: code == notekpr_core::protocol::ERROR_SUSPENDED,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// The server needs a newer version of this app: it says so; unsent
     /// changes are kept.
     pub fn is_update_required(&self) -> bool {
@@ -102,6 +126,51 @@ impl ApiError {
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
+
+/// Changes the server holds back ([`ApiError::held`]): for how long, and
+/// whether because the account is suspended (else the daily write
+/// allowance is used up).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Held {
+    pub wait: Duration,
+    pub suspended: bool,
+}
+
+/// Changes held back are tried again after this long at most, even if the
+/// server said later: an administrator may give more room, or lift a
+/// suspension, meanwhile.
+const HELD_RETRY: Duration = Duration::from_secs(15 * 60);
+
+impl Held {
+    /// When to try again: when the server said, or sooner ([`HELD_RETRY`]).
+    pub fn retry_in(&self) -> Duration {
+        self.wait.min(HELD_RETRY)
+    }
+
+    /// What is said of changes held back: why, and when they go.
+    pub fn explain(&self, changes: usize) -> String {
+        let why = if self.suspended {
+            "your account on this server is suspended for now"
+        } else {
+            "you have changed as much as this server allows for now"
+        };
+        format!(
+            "{why}: {changes} change(s) are kept here and uploaded in {}",
+            about(self.wait)
+        )
+    }
+}
+
+/// A wait in words: "about 3 h 20 min", "about 12 min", "a minute".
+pub fn about(d: Duration) -> String {
+    let min = d.as_secs().div_ceil(60);
+    match (min / 60, min % 60) {
+        (0, 0 | 1) => "a minute".into(),
+        (0, m) => format!("about {m} min"),
+        (h, 0) => format!("about {h} h"),
+        (h, m) => format!("about {h} h {m} min"),
+    }
+}
 
 /// How requests are authenticated.
 #[derive(Clone, Debug)]
@@ -462,6 +531,7 @@ impl Api {
                     status,
                     code: other.to_string(),
                     message: err.error_description.unwrap_or_else(|| other.to_string()),
+                    retry_after: None,
                 });
             }
         })
@@ -491,6 +561,7 @@ impl Api {
                 status,
                 code,
                 message: update_required_message("this server needs a newer version of notekpr"),
+                retry_after: None,
             });
         }
         Err(ApiError::Auth(if code == "invalid_client" {
@@ -597,7 +668,9 @@ async fn wait_to_retry(resp: &reqwest::Response, waited: &mut Duration) -> bool 
 /// is handing over to its next version (`restarting`), before handling it.
 /// Other `429`s (a snapshot within its cooldown) are answers, not a busy
 /// server; other `503`s (read-only mode, a proxy without a server) aren't
-/// over in a moment.
+/// over in a moment. A wait longer than [`MAX_RETRY_WAIT`] (a write
+/// allowance used up, a suspension: hours) isn't waited out: the request
+/// fails with it at once.
 fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
     if !matches!(
         resp.status(),
@@ -613,7 +686,7 @@ fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
         .trim()
         .parse()
         .ok()?;
-    Some(Duration::from_secs(secs.clamp(1, 10)))
+    Some(Duration::from_secs(secs.max(1)))
 }
 
 enum Body<'a> {
@@ -637,6 +710,11 @@ async fn check(resp: reqwest::Response) -> ApiResult<reqwest::Response> {
         return Ok(resp);
     }
     let code = status.as_u16();
+    let retry_after = resp
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse().ok());
     let text = resp.text().await.unwrap_or_default();
     let (err, message) = match serde_json::from_str::<ApiError2>(&text) {
         Ok(e) if e.error == ERROR_UPDATE_REQUIRED => {
@@ -656,6 +734,7 @@ async fn check(resp: reqwest::Response) -> ApiResult<reqwest::Response> {
         status: code,
         code: err,
         message,
+        retry_after,
     })
 }
 

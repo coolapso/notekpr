@@ -73,6 +73,17 @@ impl Carries {
     }
 }
 
+/// The largest request body the server takes, by today's settings: what a
+/// change without a `Content-Length` counts against the write allowance
+/// (`person_limits.rs`).
+pub(crate) fn largest_body(s: &InstanceSettings) -> usize {
+    [Carries::Updates, Carries::Snapshot, Carries::Attachment]
+        .iter()
+        .map(|c| c.max_body(s))
+        .max()
+        .unwrap_or_default()
+}
+
 /// Bound the request body by today's settings (the handlers check the
 /// sizes inside it too).
 async fn body_limit(
@@ -485,13 +496,20 @@ async fn read_only_guard(
         && !req.method().is_safe()
     {
         let path = matched.as_ref().map(|m| m.as_str()).unwrap_or_default();
-        let path = path.strip_prefix("/api/v1").unwrap_or(path);
-        let method = req.method().as_str();
-        if !WRITABLE_WHEN_READ_ONLY.contains(&(method, path)) {
+        if refused_when_read_only(req.method().as_str(), path) {
             return AppError::ReadOnly(why).into_response();
         }
     }
     next.run(req).await
+}
+
+/// Whether read-only mode refuses a request that isn't a `GET` (`path`: the
+/// route's, as `MatchedPath` has it): everything but what
+/// [`WRITABLE_WHEN_READ_ONLY`] lists. The write allowance counts the same
+/// ones, but deletions (`person_limits.rs`).
+pub(crate) fn refused_when_read_only(method: &str, path: &str) -> bool {
+    let path = path.strip_prefix("/api/v1").unwrap_or(path);
+    !WRITABLE_WHEN_READ_ONLY.contains(&(method, path))
 }
 
 /// Request logging and metrics. Only method, path and status are recorded:

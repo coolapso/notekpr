@@ -567,8 +567,32 @@ Under *Server*, the rest (API names and defaults in parentheses):
   (`rate_limit_rps`, 50, bursts of 4 ×) and sign-in and token requests per
   minute (`auth_rate_limit_per_min`, 30). Behind a proxy, the address is the
   proxy's unless `--trust-proxy` is set (§4); raise them when many people
-  share one address, such as an office. A change starts every address
-  afresh.
+  share one address, such as an office. An IPv6 address counts by its /64
+  network. A change starts every address afresh.
+* **Limits per person**, for a server many people share, where one
+  person can come from many addresses (a person's agents count with them):
+  requests per second (`person_rate_limit_rps`, 50, bursts of 4 ×), and
+  how much they may change in a day (`writes_per_day_mb`, no limit by
+  default; it refills evenly over 24 hours): every change counts what it
+  sends, at least 1 KiB — notes, revisions, files, keys, sharing —, while
+  signing in, devices, settings and deleting don't. Set the second on a
+  shared server: emptying the trash makes room in a vault at once, but the
+  server keeps what was deleted for the undo period (above), so without it
+  someone could fill a vault, empty it and fill it again until the server
+  is full for everyone. Then also set *Oldest app version* to this
+  release: older apps don't know the answer and would wait for a reload
+  to send their edits. Give one person more or less under Accounts →
+  Limits. The apps keep edits that wait for the allowance and send them
+  when it allows, saying when.
+* **Suspension**: someone whose apps keep sending requests these limits
+  refuse — a script that doesn't wait as the server says, not a person
+  with many devices — is suspended for `auto_suspend_minutes` (60; `0`
+  turns it off): every request of theirs and their agents' is refused until
+  then, and the apps say until when and keep their edits. Under Accounts,
+  *Limited* lists who was refused or suspended in the last 24 hours, the
+  most refused first; suspend someone or lift a suspension there too. Each
+  suspension is in the person's audit log. Requests and writes are counted
+  in memory, so a restart starts everyone afresh; suspensions are kept.
 * **Sign-ins**: how long a browser's lasts (`session_ttl_days`, 30), the
   CLI's (`device_session_ttl_days`, 180) and an agent's access token
   (`agent_token_ttl_secs`, 3600, at least 60). A new length applies from the
@@ -620,6 +644,10 @@ curl -H "Authorization: Bearer $t" -X PATCH $url/admin/settings -H 'Content-Type
 curl -H "Authorization: Bearer $t" "$url/admin/users?email=ana@example.com"
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/users/<id> -H 'Content-Type: application/json' \
      -d '{"vault_allowance": 3, "quick_note_allowance": 50, "quick_notes_storage_allowance": 500}'   # each a number, "unlimited" or "default"
+# who ran into the limits per person lately; suspend one of them for a day, or lift it
+curl -H "Authorization: Bearer $t" "$url/admin/users?limited=true"
+curl -H "Authorization: Bearer $t" -X PATCH $url/admin/users/<id> -H 'Content-Type: application/json' \
+     -d "{\"suspended_until\": $(( ($(date +%s) + 86400) * 1000 ))}"   # 0 lifts it
 # vaults by size (or the one with an id someone gave you, or someone's), and more room for one (MiB)
 # or more drawings
 curl -H "Authorization: Bearer $t" "$url/admin/vaults?id=<vault id>"

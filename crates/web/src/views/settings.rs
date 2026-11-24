@@ -792,9 +792,17 @@ fn Admin() -> impl IntoView {
     let editing = RwSignal::new(None::<String>);
     // Whose vaults the vault list shows (all: `None`).
     let vaults_of = RwSignal::new(None::<(String, String)>);
+    // Only people the limits per person refused, or who were suspended,
+    // lately (the most refused first).
+    let limited = RwSignal::new(false);
     let reload = move || {
         leptos::task::spawn_local(async move {
-            if let Ok(u) = api::get("/admin/users").await {
+            let path = if limited.get_untracked() {
+                "/admin/users?limited=true"
+            } else {
+                "/admin/users"
+            };
+            if let Ok(u) = api::get(path).await {
                 users.set(u);
             }
             if let Ok(s) = api::get("/admin/stats").await {
@@ -829,6 +837,12 @@ fn Admin() -> impl IntoView {
         })}
         <InstanceSettingsPanel defaults=defaults on_saved=Callback::new(move |()| reload())/>
         <h3>"Accounts"</h3>
+        <label class="check limited-toggle">
+            <input type="checkbox" prop:checked=move || limited.get()
+                on:change=move |ev| { limited.set(event_target_checked(&ev)); reload(); }/>
+            <span>"Limited"</span>
+            <span class="muted small">" — only people the limits per person turned away, or who were suspended, in the last 24 hours: the most turned away first"</span>
+        </label>
         <div class="list scroll admin-users">
             {move || users.get().into_iter().map(|u| {
                 let id = u.id.clone();
@@ -846,6 +860,9 @@ fn Admin() -> impl IntoView {
                 let (quick_count, qa) = (u.quick_note_count, u.quick_note_allowance);
                 let (quick_stored, qsa) = (u.quick_notes_storage_bytes, u.quick_notes_storage_allowance);
                 let stored = util::human_bytes(u.storage_bytes);
+                let suspended = u.suspended_until;
+                let refused = u.refused;
+                let id4 = u.id.clone();
                 let usage = move || person.then(|| {
                     let d = defaults.get();
                     format!(
@@ -860,6 +877,7 @@ fn Admin() -> impl IntoView {
                 let (vaults, agents) = (RwSignal::new(u.vault_allowance), RwSignal::new(u.agent_allowance));
                 let quick_notes = RwSignal::new(u.quick_note_allowance);
                 let quick_notes_storage = RwSignal::new(qsa);
+                let (rate, writes) = (RwSignal::new(u.rate_allowance), RwSignal::new(u.write_allowance));
                 let quick_notes_full = move || person && {
                     let d = defaults.get();
                     qsa.resolve(d.map(|d| d.quick_notes_storage_mb).unwrap_or_default())
@@ -873,9 +891,20 @@ fn Admin() -> impl IntoView {
                                 <div>{u.display_name.clone()}{admin.then(|| view! { <span class="pill">"admin"</span> })}
                                     {(u.kind == PrincipalKind::Agent).then(|| view! { <span class="tag-agent">"agent"</span> })}
                                     {disabled.then(|| view! { <span class="pill warn">"disabled"</span> })}
+                                    {suspended.map(|t| view! { <span class="pill warn suspended">{format!("suspended until {}", util::about_when(t))}</span> })}
                                     {move || quick_notes_full().then(|| view! { <span class="pill warn">"Personal storage full"</span> })}</div>
                                 <div class="muted small">{format!("{} · {} vaults · {} devices · last login {}", u.email.clone().unwrap_or_default(), u.vault_count, u.device_count, u.last_login_at.map(util::relative_time).unwrap_or_else(|| "never".into()))}</div>
                                 {person.then(|| view! { <div class="muted small allowance-usage">{usage}</div> })}
+                                {refused.any().then(|| {
+                                    let mut what = Vec::new();
+                                    if refused.requests > 0 {
+                                        what.push(format!("{} by their rate", util::count(refused.requests as usize, "request", "requests")));
+                                    }
+                                    if refused.writes > 0 {
+                                        what.push(format!("{} by their daily allowance", util::count(refused.writes as usize, "change", "changes")));
+                                    }
+                                    view! { <div class="muted small refused">{format!("turned away in the last 24 hours: {}", what.join(", "))}</div> }
+                                })}
                             </div>
                             <div class="row-actions">
                                 {person.then(|| {
@@ -901,6 +930,14 @@ fn Admin() -> impl IntoView {
                                     <button class="btn small" on:click=move |_| patch_user(id.clone(), AdminUpdateUser { is_admin: Some(!admin), ..Default::default() })>
                                         {if admin { "Remove admin" } else { "Make admin" }}</button>
                                 })}
+                                {(!is_me && person).then(|| view! {
+                                    <button class="btn small suspend-btn" title=move || if suspended.is_some() { "Let them in again now" } else { "Refuse everything they and their agents ask for a day" }
+                                        on:click=move |_| patch_user(id4.clone(), AdminUpdateUser {
+                                            suspended_until: Some(if suspended.is_some() { 0 } else { util::now_ms() + 24 * 3600 * 1000 }),
+                                            ..Default::default()
+                                        })>
+                                        {if suspended.is_some() { "Lift suspension" } else { "Suspend for a day" }}</button>
+                                })}
                                 {(!is_me).then(|| view! {
                                     <button class="btn small danger" on:click=move |_| patch_user(id2.clone(), AdminUpdateUser { disabled: Some(!disabled), ..Default::default() })>
                                         {if disabled { "Enable" } else { "Disable" }}</button>
@@ -916,6 +953,8 @@ fn Admin() -> impl IntoView {
                                     <AllowanceField label="Agents they may have" value=agents default=d.as_ref().map(|d| d.agents_per_user) class="agent-allowance"/>
                                     <AllowanceField label="Quick notes they may keep" value=quick_notes default=d.as_ref().map(|d| d.quick_notes_per_user) class="quick-note-allowance"/>
                                     <AllowanceField label="Personal storage (MiB)" value=quick_notes_storage default=d.as_ref().map(|d| d.quick_notes_storage_mb) class="quick-notes-storage-allowance"/>
+                                    <AllowanceField label="Requests per second" value=rate default=d.as_ref().map(|d| Limit::Max(u64::from(d.person_rate_limit_rps))) class="rate-allowance"/>
+                                    <AllowanceField label="Changes a day (MiB)" value=writes default=d.as_ref().map(|d| d.writes_per_day_mb) class="write-allowance"/>
                                     <div class="row">
                                         <button class="btn small primary save-allowances" on:click=move |_| {
                                             editing.set(None);
@@ -924,6 +963,8 @@ fn Admin() -> impl IntoView {
                                                 agent_allowance: Some(agents.get_untracked()),
                                                 quick_note_allowance: Some(quick_notes.get_untracked()),
                                                 quick_notes_storage_allowance: Some(quick_notes_storage.get_untracked()),
+                                                rate_allowance: Some(rate.get_untracked()),
+                                                write_allowance: Some(writes.get_untracked()),
                                                 ..Default::default()
                                             });
                                         }>"Save"</button>
@@ -1293,6 +1334,7 @@ fn InstanceSettingsPanel(
     );
     let invitations_pending = RwSignal::new(s.invitations_pending);
     let invitations_per_day = RwSignal::new(s.invitations_per_day);
+    let writes_per_day = RwSignal::new(s.writes_per_day_mb);
     let (
         users,
         agents,
@@ -1325,6 +1367,7 @@ fn InstanceSettingsPanel(
         drawings_per_vault.set(s.drawings_per_vault);
         invitations_pending.set(s.invitations_pending);
         invitations_per_day.set(s.invitations_per_day);
+        writes_per_day.set(s.writes_per_day_mb);
         defaults.set(Some(a.settings.clone()));
         status.set(Some(a));
     };
@@ -1387,6 +1430,7 @@ fn InstanceSettingsPanel(
                     <LimitField label="Drawings per vault" value=drawings_per_vault class="drawings-per-vault"/>
                     <LimitField label="Invitations waiting per person" value=invitations_pending class="invitations-pending"/>
                     <LimitField label="Invitations per person a day" value=invitations_per_day class="invitations-per-day"/>
+                    <LimitField label="Changes per person a day (MiB)" value=writes_per_day class="writes-per-day"/>
                 </div>
                 <div class="row">
                     <button class="btn primary save-limits" on:click=move |_| save(InstanceSettingsUpdate {
@@ -1402,10 +1446,11 @@ fn InstanceSettingsPanel(
                         drawings_per_vault: Some(drawings_per_vault.get_untracked()),
                         invitations_pending: Some(invitations_pending.get_untracked()),
                         invitations_per_day: Some(invitations_per_day.get_untracked()),
+                        writes_per_day_mb: Some(writes_per_day.get_untracked()),
                         ..Default::default()
                     })>"Save limits"</button>
                 </div>
-                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the instance storage limit every vault is full until there is room again (deleting for good keeps working): on an instance of its own, the room a family or a team shares however they like. A vault at its storage limit takes no new content until something in it is deleted for good, or you give it more room (Vaults, below), and so many drawings, whoever draws them: give one vault more there too. Invitations: how many one person may have waiting for an answer, and send in a day (cancelled ones count for the day). Someone's Personal storage (quick notes, saved shapes) has its own storage limit, like how many quick notes they may keep: give one person more under Accounts → Limits."</p>
+                <p class="muted small">"Limits apply to what is created from now on: nothing is removed when you lower one. Accounts count people who aren't disabled; a person's own limits are under Accounts. At the instance storage limit every vault is full until there is room again (deleting for good keeps working): on an instance of its own, the room a family or a team shares however they like. A vault at its storage limit takes no new content until something in it is deleted for good, or you give it more room (Vaults, below), and so many drawings, whoever draws them: give one vault more there too. Invitations: how many one person may have waiting for an answer, and send in a day (cancelled ones count for the day). Someone's Personal storage (quick notes, saved shapes) has its own storage limit, like how many quick notes they may keep: give one person more under Accounts → Limits. Changes a day: what one person (with their agents) may send in a day — notes, revisions, files, keys, sharing; at least 1 KiB each —, refilling over the day. Set it on a server many people share: emptying the trash makes room at once, but deleted things are kept for the undo period, so without it one person could fill the server for everyone. Then also set the oldest app version to this server's: older apps don't know this limit and would keep edits only until a reload."</p>
                 <div class="row oldest-app">
                     <label class="limit-field">
                         <span class="limit-label">"Oldest app version"</span>
@@ -1433,6 +1478,8 @@ fn InstanceSettingsPanel(
                     <SettingField label="Days files stay after that" server=server get=|s| s.keep_deleted_files_days set=|s, n| s.keep_deleted_files_days = n class="keep-deleted-files-days"/>
                     <SettingField label="Requests per second" server=server get=|s| s.rate_limit_rps set=|s, n| s.rate_limit_rps = n class="rate-limit-rps"/>
                     <SettingField label="Sign-ins per minute" server=server get=|s| s.auth_rate_limit_per_min set=|s, n| s.auth_rate_limit_per_min = n class="auth-rate-limit-per-min"/>
+                    <SettingField label="Requests per second per person" server=server get=|s| s.person_rate_limit_rps set=|s, n| s.person_rate_limit_rps = n class="person-rate-limit-rps"/>
+                    <SettingField label="Suspend for (minutes; 0: never)" server=server get=|s| s.auto_suspend_minutes set=|s, n| s.auto_suspend_minutes = n class="auto-suspend-minutes"/>
                     <SettingField label="Browser sign-ins last (days)" server=server get=|s| s.session_ttl_days set=|s, n| s.session_ttl_days = n class="session-ttl-days"/>
                     <SettingField label="CLI sign-ins last (days)" server=server get=|s| s.device_session_ttl_days set=|s, n| s.device_session_ttl_days = n class="device-session-ttl-days"/>
                     <SettingField label="Agents' tokens last (seconds)" server=server get=|s| s.agent_token_ttl_secs set=|s, n| s.agent_token_ttl_secs = n class="agent-token-ttl-secs"/>
@@ -1464,6 +1511,8 @@ fn InstanceSettingsPanel(
                             keep_deleted_files_days: Some(s.keep_deleted_files_days),
                             rate_limit_rps: Some(s.rate_limit_rps),
                             auth_rate_limit_per_min: Some(s.auth_rate_limit_per_min),
+                            person_rate_limit_rps: Some(s.person_rate_limit_rps),
+                            auto_suspend_minutes: Some(s.auto_suspend_minutes),
                             user_directory: Some(s.user_directory),
                             invitation_days: Some(s.invitation_days),
                             session_ttl_days: Some(s.session_ttl_days),
@@ -1473,7 +1522,7 @@ fn InstanceSettingsPanel(
                         })
                     }>"Save server settings"</button>
                 </div>
-                <p class="muted small">"These take effect at once, without a restart. Sizes: the largest attachment, the largest encrypted change (the apps split bigger edits to fit) and the largest snapshot — a note's whole state, which also carries a change too big for one update (automatic: 16 × the update size, at least 32 MiB). Versions: how many each note's history keeps, and how often one person adds one. Something deleted for good can be undone for so many days (0: gone at once; a shorter time applies to what was deleted already, too), and its files stay in the file store that many days longer, so that a database backup restored finds them: keep them at least as long as your backups. Rate limits count per address: raise them when many people share one (an office). A new length of sign-ins applies from the next sign-in. Sharing is by invitation: an invitation waits so many days to be answered (at most 90). When sharing, the apps suggest people one already shares a vault or a note with; on a server for a family or a company, everyone, by name. Anyone else is invited by their e-mail address, and the server answers the same whether it has an account or not."</p>
+                <p class="muted small">"These take effect at once, without a restart. Sizes: the largest attachment, the largest encrypted change (the apps split bigger edits to fit) and the largest snapshot — a note's whole state, which also carries a change too big for one update (automatic: 16 × the update size, at least 32 MiB). Versions: how many each note's history keeps, and how often one person adds one. Something deleted for good can be undone for so many days (0: gone at once; a shorter time applies to what was deleted already, too), and its files stay in the file store that many days longer, so that a database backup restored finds them: keep them at least as long as your backups. Rate limits count per address: raise them when many people share one (an office); and per person, from all their devices and agents. Someone whose apps keep sending what that refuses — a script not waiting as told — is suspended for so many minutes. A new length of sign-ins applies from the next sign-in. Sharing is by invitation: an invitation waits so many days to be answered (at most 90). When sharing, the apps suggest people one already shares a vault or a note with; on a server for a family or a company, everyone, by name. Anyone else is invited by their e-mail address, and the server answers the same whether it has an account or not."</p>
             </div>
         })}
     }

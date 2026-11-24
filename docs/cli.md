@@ -712,6 +712,15 @@ server's storage is full, every vault is, and `notekpr sync` says so once
 ("the server's storage is full") rather than for each vault; deleting
 something for good still works, and makes room.
 
+On a server many people share, the server may **hold your changes back**
+for a while: you changed as much as your daily allowance there lets you, or
+your account is suspended. Changes stay queued here and commands say why and
+when they go ("you have changed as much as this server allows for now: N
+change(s) are kept here and uploaded in about 3 h"). A running `notekpr
+sync` uploads nothing meanwhile and tries again then — or after a quarter of
+an hour, should an administrator have given you more room or lifted the
+suspension; while suspended it stays offline until then.
+
 Everything works offline against the encrypted replica: `ls`, `cat`, `search`,
 `backlinks`, `write`, `mv`, `rm`, imports and mirror edits. Changes are queued
 as CRDT updates with a random `client_update_id` and persisted before the

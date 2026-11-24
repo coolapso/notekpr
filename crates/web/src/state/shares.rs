@@ -366,13 +366,13 @@ pub fn publish_shares(c: &Core) {
     }
 }
 
-pub(super) fn subscribe_share(c: &Core, vault: &str, note: &str) {
+pub(super) fn subscribe_share(c: &mut Core, vault: &str, note: &str) {
     if let Some(since) = c
         .shares
         .get(&(vault.to_string(), note.to_string()))
         .map(|s| s.seq)
     {
-        send(
+        let sent = send(
             c,
             &ClientMessage::Subscribe {
                 vault_id: vault.to_string(),
@@ -380,6 +380,10 @@ pub(super) fn subscribe_share(c: &Core, vault: &str, note: &str) {
                 object_id: Some(note.to_string()),
             },
         );
+        if sent {
+            c.awaiting
+                .insert((vault.to_string(), Some(note.to_string())));
+        }
     }
 }
 
@@ -396,6 +400,8 @@ fn catch_up_afresh(c: &mut Core, vault: &str, note: &str) {
 /// A shared note's catch-up is complete (an edge).
 pub(super) fn on_share_synced(vault: &str, note: &str, head: i64) {
     let (first, applied) = step(|c| {
+        c.awaiting
+            .remove(&(vault.to_string(), Some(note.to_string())));
         let Some(s) = c.shares.get_mut(&(vault.to_string(), note.to_string())) else {
             return (false, engine::Applied::default());
         };

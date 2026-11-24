@@ -42,6 +42,8 @@ enum Exit {
     Reconnect(String),
     /// The server is going away to be started again (an update).
     Restarting,
+    /// The account is suspended: not back before it ends.
+    Held(crate::api::Held),
 }
 
 /// How the server closed the connection.
@@ -68,6 +70,19 @@ pub struct Fatal(pub String);
 #[derive(Debug, thiserror::Error)]
 #[error("the server is restarting")]
 struct Restarting;
+
+/// The server refused the connection: the account is suspended for so long.
+#[derive(Debug, thiserror::Error)]
+#[error("the account is suspended")]
+struct Suspended(crate::api::Held);
+
+/// A suspension the server said of, with when it ends (`retry_after`).
+fn suspension(retry_after: Option<u64>) -> crate::api::Held {
+    crate::api::Held {
+        wait: Duration::from_secs(retry_after.unwrap_or(60).max(1)),
+        suspended: true,
+    }
+}
 
 struct Backoff {
     attempt: u32,
@@ -110,6 +125,8 @@ enum Next {
     Retry(String),
     /// The server is restarting: come back soon.
     RetrySoon,
+    /// The account is suspended: come back when it ends.
+    RetryAfter(crate::api::Held),
 }
 
 /// Only a [`Fatal`] error (session revoked or expired) ends live sync; any
@@ -121,6 +138,7 @@ fn after_session(r: Result<Exit>) -> Next {
         Ok(Exit::Shutdown) => Next::Stop,
         Ok(Exit::Reconnect(reason)) => Next::Retry(reason),
         Ok(Exit::Restarting) => Next::RetrySoon,
+        Ok(Exit::Held(h)) => Next::RetryAfter(h),
         Err(e) if e.is::<Fatal>() => Next::Fail(e),
         Err(e) => Next::Retry(format!("{e:#}")),
     }
@@ -154,7 +172,10 @@ pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<(
             }
             Err(e) if e.is::<Fatal>() => Next::Fail(e),
             Err(e) if e.is::<Restarting>() => Next::RetrySoon,
-            Err(e) => Next::Retry(format!("{e:#}")),
+            Err(e) => match e.downcast_ref::<Suspended>() {
+                Some(Suspended(h)) => Next::RetryAfter(*h),
+                None => Next::Retry(format!("{e:#}")),
+            },
         };
         let reason = match next {
             Next::Stop => {
@@ -171,6 +192,28 @@ pub async fn run(hub: Arc<Hub>, mut shutdown: watch::Receiver<bool>) -> Result<(
             Next::RetrySoon => {
                 backoff.restarting();
                 "the server is restarting".to_string()
+            }
+            Next::RetryAfter(h) => {
+                hub.set_online(false);
+                hub.set_push_now(false);
+                hub.hold(h);
+                // Said here; the pushes after it end go on as usual.
+                hub.take_held_news();
+                hub.save_all().await;
+                let pending: usize = {
+                    let mut n = 0;
+                    for v in hub.vaults() {
+                        n += v.lock().await.replica.pending.len();
+                    }
+                    n
+                };
+                ui::status(&format!("offline: {}", h.explain(pending)));
+                tokio::select! {
+                    _ = tokio::time::sleep(h.retry_in() + Duration::from_secs(1)) => {}
+                    _ = shutdown.changed() => {}
+                }
+                backoff.reset();
+                continue;
             }
         };
         hub.set_online(false);
@@ -250,6 +293,9 @@ async fn connect(hub: &Hub) -> Result<Ws> {
         ServerMessage::Error { code, message, .. } if code == ERROR_UPDATE_REQUIRED => {
             Err(Fatal(crate::api::update_required_message(&message)).into())
         }
+        ServerMessage::Error {
+            code, retry_after, ..
+        } if code == ERROR_SUSPENDED => Err(Suspended(suspension(retry_after)).into()),
         ServerMessage::Error { code, .. } if code == "unauthorized" => {
             if hub.session.kind == PrincipalKind::Agent {
                 api.invalidate_token().await;
@@ -303,6 +349,9 @@ struct Conn {
     /// Vaults whose initial catch-up finished on this connection.
     synced: BTreeSet<String>,
     subscribed: BTreeSet<String>,
+    /// Subscriptions the server refused for now (`rate_limited`): sent
+    /// again then.
+    resubscribe: Vec<(String, Instant)>,
     announced: bool,
     nonce: u64,
 }
@@ -316,6 +365,7 @@ async fn session_loop(
     let mut conn = Conn {
         synced: BTreeSet::new(),
         subscribed: BTreeSet::new(),
+        resubscribe: Vec::new(),
         announced: false,
         nonce: 0,
     };
@@ -344,6 +394,7 @@ async fn session_loop(
     let mut ping = tokio::time::interval(PING_EVERY);
     let mut save = tokio::time::interval(SAVE_EVERY);
     let mut maintenance = tokio::time::interval(MAINTENANCE_EVERY);
+    let mut each_second = tokio::time::interval(Duration::from_secs(1));
     ping.tick().await;
     save.tick().await;
     maintenance.tick().await;
@@ -381,6 +432,28 @@ async fn session_loop(
             }
             _ = save.tick() => hub.save_all().await,
             _ = maintenance.tick() => spawn_maintenance(hub.clone()),
+            _ = each_second.tick() => {
+                // Refused subscriptions, once the server said.
+                let now = Instant::now();
+                let due: Vec<String> = conn
+                    .resubscribe
+                    .iter()
+                    .filter(|(_, at)| *at <= now)
+                    .map(|(v, _)| v.clone())
+                    .collect();
+                conn.resubscribe.retain(|(_, at)| *at > now);
+                for v in due {
+                    if !subscribe(hub, &mut sink, &v).await? {
+                        close(hub, &mut conn, &v, "the vault is no longer open").await;
+                    }
+                }
+                // Changes the server holds back (from any push: the
+                // Markdown folder, the gateway, a command): said once, and
+                // pushed again when it says.
+                if let Some(h) = hub.take_held_news() {
+                    after_hold(hub, h).await;
+                }
+            }
             _ = shutdown.changed() => {
                 let _ = sink.send(Message::Close(None)).await;
                 hub.save_all().await;
@@ -422,7 +495,7 @@ pub fn read_only_reason(why: ReadOnly) -> &'static str {
 }
 
 fn spawn_maintenance(hub: Arc<Hub>) {
-    if hub.server_read_only().is_some() {
+    if hub.server_read_only().is_some() || hub.held().is_some() {
         return;
     }
     tokio::spawn(async move {
@@ -431,6 +504,23 @@ fn spawn_maintenance(hub: Arc<Hub>) {
             if let Err(e) = hub.session.compact(&v, Some(Duration::from_secs(10))).await {
                 tracing::warn!("compaction failed: {e:#}");
             }
+        }
+    });
+}
+
+/// The server holds changes back: say so, and push every vault again once
+/// it may be over ([`crate::api::Held::retry_in`]).
+async fn after_hold(hub: &Arc<Hub>, h: crate::api::Held) {
+    let mut pending = 0;
+    for v in hub.vaults() {
+        pending += v.lock().await.replica.pending.len();
+    }
+    ui::status(&h.explain(pending));
+    let hub = hub.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(h.retry_in() + Duration::from_secs(1)).await;
+        for id in hub.vault_ids() {
+            spawn_push(&hub, &id);
         }
     });
 }
@@ -448,6 +538,9 @@ fn spawn_push(hub: &Arc<Hub>, vault_id: &str) {
     let id = vault_id.to_string();
     tokio::spawn(async move {
         match hub.push(&id).await {
+            // Held back by the server: the live loop says so, and pushes
+            // again when it ends (`after_hold`).
+            Ok(o) if o.held.is_some() => {}
             Ok(o) if o.pushed > 0 || o.blobs > 0 => {
                 tracing::debug!(vault = %id, pushed = o.pushed, blobs = o.blobs, "uploaded local changes")
             }
@@ -849,7 +942,11 @@ async fn handle(
             code,
             message,
             vault_id,
+            retry_after,
         } => {
+            if code == ERROR_SUSPENDED {
+                return Ok(Some(Exit::Held(suspension(retry_after))));
+            }
             if code == "unauthorized" {
                 if session.kind == PrincipalKind::Agent {
                     session.api.invalidate_token().await;
@@ -870,6 +967,16 @@ async fn handle(
                     if let Some(sv) = hub.get(&v) {
                         sv.lock().await.full = true;
                     }
+                }
+                // A subscription refused for now (too many at once): again
+                // when the server says.
+                Some(v)
+                    if code == ERROR_RATE_LIMITED
+                        && conn.subscribed.contains(&v)
+                        && !conn.synced.contains(&v) =>
+                {
+                    let wait = Duration::from_secs(retry_after.unwrap_or(1).clamp(1, 60));
+                    conn.resubscribe.push((v, Instant::now() + wait));
                 }
                 Some(v) => tracing::warn!(vault = %v, code, "server error: {message}"),
                 None => tracing::warn!(code, "server error: {message}"),
@@ -975,6 +1082,11 @@ mod tests {
         assert!(matches!(
             after_session(Ok(Exit::Restarting)),
             Next::RetrySoon
+        ));
+        // Suspended: back when it ends, not before.
+        assert!(matches!(
+            after_session(Ok(Exit::Held(suspension(Some(90))))),
+            Next::RetryAfter(h) if h.wait == Duration::from_secs(90) && h.suspended
         ));
         assert!(matches!(
             after_session(Err(Fatal("session revoked".into()).into())),

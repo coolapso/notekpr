@@ -10,6 +10,7 @@ use notekpr_core::protocol::{ADMIN_TOKEN_PREFIX, AdminScope, PrincipalKind, User
 
 use crate::db::{self, Db};
 use crate::error::{AppError, AppResult, forbidden};
+use crate::person_limits::{self, Limits};
 use crate::repo;
 use crate::state::AppState;
 
@@ -25,6 +26,9 @@ pub struct Principal {
     pub session_kind: String,
     pub device_id: Option<String>,
     pub owner_id: Option<String>,
+    /// The limits per person its requests count against (an agent's are
+    /// its owner's).
+    pub limits: Limits,
 }
 
 impl Principal {
@@ -130,6 +134,7 @@ impl FromRequestParts<AppState> for Admin {
         // instance nobody has it: `authenticate`).
         let who = authenticate(state, token).await?;
         who.require_admin()?;
+        person_limits::admit(state, &who, parts).await?;
         Ok(Admin::Person {
             who,
             scopes: AdminScope::ALL.to_vec(),
@@ -155,7 +160,9 @@ impl FromRequestParts<AppState> for Principal {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let token = bearer(parts).ok_or(AppError::Unauthorized)?;
-        authenticate(state, token).await
+        let who = authenticate(state, token).await?;
+        person_limits::admit(state, &who, parts).await?;
+        Ok(who)
     }
 }
 
@@ -172,6 +179,7 @@ pub async fn authenticate(state: &AppState, token: &str) -> AppResult<Principal>
     if row.revoked_at.is_some() || row.expires_at <= now || row.disabled || row.owner_disabled {
         return Err(AppError::Unauthorized);
     }
+    let person = row.owner_id.clone().unwrap_or_else(|| row.user_id.clone());
     let p = Principal {
         session_id: row.id,
         user_id: row.user_id,
@@ -181,6 +189,12 @@ pub async fn authenticate(state: &AppState, token: &str) -> AppResult<Principal>
         display_name: row.display_name,
         // An admin-less instance has no administrators among its people.
         is_admin: row.is_admin && !state.config.adminless,
+        limits: Limits {
+            person,
+            rate: crate::repo::allowance(row.rate_allowance),
+            writes: crate::repo::allowance(row.write_allowance),
+            suspended_until: row.suspended_until,
+        },
         owner_id: row.owner_id,
     };
     if row.last_used_at.is_none_or(|t| now - t > 60_000) {

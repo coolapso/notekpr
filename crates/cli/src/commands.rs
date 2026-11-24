@@ -1052,7 +1052,14 @@ fn show_recovery_key(rk: &str) {
 }
 
 fn report_push(o: crate::session::PushOutcome) {
-    report_pending(o.remaining, o.offline, o.read_only, o.vault_full, false);
+    report_pending(
+        o.remaining,
+        o.offline,
+        o.read_only,
+        o.vault_full,
+        o.held,
+        false,
+    );
 }
 
 /// What happens to changes saved here and not uploaded yet (`quick_notes`:
@@ -1062,9 +1069,12 @@ fn report_pending(
     offline: bool,
     read_only: bool,
     vault_full: bool,
+    held: Option<crate::api::Held>,
     quick_notes: bool,
 ) {
-    if read_only {
+    if let Some(h) = held {
+        ui::status(&format!("saved locally; {}", h.explain(remaining)));
+    } else if read_only {
         ui::status(&format!(
             "saved locally; the server is read-only right now: {remaining} change(s) will be uploaded when it accepts changes again"
         ));
@@ -1841,6 +1851,7 @@ async fn write(
         false,
         out.read_only,
         out.vault_full,
+        out.held,
         quick_notes,
     );
     Ok(())
@@ -2182,6 +2193,7 @@ async fn quick(ctx: &Ctx, a: QuickArgs) -> Result<()> {
         false,
         out.read_only,
         out.vault_full,
+        out.held,
         true,
     );
     Ok(())
@@ -2247,7 +2259,14 @@ async fn shapes(ctx: &Ctx, c: ShapesCmd) -> Result<()> {
                     ));
                 }
             }
-            report_pending(r.pending_changes, false, r.read_only, r.vault_full, true);
+            report_pending(
+                r.pending_changes,
+                false,
+                r.read_only,
+                r.vault_full,
+                r.held,
+                true,
+            );
         }
         ShapesCmd::Rename { id, name } => {
             let r = op(ops::rename_library_item(&hub, &id, &name).await)?;
@@ -2258,7 +2277,14 @@ async fn shapes(ctx: &Ctx, c: ShapesCmd) -> Result<()> {
             } else {
                 crate::out!("renamed the shape");
             }
-            report_pending(r.pending_changes, false, r.read_only, r.vault_full, true);
+            report_pending(
+                r.pending_changes,
+                false,
+                r.read_only,
+                r.vault_full,
+                r.held,
+                true,
+            );
         }
         ShapesCmd::Rm { ids } => {
             let r = op(ops::remove_library_items(&hub, &ids).await)?;
@@ -2267,7 +2293,14 @@ async fn shapes(ctx: &Ctx, c: ShapesCmd) -> Result<()> {
             } else {
                 crate::out!("removed {} shape(s)", r.ids.len());
             }
-            report_pending(r.pending_changes, false, r.read_only, r.vault_full, true);
+            report_pending(
+                r.pending_changes,
+                false,
+                r.read_only,
+                r.vault_full,
+                r.held,
+                true,
+            );
         }
         ShapesCmd::Export { ids, out, force } => {
             let items = op(ops::find_library(&hub, &ids).await)?;
@@ -2716,12 +2749,14 @@ pub(crate) async fn sync_once(
     }
     let mut pending = 0;
     let mut read_only = false;
+    let mut held = None;
     let mut full = Vec::new();
     for id in hub.vault_ids() {
         match hub.sync_vault(&id).await {
             Ok(o) => {
                 pending += o.remaining;
                 read_only |= o.read_only;
+                held = held.or(o.held);
                 if o.vault_full
                     && let Some(v) = hub.get(&id)
                 {
@@ -2740,6 +2775,9 @@ pub(crate) async fn sync_once(
         ui::warn(&format!(
             "the server is read-only right now: {pending} change(s) stay queued and are uploaded when it accepts changes again"
         ));
+    }
+    if let Some(h) = held {
+        ui::warn(&h.explain(pending));
     }
     if !full.is_empty() {
         ui::warn(&format!(

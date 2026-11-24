@@ -1376,6 +1376,41 @@ pub struct AdminUser {
     /// `quick_notes_storage_mb`.
     #[serde(default)]
     pub quick_notes_storage_allowance: Allowance,
+    /// Their own request rate (per second, with their agents), else the
+    /// instance's `person_rate_limit_rps`.
+    #[serde(default)]
+    pub rate_allowance: Allowance,
+    /// Their own daily write allowance (MiB, with their agents), else the
+    /// instance's `writes_per_day_mb`.
+    #[serde(default)]
+    pub write_allowance: Allowance,
+    /// Until when they (and their agents) are suspended (ms), while they
+    /// are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspended_until: Option<i64>,
+    /// How many of their requests the limits per person refused in the last
+    /// 24 hours (counted in memory: since the server started, if that's
+    /// less).
+    #[serde(default)]
+    pub refused: Refused,
+}
+
+/// Requests the limits per person refused ([`AdminUser::refused`]).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Refused {
+    /// By their request rate (REST, and WebSocket pushes and
+    /// subscriptions).
+    #[serde(default)]
+    pub requests: u64,
+    /// By their daily write allowance.
+    #[serde(default)]
+    pub writes: u64,
+}
+
+impl Refused {
+    pub fn any(&self) -> bool {
+        self.requests + self.writes > 0
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -1396,6 +1431,16 @@ pub struct AdminUpdateUser {
     /// How much their quick notes may take, in MiB (absent: unchanged).
     #[serde(default)]
     pub quick_notes_storage_allowance: Option<Allowance>,
+    /// Their request rate, per second (absent: unchanged; at least 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_allowance: Option<Allowance>,
+    /// What they may write in a day, in MiB (absent: unchanged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_allowance: Option<Allowance>,
+    /// Suspend them (and their agents) until then (ms); a time past, such
+    /// as `0`, lifts a suspension (absent: unchanged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suspended_until: Option<i64>,
 }
 
 /// A vault as administrators see it (`GET /admin/vaults`): its id, owner and
@@ -1707,6 +1752,17 @@ pub struct InstanceSettings {
     pub rate_limit_rps: u32,
     /// Sign-in and token requests per minute per client address.
     pub auth_rate_limit_per_min: u32,
+    /// Requests per second per person (an account with its agents, from
+    /// every address), unless they have their own
+    /// ([`AdminUser::rate_allowance`]); bursts of 4 ×.
+    pub person_rate_limit_rps: u32,
+    /// MiB of new content a person (with their agents) may store in a day,
+    /// unless they have their own ([`AdminUser::write_allowance`]): it
+    /// refills evenly over 24 hours.
+    pub writes_per_day_mb: Limit,
+    /// Minutes the server suspends someone whose apps keep sending far more
+    /// requests than their rate allows; `0`: it never does.
+    pub auto_suspend_minutes: u32,
     /// Whom the apps suggest when sharing.
     pub user_directory: UserDirectory,
     /// Invitations a person may have out at once, not answered yet (§5.6).
@@ -1750,6 +1806,9 @@ impl Default for InstanceSettings {
             keep_deleted_files_days: 14,
             rate_limit_rps: 50,
             auth_rate_limit_per_min: 30,
+            person_rate_limit_rps: 50,
+            writes_per_day_mb: Limit::Unlimited,
+            auto_suspend_minutes: 60,
             user_directory: UserDirectory::Private,
             invitations_pending: default_invitations_pending(),
             invitations_per_day: default_invitations_per_day(),
@@ -1808,6 +1867,12 @@ pub struct InstanceSettingsUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_rate_limit_per_min: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub person_rate_limit_rps: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writes_per_day_mb: Option<Limit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_suspend_minutes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_directory: Option<UserDirectory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invitations_pending: Option<Limit>,
@@ -1856,6 +1921,9 @@ impl InstanceSettings {
             keep_deleted_files_days,
             rate_limit_rps,
             auth_rate_limit_per_min,
+            person_rate_limit_rps,
+            writes_per_day_mb,
+            auto_suspend_minutes,
             user_directory,
             invitations_pending,
             invitations_per_day,
@@ -1875,6 +1943,9 @@ impl InstanceSettings {
         self.rate_limit_rps = rate_limit_rps.unwrap_or(self.rate_limit_rps);
         self.auth_rate_limit_per_min =
             auth_rate_limit_per_min.unwrap_or(self.auth_rate_limit_per_min);
+        self.person_rate_limit_rps = person_rate_limit_rps.unwrap_or(self.person_rate_limit_rps);
+        self.writes_per_day_mb = writes_per_day_mb.unwrap_or(self.writes_per_day_mb);
+        self.auto_suspend_minutes = auto_suspend_minutes.unwrap_or(self.auto_suspend_minutes);
         self.user_directory = user_directory.unwrap_or(self.user_directory);
         self.invitations_pending = invitations_pending.unwrap_or(self.invitations_pending);
         self.invitations_per_day = invitations_per_day.unwrap_or(self.invitations_per_day);
@@ -1908,6 +1979,7 @@ impl InstanceSettings {
             ("snapshot_retention", self.snapshot_retention, 2),
             ("rate_limit_rps", self.rate_limit_rps, 1),
             ("auth_rate_limit_per_min", self.auth_rate_limit_per_min, 1),
+            ("person_rate_limit_rps", self.person_rate_limit_rps, 1),
             ("session_ttl_days", self.session_ttl_days, 1),
             ("device_session_ttl_days", self.device_session_ttl_days, 1),
             ("agent_token_ttl_secs", self.agent_token_ttl_secs, 60),
@@ -2033,6 +2105,19 @@ pub const ERROR_VAULT_FULL: &str = "vault_full";
 /// 426; the WebSocket's `error` before closing): it says so and keeps its
 /// unsent changes. [`ApiError::oldest_version`] says which version it needs.
 pub const ERROR_UPDATE_REQUIRED: &str = "update_required";
+/// The error code of requests refused by a rate limit (HTTP 429, with
+/// `Retry-After` when the same request may be sent again then).
+pub const ERROR_RATE_LIMITED: &str = "rate_limited";
+/// The error code of new content refused because the person (an agent's
+/// owner) wrote as much as their daily write allowance lets them for now
+/// (HTTP 429 with `Retry-After`; the WebSocket's `error` with
+/// `retry_after`). Clients keep the change and send it then, not before.
+pub const ERROR_WRITE_LIMIT: &str = "write_limit";
+/// The error code of every request of a suspended account (or of an agent
+/// whose owner is suspended): HTTP 429 with `Retry-After` (when it ends);
+/// the WebSocket's `error` with `retry_after`, before it closes. Clients
+/// keep their changes and come back then.
+pub const ERROR_SUSPENDED: &str = "suspended";
 
 /// What an admin client (or a person with the admin role) may do on the
 /// administration API. Every admin client can `read`.
@@ -2307,6 +2392,10 @@ pub enum ServerMessage {
         code: String,
         message: String,
         vault_id: Option<String>,
+        /// Seconds until the request may be made again
+        /// ([`ERROR_WRITE_LIMIT`], [`ERROR_SUSPENDED`], [`ERROR_RATE_LIMITED`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after: Option<u64>,
     },
     Pong {
         nonce: u64,

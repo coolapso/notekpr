@@ -59,8 +59,10 @@ Nothing in the app or the logs shows it:
   `/admin/*`) see each account's name, e-mail, kind (person or agent),
   role, whether it is disabled, when it was created and last signed in, how
   many vaults it is in and owns, how many devices, agents and quick notes it
-  has, what the vaults it owns and its Personal storage take, and its own
-  limits;
+  has, what the vaults it owns and its Personal storage take, its own
+  limits, until when it is suspended, and how many of its requests the
+  limits per person refused in the last 24 hours (protocol §9) — which
+  shows that someone is very busy, not what they do;
   each vault's id, owner, size, storage limit and how many drawings it
   holds and may hold (to give one more room;
   members read the id in its settings); plus
@@ -76,7 +78,7 @@ What the database holds, besides ciphertext and public keys:
 
 | Table | What it tells |
 |---|---|
-| `users`, `identities` | accounts: display name, e-mail, OIDC issuer and subject, administrator, disabled, created and last sign-in; an agent's owner; a person's own limits (vaults, agents, quick notes and the storage of their Personal storage) |
+| `users`, `identities` | accounts: display name, e-mail, OIDC issuer and subject, administrator, disabled, created and last sign-in; an agent's owner; a person's own limits (vaults, agents, quick notes, the storage of their Personal storage, requests per second, writes per day) and until when they are suspended |
 | `devices`, `sessions`, `agent_credentials` | each account's devices and their names (the browser and system, or `notekpr CLI on <host name>`), sessions, and when each was created, last used (to the minute; only the latest time is kept), revoked |
 | `vaults`, `vault_members`, `member_log` | who owns each vault, who is in it with which role, who added them and when; which vault is someone's quick notes (their Personal storage); how much its content takes, and its own storage and drawings limits; the membership log's entries (user ids, roles, public keys, key commitments, times) |
 | `objects`, `updates`, `snapshots` | how many notes and other objects a vault has, which of them are drawings (said by the app that made each, never changed), when each was created and changed, and for every change (notes, drawings, the file tree, comments): who wrote it, from which device, when, and its size. Comment threads are objects named after their note (`c_<note id>`), so it also tells which notes have comments. When a note was deleted for good, and whether that was undone |
@@ -86,12 +88,14 @@ What the database holds, besides ciphertext and public keys:
 | `invitations` | who invited whom (an account, or an e-mail address as typed, which may have no account here) to which vault or note, as what, when, until when; whether they accepted (declined ones look unanswered), and both signatures. An address is kept only until the invitation ends (done, cancelled, expired — `invitation_days`, default 14 — or its inviter stopped being an owner); an ended one is deleted a day after it was sent |
 | `user_prefs` | when someone's encrypted preferences last changed, and their size |
 | `instance_settings` | the instance's limits and read-only switch, and when they last changed |
-| `audit_log` | account, device, membership, sharing and key events: who did what to whom, when (ids, roles and device names; never names of notes or vaults) |
+| `audit_log` | account, device, membership, sharing and key events: who did what to whom, when (ids, roles and device names; never names of notes or vaults); suspensions, by the server or an administrator, and until when |
 
 Kept only in memory, never written: IP addresses (used for rate limits;
-except a device sign-in code's, above), who is connected right now, and
+except a device sign-in code's, above), who is connected right now,
 presence (which vault — and, for individually shared notes, which note —
-someone has open).
+someone has open), and for the limits per person how much each person
+requested and wrote lately (as the state of their budgets, not a log) and
+how many of their requests were refused in the last 24 hours.
 
 A vault's size (`vaults.storage_bytes`) is the sum of sizes the server
 stores anyway — ciphertexts of its log, history and files — kept current as
@@ -124,6 +128,40 @@ identities and preferences. What stays is in vaults that aren't theirs:
 what they wrote there (encrypted, with their user id as its author) and
 their user id in membership logs and audit entries — not their name or
 keys. Backups keep the rest for as long as they are kept.
+
+### A server many people share
+
+On a server of one's own, whoever runs it is oneself, someone in the family
+or the company's IT. On a server many people share — a hosted service, such
+as notekpr's own — it is someone else, for everyone on it:
+
+* **Whoever runs it** sees what any server sees (above), for every account:
+  who has one, the name and address each signed in with, who shares with
+  whom, how much each vault takes, when people write and from which device.
+  Never content, nor the names of notes or vaults, nor anything else that
+  is encrypted. Asked for an account's data — by a court, say — that
+  metadata and ciphertext are all it has to give. It can limit, suspend,
+  disable or delete an account; it can't read one.
+* **The other people on it** see nothing of you unless you share with each
+  other. The apps suggest only people one already shares with (the
+  `private` directory, the default, which such a server should keep);
+  inviting an address answers the same whether it has an account or not;
+  accounts can't be looked up. Anyone may invite you, though: an invitation
+  to a vault shows you its sender's name and address, and they learn yours
+  only if you accept. People you share a vault with see your name, address
+  and public key; people you share only a note with, your name and key.
+* **Abuse**, without reading anything: limits per person (protocol §9)
+  keep one account — from however many addresses, with its agents — from
+  slowing the server down or filling it for everyone: a request rate, a
+  daily write allowance, storage per vault and for Personal storage, and
+  how many vaults, agents and invitations a person may have. Someone whose
+  apps keep hammering far past their rate is suspended for a while (unless
+  the operator turned that off), and administrators see who runs into the
+  limits — how often, never what for — and can give them more room or
+  less, suspend or disable them. The counts are kept in memory only; a
+  suspension is kept in the database and in the person's own audit log,
+  and their apps say until when. Limits per address count an IPv6 address
+  by its /64 network, which is what one connection usually gets.
 
 ## Cryptography
 

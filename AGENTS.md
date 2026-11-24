@@ -125,7 +125,8 @@ crates/server   axum + SQLite. routes/ (REST) · ws.rs (WebSocket, subscriptions
                 sync.rs (encrypted log, snapshots, key checks) · access.rs (who may
                 do what) · repo/ (all other SQL) · hub.rs (EventBus: live events) ·
                 blobs.rs (attachments: a folder, S3 or the database) · instance.rs (runtime settings: limits,
-                read-only mode) · apps.rs (apps too old for the server:
+                read-only mode) · person_limits.rs (requests, changes a day and suspensions per
+                person, in memory) · apps.rs (apps too old for the server:
                 OLDEST_APP_VERSION) · admin_clients.rs (scripts administering the
                 instance: scopes, tokens) · auth.rs (sessions; Admin: admins and
                 admin clients), oidc.rs · page.rs (the web client's page: its link

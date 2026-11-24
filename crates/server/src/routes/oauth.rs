@@ -29,6 +29,25 @@ const POLL_INTERVAL_S: i64 = 5;
 const DAY_MS: i64 = 24 * 3600 * 1000;
 pub const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
+/// An agent keeps at most this many tokens that work: getting another ends
+/// the oldest.
+const AGENT_TOKENS: i64 = 20;
+
+/// A token request refused by the limits per person, in the OAuth shape,
+/// with `Retry-After`.
+fn oauth_refused(e: AppError) -> Response {
+    let mut r = oauth_error(
+        StatusCode::TOO_MANY_REQUESTS,
+        e.code(),
+        Some(&e.to_string()),
+    );
+    if let Some(secs) = e.retry_after() {
+        r.headers_mut()
+            .insert(axum::http::header::RETRY_AFTER, secs.into());
+    }
+    r
+}
+
 fn oauth_error(status: StatusCode, error: &str, desc: Option<&str>) -> Response {
     (
         status,
@@ -245,10 +264,26 @@ async fn client_credentials(
         ));
     }
     let agent_id = row.agent_id;
-    repo::agents::touch_credential(&state.db, client_id, db::now()).await?;
-    let ttl_secs = state.instance.settings().agent_token_ttl_secs;
+    // Its owner's limits: not while they are suspended, and at the sign-in
+    // rate per person.
+    let now = db::now();
+    if let Some(until) = row.owner_suspended_until.filter(|t| *t > now) {
+        return Ok(oauth_refused(AppError::Suspended(until)));
+    }
+    let settings = state.instance.settings();
+    let owner = row.owner_id.as_deref().unwrap_or(&agent_id);
+    if let Err(wait) = state
+        .instance
+        .people()
+        .sign_in(owner, settings.auth_rate_limit_per_min)
+    {
+        return Ok(oauth_refused(AppError::RateLimitedFor(wait)));
+    }
+    repo::agents::touch_credential(&state.db, client_id, now).await?;
+    let ttl_secs = settings.agent_token_ttl_secs;
     let ttl_ms = i64::from(ttl_secs) * 1000;
     let s = auth::create_session(&state.db, &agent_id, "agent", Some(client_id), ttl_ms).await?;
+    repo::sessions::keep_latest_agent_sessions(&state.db, &agent_id, now, AGENT_TOKENS).await?;
     Ok(Json(TokenResponse {
         access_token: s.token,
         token_type: "Bearer".into(),
@@ -256,6 +291,17 @@ async fn client_credentials(
         scope: None,
     })
     .into_response())
+}
+
+/// Device codes are looked up and decided on at the sign-in rate per
+/// person too, not only per address: codes can't be guessed from many.
+fn codes_limit(state: &AppState, who: &Principal) -> AppResult<()> {
+    let per_min = state.instance.settings().auth_rate_limit_per_min;
+    state
+        .instance
+        .people()
+        .sign_in(&who.limits.person, per_min)
+        .map_err(AppError::RateLimitedFor)
 }
 
 fn normalize_user_code(s: &str) -> String {
@@ -282,6 +328,7 @@ pub async fn device_lookup(
     Query(q): Query<LookupQuery>,
 ) -> AppResult<Json<DeviceCodeLookup>> {
     who.require_human()?;
+    codes_limit(&state, &who)?;
     let code = normalize_user_code(&q.user_code);
     let (client_name, created_at, expires_at, requested_from) =
         repo::sessions::pending_device_grant(&state.db, &code, db::now())
@@ -302,6 +349,7 @@ pub async fn device_decision(
     Json(d): Json<DeviceCodeDecision>,
 ) -> AppResult<StatusCode> {
     who.require_human()?;
+    codes_limit(&state, &who)?;
     let code = normalize_user_code(&d.user_code);
     if code.len() != 9 {
         return Err(bad("invalid code"));

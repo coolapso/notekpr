@@ -837,10 +837,9 @@ And per person — an account with its agents, over all their connections:
 While the account is suspended (§9), `auth` gets `error {code:
 "suspended", retry_after}` and the connection closes; a suspension ends
 every connection it has the same way. Clients don't reconnect before
-`retry_after`. (Apps older than these limits don't know `write_limit`,
-`suspended` or `retry_after`: they keep the refused changes but send them
-only once they connect again, and a suspended one keeps reconnecting —
-§9 says what a server setting a write allowance does about them.)
+`retry_after`. (Apps older than 0.21.0 don't know `write_limit`,
+`suspended` or `retry_after`; servers from 0.22.0 on tell them to update,
+§11.)
 
 The server pings every 30 s and checks the session again every 60 s; once it
 is no longer valid, the server sends `user_event {event: "session_revoked"}`
@@ -1052,12 +1051,11 @@ too) and their suspension, and `limited=true` lists only those refused or
 suspended in that time, the most refused first, so administrators can see
 who runs into the limits and give them more room, less, or suspend them.
 
-Apps older than these limits don't know `write_limit` or `suspended`: they
-keep refused changes, but send them again only when they reconnect or are
-reloaded (the CLI gives up on the request after 30 s), and a suspended one
-keeps reconnecting until the suspension ends. A server that sets a write
-allowance should also raise `oldest_app_version` to the first release that
-knows them, so older apps are told to update instead.
+Apps older than 0.21.0 don't know `write_limit` or `suspended`: they would
+keep refused changes but send them only once they reconnect or are
+restarted, and a suspended one would keep reconnecting. Servers from 0.22.0
+on accept apps from 0.21.0 on (§11), so older ones are told to update
+instead.
 
 ## 10. Operations endpoints
 

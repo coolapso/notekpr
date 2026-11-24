@@ -579,9 +579,7 @@ Under *Server*, the rest (API names and defaults in parentheses):
   shared server: emptying the trash makes room in a vault at once, but the
   server keeps what was deleted for the undo period (above), so without it
   someone could fill a vault, empty it and fill it again until the server
-  is full for everyone. Then also set *Oldest app version* to this
-  release: older apps don't know the answer and would wait for a reload
-  to send their edits. Give one person more or less under Accounts →
+  is full for everyone. Give one person more or less under Accounts →
   Limits. The apps keep edits that wait for the allowance and send them
   when it allows, saying when.
 * **Suspension**: someone whose apps keep sending requests these limits

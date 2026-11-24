@@ -99,9 +99,13 @@ pub async fn shared_with_me(
     for r in rows {
         let can_comment =
             r.role.can_write() || repo::vaults::viewers_comment(&state.db, &r.vault_id).await?;
+        // Their name and key, not their address: people connected only
+        // through a note don't see it (as `GET /users/{id}`).
+        let mut owner = public_user(&state.db, &r.vault_owner_id).await?;
+        owner.email = None;
         out.push(SharedNote {
             can_comment,
-            owner: public_user(&state.db, &r.vault_owner_id).await?,
+            owner,
             vault_id: r.vault_id,
             object_id: r.object_id,
             role: r.role,

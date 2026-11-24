@@ -1600,6 +1600,8 @@ async fn individual_note_sharing() {
     let mine: Vec<SharedNote> = bob.api.get("/shares").await;
     assert_eq!(mine.len(), 1);
     assert_eq!(mine[0].owner.id, alice.id);
+    // Her name and key, not her address.
+    assert_eq!(mine[0].owner.email, None);
     let keys: ObjectKeysResponse = bob.api.get(&format!("/vaults/{v}/objects/n1/keys")).await;
     let bring =
         engine::object_keyring_for_recipient(&bob.account, &bob.id, &v, &keys, None).unwrap();

@@ -46,15 +46,25 @@ pub async fn search(
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    let ids = match state.instance.settings().user_directory {
-        UserDirectory::Search => repo::users::search(&state.db, &who.user_id, &term, &like).await?,
+    // With each, whether to show their address: never to someone a note
+    // is shared with, of the people of its vault (`search_known`).
+    let found: Vec<(String, bool)> = match state.instance.settings().user_directory {
+        UserDirectory::Search => repo::users::search(&state.db, &who.user_id, &term, &like)
+            .await?
+            .into_iter()
+            .map(|id| (id, true))
+            .collect(),
         UserDirectory::Private | UserDirectory::Other => {
             repo::users::search_known(&state.db, &who.user_id, &term, &like).await?
         }
     };
-    let mut out = Vec::with_capacity(ids.len());
-    for id in ids {
-        out.push(public_user(&state.db, &id).await?);
+    let mut out = Vec::with_capacity(found.len());
+    for (id, with_address) in found {
+        let mut user = public_user(&state.db, &id).await?;
+        if !with_address {
+            user.email = None;
+        }
+        out.push(user);
     }
     Ok(Json(out))
 }

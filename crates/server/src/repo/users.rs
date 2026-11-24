@@ -383,20 +383,39 @@ pub async fn search(
 }
 
 /// Like [`search`], but only people the caller already shares a vault or
-/// a note with (as [`share_a_vault`], [`share_a_note`]).
+/// a note with, and whether to show their address (below).
 pub async fn search_known(
     db: impl SqliteExecutor<'_>,
     caller: &str,
     term: &str,
     like: &str,
-) -> AppResult<Vec<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT u.id FROM users u WHERE u.id != ?1 AND u.disabled = 0 AND (
-            (u.kind = 'human' AND (lower(u.display_name) LIKE ?2 ESCAPE '\\' OR lower(u.email) = ?3)
-             AND (EXISTS (SELECT 1 FROM vault_members a JOIN vault_members b ON a.vault_id = b.vault_id
-                          WHERE a.user_id = ?1 AND b.user_id = u.id)
-                  OR EXISTS (SELECT 1 FROM object_shares s JOIN vault_members m ON m.vault_id = s.vault_id
-                          WHERE (s.user_id = u.id AND m.user_id = ?1) OR (s.user_id = ?1 AND m.user_id = u.id))))
+) -> AppResult<Vec<(String, bool)>> {
+    // Whether each is found by their address and shown with it: people
+    // sharing a vault with the caller, and those a note of the caller's
+    // vaults is shared with (members see them in its shares). A note shared
+    // on its own shows its recipients only whoever shared it and the
+    // vault's owners (who they learn anyway, from the owner proof) — never
+    // its other members —, by name, without their address.
+    Ok(sqlx::query_as(
+        "SELECT u.id,
+                EXISTS (SELECT 1 FROM vault_members a JOIN vault_members b ON a.vault_id = b.vault_id
+                        WHERE a.user_id = ?1 AND b.user_id = u.id)
+                OR EXISTS (SELECT 1 FROM object_shares s JOIN vault_members m ON m.vault_id = s.vault_id
+                           WHERE s.user_id = u.id AND m.user_id = ?1) AS with_address
+         FROM users u WHERE u.id != ?1 AND u.disabled = 0 AND (
+            (u.kind = 'human' AND (
+                ((lower(u.display_name) LIKE ?2 ESCAPE '\\' OR lower(u.email) = ?3)
+                 AND (EXISTS (SELECT 1 FROM vault_members a JOIN vault_members b ON a.vault_id = b.vault_id
+                              WHERE a.user_id = ?1 AND b.user_id = u.id)
+                      OR EXISTS (SELECT 1 FROM object_shares s JOIN vault_members m ON m.vault_id = s.vault_id
+                                 WHERE s.user_id = u.id AND m.user_id = ?1)))
+                OR (lower(u.display_name) LIKE ?2 ESCAPE '\\'
+                    AND EXISTS (SELECT 1 FROM object_shares s
+                                WHERE s.user_id = ?1
+                                  AND (s.added_by = u.id
+                                       OR EXISTS (SELECT 1 FROM vault_members o
+                                                  WHERE o.vault_id = s.vault_id AND o.user_id = u.id
+                                                    AND o.role = 'owner'))))))
             OR (u.kind = 'agent' AND u.owner_id = ?1 AND lower(u.display_name) LIKE ?2 ESCAPE '\\'))
          ORDER BY u.kind, u.display_name LIMIT 10",
     )

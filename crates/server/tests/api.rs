@@ -1425,6 +1425,46 @@ async fn backup_and_restore_roundtrip() {
     assert!(aside.is_some_and(|p| p.exists()));
 }
 
+/// Someone a single note is shared with finds, of the vault's people, only
+/// whoever shared it and its owners — by name, not by address, and without
+/// it. The vault's members find them as anyone they share with (they see
+/// them in the note's shares), and each other.
+#[tokio::test]
+async fn note_recipients_find_only_who_shared_with_them() {
+    let srv = start().await;
+    let mut alice = new_user(&srv.base, "alice").await;
+    let bob = new_user(&srv.base, "bob").await;
+    let carol = new_user(&srv.base, "carol").await;
+    let v = alice.create_vault("Family").await;
+    alice.share(&v, &carol.id, Role::Editor).await.unwrap();
+    share_note(&alice, &v, "n", &bob).await;
+    let search = |u: &User, q: &str| {
+        let (api, q) = (u.api.clone(), q.to_string());
+        async move {
+            api.get::<Vec<PublicUser>>(&format!("/users/search?q={q}"))
+                .await
+        }
+    };
+    fn ids(found: &[PublicUser]) -> Vec<&str> {
+        found.iter().map(|u| u.id.as_str()).collect()
+    }
+
+    let found = search(&bob, "al").await;
+    assert_eq!(ids(&found), [alice.id.as_str()]);
+    assert_eq!(found[0].email, None);
+    for q in ["alice%40example.com", "ca", "carol%40example.com"] {
+        assert!(search(&bob, q).await.is_empty(), "{q}");
+    }
+
+    let found = search(&carol, "bob%40example.com").await;
+    assert_eq!(ids(&found), [bob.id.as_str()]);
+    assert_eq!(found[0].email.as_deref(), Some("bob@example.com"));
+
+    let found = search(&carol, "alice%40example.com").await;
+    assert_eq!(ids(&found), [alice.id.as_str()]);
+    assert_eq!(found[0].email.as_deref(), Some("alice@example.com"));
+}
+
 #[tokio::test]
 async fn individual_note_sharing() {
     use notekpr_core::engine;

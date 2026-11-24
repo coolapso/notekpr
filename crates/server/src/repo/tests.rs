@@ -1044,8 +1044,15 @@ async fn directory_search_respects_its_mode() {
 
     // The private directory: only people one shares a vault or a note with
     // (one's agents too), by name or exact address.
-    let known = |q: &'static str, like: &'static str| async move {
+    let found = |q: &'static str, like: &'static str| async move {
         users::search_known(db, "alice", q, like).await.unwrap()
+    };
+    let known = |q: &'static str, like: &'static str| async move {
+        found(q, like)
+            .await
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>()
     };
     assert_eq!(known("al", "al%").await, ["al-bot"]);
     assert!(known("alfred@example.org", "x%").await.is_empty());
@@ -1055,19 +1062,32 @@ async fn directory_search_respects_its_mode() {
     assert_eq!(known("al", "al%").await, ["al-bot", "alma"]);
     assert_eq!(known("alma@example.org", "x%").await, ["alma"]);
     // A note of alice's vault shared with alfred; one of alvin's shared
-    // with alice: either way they know each other.
+    // with alice: either way they know each other — alfred as anyone she
+    // shares with, alvin (whose note she was given) by name only, without
+    // his address.
     vault(db, "w", "alice", &[]).await;
     share(db, "w", "n", "alfred", Role::Viewer).await;
-    vault(db, "x", "alvin", &[]).await;
+    human(db, "alex").await;
+    vault(db, "x", "alvin", &[("alex", Role::Editor)]).await;
     share(db, "x", "m", "alice", Role::Editor).await;
     assert_eq!(
-        known("al", "al%").await,
-        ["al-bot", "alfred", "alma", "alvin"]
+        found("al", "al%").await,
+        [
+            ("al-bot".to_string(), false),
+            ("alfred".to_string(), true),
+            ("alma".to_string(), true),
+            ("alvin".to_string(), false),
+        ]
     );
-    // Someone with whom only a third person shares: no.
+    assert_eq!(known("alfred@example.org", "x%").await, ["alfred"]);
+    assert!(known("alvin@example.org", "x%").await.is_empty());
+    // The other members of a vault a note is shared from: no (alex).
+    // Someone with whom only a third person shares: no (alba).
     human(db, "alba").await;
     vault(db, "y", "alma", &[("alba", Role::Editor)]).await;
-    assert!(!known("al", "al%").await.contains(&"alba".to_string()));
+    let names = known("al", "al%").await;
+    assert!(!names.contains(&"alex".to_string()));
+    assert!(!names.contains(&"alba".to_string()));
 }
 
 #[tokio::test]

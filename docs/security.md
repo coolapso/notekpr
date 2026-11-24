@@ -429,7 +429,9 @@ primitives. Formats:
   before either (protocol.md §5.1, *Positions*). What they do learn is what
   they read: when the note and its comments change, and the user ids of
   whoever wrote them or stored its revisions (members' apps store those of
-  every note now and then). Of its comments they get those written since it was
+  every note now and then) — whose names and keys they may look up, as
+  those of the vault's owners and of whoever shared the note with them;
+  nobody else of the vault's. Of its comments they get those written since it was
   shared, and earlier ones only if the sharer chose to include them (then
   everyone the note is shared with gets them). They cannot share it further or change its key. When
   the owner removes one, the note's new key comes in the same request; as

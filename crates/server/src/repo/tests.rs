@@ -608,11 +608,23 @@ async fn people_connected_through_vaults_or_notes() {
 
     assert!(users::share_a_vault(db, "owner", "ed").await.unwrap());
     assert!(!users::share_a_vault(db, "owner", "bob").await.unwrap());
-    // Both directions: recipient ↔ any member of the note's vault.
-    assert!(users::share_a_note(db, "bob", "ed").await.unwrap());
+    // Members know whom the vault's notes are shared with.
     assert!(users::share_a_note(db, "ed", "bob").await.unwrap());
+    assert!(users::share_a_note(db, "owner", "bob").await.unwrap());
+    // The recipient knows the owner (who shared it, too), not other members.
+    assert!(users::share_a_note(db, "bob", "owner").await.unwrap());
+    assert!(!users::share_a_note(db, "bob", "ed").await.unwrap());
     assert!(!users::share_a_note(db, "bob", "carol").await.unwrap());
     assert!(!users::share_a_note(db, "owner", "ed").await.unwrap());
+    // Once ed writes a comment on it, the recipient knows him.
+    sqlx::query(
+        "INSERT INTO updates (vault_id, seq, object_id, client_update_id, author_id, payload, created_at)
+         VALUES ('v', 1, 'c_note', 'u1', 'ed', zeroblob(10), 0)",
+    )
+    .execute(db)
+    .await
+    .unwrap();
+    assert!(users::share_a_note(db, "bob", "ed").await.unwrap());
 }
 
 #[tokio::test]

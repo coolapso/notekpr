@@ -439,16 +439,30 @@ pub async fn share_a_vault(db: impl SqliteExecutor<'_>, a: &str, b: &str) -> App
     Ok(row.is_some())
 }
 
-/// Is a note of a vault one of them is a member of shared with the other?
+/// Does `a` know `b` through a note shared on its own? A member of its
+/// vault knows whom it is shared with (they see them in its shares);
+/// someone it is shared with knows only who shared it, the vault's owners
+/// (the owner proof shows them) and who wrote in the note or its comments —
+/// never the vault's other members.
 pub async fn share_a_note(db: impl SqliteExecutor<'_>, a: &str, b: &str) -> AppResult<bool> {
     let row: Option<i64> = sqlx::query_scalar(
         "SELECT 1 FROM object_shares s JOIN vault_members m ON m.vault_id = s.vault_id
-         WHERE (s.user_id = ? AND m.user_id = ?) OR (s.user_id = ? AND m.user_id = ?) LIMIT 1",
+         WHERE s.user_id = ?2 AND m.user_id = ?1
+         UNION ALL
+         SELECT 1 FROM object_shares s
+         WHERE s.user_id = ?1 AND (
+            s.added_by = ?2
+            OR EXISTS (SELECT 1 FROM vault_members o
+                       WHERE o.vault_id = s.vault_id AND o.user_id = ?2 AND o.role = 'owner')
+            OR EXISTS (SELECT 1 FROM updates u
+                       WHERE u.vault_id = s.vault_id AND u.object_id IN (s.object_id, 'c_' || s.object_id)
+                         AND u.author_id = ?2)
+            OR EXISTS (SELECT 1 FROM snapshots n
+                       WHERE n.vault_id = s.vault_id AND n.object_id = s.object_id AND n.author_id = ?2))
+         LIMIT 1",
     )
     .bind(a)
     .bind(b)
-    .bind(b)
-    .bind(a)
     .fetch_optional(db)
     .await?;
     Ok(row.is_some())

@@ -1427,8 +1427,9 @@ async fn backup_and_restore_roundtrip() {
 
 /// Someone a single note is shared with finds, of the vault's people, only
 /// whoever shared it and its owners — by name, not by address, and without
-/// it. The vault's members find them as anyone they share with (they see
-/// them in the note's shares), and each other.
+/// it — and looks up by id only them and who wrote in the note. The vault's
+/// members find them as anyone they share with (they see them in the
+/// note's shares), and each other.
 #[tokio::test]
 async fn note_recipients_find_only_who_shared_with_them() {
     let srv = start().await;
@@ -1455,6 +1456,15 @@ async fn note_recipients_find_only_who_shared_with_them() {
     for q in ["alice%40example.com", "ca", "carol%40example.com"] {
         assert!(search(&bob, q).await.is_empty(), "{q}");
     }
+    // Nor looked up by id: the owner, yes; a member who didn't write in the
+    // note, no (as if there were nobody).
+    let lookup = |u: &User, id: &str| {
+        let (api, path) = (u.api.clone(), format!("/users/{id}"));
+        async move { api.status::<()>(Method::GET, &path, None).await }
+    };
+    assert_eq!(lookup(&bob, &alice.id).await, 200);
+    assert_eq!(lookup(&bob, &carol.id).await, 404);
+    assert_eq!(lookup(&carol, &bob.id).await, 200);
 
     let found = search(&carol, "bob%40example.com").await;
     assert_eq!(ids(&found), [bob.id.as_str()]);

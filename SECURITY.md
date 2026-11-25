@@ -34,4 +34,5 @@ would be.
 
 ## Supported versions
 
-notekpr is before 1.0: fixes go into the next release, so update to it.
+The latest release: fixes go into the next release, not into older ones, so
+update to it.

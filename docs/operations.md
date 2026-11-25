@@ -896,10 +896,11 @@ What it needs:
   on the old one's node, which a network volume (Longhorn, a cloud disk)
   needs; a local one is on one node anyway.
 * **Migrations the old version can live with**: for a moment the old
-  server runs on the new schema. From 1.0.0 on, every migration works with
+  server runs on the new schema. Since 1.0.0, every migration works with
   the previous release (a column is added, used a release later, dropped
-  after that). Before 1.0 one may not: the old server's changes then fail
-  during those seconds — apps keep note edits and send them to the new one;
+  after that). Updating to a release before 1.0, one may not: the old
+  server's changes then fail during those seconds — apps keep note edits
+  and send them to the new one;
   other changes are tried again by the person.
 * **An old version that hands over.** 0.16 and older hold no lease, so a new
   server started beside one writes at once, next to it, until it stops. The

@@ -20,12 +20,6 @@ rules:
   - type: build
     bump: patch
 
-# Below 1.0.0 for now: a breaking change bumps the minor version
-# (0.1.0 → 0.2.0) instead of releasing 1.0.0. Remove these two lines to
-# release 1.0.0.
-version_ceiling: "1.0.0"
-ceiling_strategy: clamp
-
 # Git tags and GitHub Releases are the release record: no commits, version
 # files or changelog in the repository.
 commit_changelog: false

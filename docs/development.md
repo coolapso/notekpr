@@ -406,9 +406,10 @@ version from the commit messages since the last release, so they follow
 [Conventional Commits](https://www.conventionalcommits.org): `feat:` bumps
 the minor version; `fix:`, `perf:`, `refactor:` and `build:` the patch
 version; other types (`docs:`, `test:`, `ci:`, `chore:`, `style:`) don't
-make a release on their own. Below 1.0.0 a breaking change (`feat!:`, or
-`BREAKING CHANGE:` in the body) bumps the minor version too: 0.1.0 → 0.2.0
-(`version_ceiling` in `.semrel.yaml`).
+make a release on their own. A breaking change (`feat!:`, or
+`BREAKING CHANGE:` in the body) bumps the major version: 1.4.2 → 2.0.0.
+Before 1.0.0 it bumped the minor one (a `version_ceiling` in
+`.semrel.yaml`, lifted for 1.0.0).
 
 ```sh
 task tools:release      # once: semrel (needs Go); also needs jq, and gh signed in (or GITHUB_TOKEN)

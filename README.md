@@ -10,6 +10,12 @@ plain-Markdown philosophy and offline access, Notion's friendly interface and
 real-time collaboration — with **end-to-end encryption** so the server can't
 read anything.
 
+**Try it in your browser:** a full demo runs at
+[demo.notekpr.md](https://demo.notekpr.md), with nothing to install (it's
+reset regularly, so keep nothing real there). **Rather not run a server?**
+notekpr is also hosted for you at [notekpr.md](https://notekpr.md): every
+feature on every plan, and there too only your devices hold the keys.
+
 * **Private by design** — notes, file names, folders, attachments and history
   are encrypted on your devices. The server stores ciphertext and coordinates.
 * **Collaborative** — share vaults with family or colleagues as editor or
@@ -186,12 +192,28 @@ person is behind them.
 
 Security problems are reported privately: [SECURITY.md](SECURITY.md).
 
-## License
+## Support notekpr
 
-[AGPL-3.0-or-later](LICENSE). notekpr is also made of other people's work, under their own licences: [docs/licenses.md](docs/licenses.md) has their notices, and every build carries a copy.
+Running notekpr yourself is free, with every feature, and nothing is held
+back for paying customers. If it's useful to you and you'd like to give
+something back, the best way is a [hosted plan](https://notekpr.md/#pricing),
+even one you never use: the plans are what keep notekpr going. A plan is a
+purchase like any other, from coolapso AB, and it's there if you ever want
+your notes on our servers too.
 
-If you like this project and want to support / contribute in a different way you can always [:heart: Sponsor Me](https://github.com/sponsors/coolapso) or
+Rather give something directly? [:heart: Sponsor notekpr's
+development](https://github.com/sponsors/coolapso) on GitHub, monthly or
+once, or buy a coffee (no GitHub account needed). The money goes to
+coolapso, who makes notekpr; you get nothing extra for it, you already have
+everything.
 
 <a href="https://www.buymeacoffee.com/coolapso" target="_blank">
   <img src="https://cdn.buymeacoffee.com/buttons/default-yellow.png" alt="Buy Me A Coffee" style="height: 51px !important;width: 217px !important;" />
 </a>
+
+Not money? [Start a discussion](https://github.com/coolapso/notekpr/discussions)
+with a bug or an idea, or tell someone who'd like it.
+
+## License
+
+[AGPL-3.0-or-later](LICENSE). notekpr is also made of other people's work, under their own licences: [docs/licenses.md](docs/licenses.md) has their notices, and every build carries a copy.

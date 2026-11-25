@@ -48,8 +48,9 @@ it):
    row's ⋯ menu renames it, gives it an icon, moves it or deletes it.
 7. At the bottom: the **Trash**, **Share vault**, and your name, which
    opens *Settings*, *Keyboard shortcuts*, the theme (light, dark or your
-   system's) and *Sign out*. Next to your name: whether everything is
-   *Synced*.
+   system's) and *Sign out* — and, if your server has one, a link to where
+   you manage your account outside notekpr (your password, say, or your
+   plan). Next to your name: whether everything is *Synced*.
 
 The note, on the right:
 

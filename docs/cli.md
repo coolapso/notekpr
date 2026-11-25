@@ -260,7 +260,8 @@ directory, never deleted) and enrolls the computer as a new device.
   (`approve` and `revoke` ask first; `--yes` skips that). Revoking a device
   ends its sessions; if it might be compromised, also rotate the keys of
   shared vaults (`vault rotate`).
-* `notekpr status` shows profile, server, account fingerprint, devices,
+* `notekpr status` shows profile, server, account fingerprint, where the
+  server has you manage your account elsewhere (if it says), devices,
   vaults (with their ids, and what they take on the server of how much they
   may), pending changes and sync state (`--json` for scripts).
 

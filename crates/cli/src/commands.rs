@@ -1232,6 +1232,15 @@ pub(crate) async fn sign_in(ctx: &Ctx, a: LoginArgs) -> Result<account::LoginOut
     Ok(out)
 }
 
+/// The server's link to where people manage their account elsewhere, if it
+/// has one (and it is a plain web address).
+async fn account_page(session: &Session) -> Option<notekpr_core::protocol::AccountPage> {
+    let page = session.server_info().await.ok()?.account_page.clone()?;
+    notekpr_core::protocol::account_page_host(&page.url)
+        .is_some()
+        .then_some(page)
+}
+
 async fn status(ctx: &Ctx) -> Result<()> {
     let store = ctx.store()?;
     let p = store.require()?;
@@ -1254,6 +1263,11 @@ async fn status(ctx: &Ctx) -> Result<()> {
             .await?;
             out["online"] = json!(hub.is_online());
             out["fingerprint"] = json!(s.fingerprint());
+            if p.kind == PrincipalKind::Human
+                && let Some(a) = account_page(&s).await
+            {
+                out["account_page"] = json!(a);
+            }
             out["vaults"] = serde_json::to_value(hub.summaries().await)?;
         }
         ctx.print_json(&out);
@@ -1298,6 +1312,12 @@ async fn status(ctx: &Ctx) -> Result<()> {
     match session.server_info().await {
         Ok(i) => crate::out!("Online:    yes ({} {})", i.name, i.version),
         Err(e) => crate::out!("Online:    no ({e})"),
+    }
+    // Where the server's administrators have people manage their account.
+    if p.kind == PrincipalKind::Human
+        && let Some(a) = account_page(&session).await
+    {
+        crate::out!("Account:   {} — {}", a.label, a.url);
     }
     if p.kind == PrincipalKind::Human
         && hub.is_online()

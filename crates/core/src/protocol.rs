@@ -193,6 +193,112 @@ pub struct ServerInfo {
     /// protocol.md §3); absent on older servers.
     #[serde(default)]
     pub app_sign_in: bool,
+    /// Where people manage their account elsewhere, if the server says
+    /// ([`InstanceSettings::account_page_url`]): the apps link to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_page: Option<AccountPage>,
+}
+
+/// A page where people manage their account elsewhere — a hosted service's
+/// account app, an identity provider's user page —, as the apps link to it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AccountPage {
+    pub url: String,
+    /// What the link says: the administrators' text, else "Account at
+    /// <host>".
+    pub label: String,
+}
+
+impl AccountPage {
+    /// The link an instance's settings make, if they make one.
+    pub fn from_settings(s: &InstanceSettings) -> Option<AccountPage> {
+        let host = account_page_host(&s.account_page_url)?;
+        let label = s.account_page_label.trim();
+        Some(AccountPage {
+            url: s.account_page_url.clone(),
+            label: if label.is_empty() {
+                format!("Account at {host}")
+            } else {
+                label.to_string()
+            },
+        })
+    }
+}
+
+/// The host of an account page's address, if the apps may link to it: an
+/// `http` or `https` address with a plain host (letters, digits, dots and
+/// dashes, or an IPv6 literal) and maybe a port — no user part, which could
+/// make it look like another site's —, then a path; no spaces or control
+/// characters anywhere.
+pub fn account_page_host(url: &str) -> Option<&str> {
+    if url.len() > 2048 || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    let lower = url
+        .get(..8)
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let rest = if lower.starts_with("https://") {
+        &url[8..]
+    } else if lower.starts_with("http://") {
+        &url[7..]
+    } else {
+        return None;
+    };
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    if authority.contains('@') || authority.contains('\\') {
+        return None;
+    }
+    let host = match authority.strip_prefix('[') {
+        // [::1]:8080
+        Some(v6) => {
+            let end = v6.find(']')?;
+            let (ip, after) = (&v6[..end], &v6[end + 1..]);
+            ip.parse::<std::net::Ipv6Addr>().ok()?;
+            if !after.is_empty() && !port(after.strip_prefix(':')?) {
+                return None;
+            }
+            &authority[..end + 2]
+        }
+        None => {
+            let (host, port_part) = match authority.split_once(':') {
+                Some((h, p)) => (h, Some(p)),
+                None => (authority, None),
+            };
+            if port_part.is_some_and(|p| !port(p)) {
+                return None;
+            }
+            host
+        }
+    };
+    let plain = |h: &str| {
+        !h.is_empty()
+            && !h.starts_with(['.', '-'])
+            && h.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    };
+    // A host browsers read as an IPv4 address (its last part a number, or
+    // hexadecimal) is one written the usual way, so the link says where it
+    // really goes (`0x7f000001` is 127.0.0.1).
+    let numeric = |h: &str| {
+        let last = h
+            .trim_end_matches('.')
+            .rsplit('.')
+            .next()
+            .unwrap_or_default();
+        last.chars().all(|c| c.is_ascii_digit())
+            || last.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("0x"))
+    };
+    let ipv4 = |h: &str| {
+        h.parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.to_string() == h)
+    };
+    let ok = host.starts_with('[') || (plain(host) && (!numeric(host) || ipv4(host)));
+    ok.then_some(host)
+}
+
+fn port(p: &str) -> bool {
+    p.chars().all(|c| c.is_ascii_digit()) && p.parse::<u16>().is_ok_and(|n| n > 0)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -1774,6 +1880,16 @@ pub struct InstanceSettings {
     /// Days an invitation waits to be answered (and, once accepted, for an
     /// owner's app to add them); 1 to [`crate::invitation::MAX_DAYS`].
     pub invitation_days: u32,
+    /// Where people manage their account elsewhere — a hosted service's
+    /// account app, the identity provider's user page —: the apps link to it
+    /// ([`AccountPage`]). An `http` or `https` address
+    /// ([`account_page_host`]); empty: none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub account_page_url: String,
+    /// What that link says (at most 60 characters); empty: "Account at
+    /// <host>".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub account_page_label: String,
     /// Days a browser session lasts (from when it starts).
     pub session_ttl_days: u32,
     /// Days a session of the CLI (and other apps signing in by code) lasts.
@@ -1813,6 +1929,8 @@ impl Default for InstanceSettings {
             invitations_pending: default_invitations_pending(),
             invitations_per_day: default_invitations_per_day(),
             invitation_days: 14,
+            account_page_url: String::new(),
+            account_page_label: String::new(),
             session_ttl_days: 30,
             device_session_ttl_days: 180,
             agent_token_ttl_secs: 3600,
@@ -1880,6 +1998,12 @@ pub struct InstanceSettingsUpdate {
     pub invitations_per_day: Option<Limit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invitation_days: Option<u32>,
+    /// `""`: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_page_url: Option<String>,
+    /// `""`: "Account at <host>".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_page_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_ttl_days: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1928,6 +2052,8 @@ impl InstanceSettings {
             invitations_pending,
             invitations_per_day,
             invitation_days,
+            account_page_url,
+            account_page_label,
             session_ttl_days,
             device_session_ttl_days,
             agent_token_ttl_secs,
@@ -1968,6 +2094,12 @@ impl InstanceSettings {
         if let Some(v) = oldest_app_version {
             self.oldest_app_version = v.trim().to_string();
         }
+        if let Some(v) = account_page_url {
+            self.account_page_url = v.trim().to_string();
+        }
+        if let Some(v) = account_page_label {
+            self.account_page_label = v.trim().to_string();
+        }
     }
 
     /// Why the server can't work with these settings, if it can't: the
@@ -1996,6 +2128,18 @@ impl InstanceSettings {
         }
         if self.user_directory == UserDirectory::Other {
             return Err("user_directory is \"private\" or \"search\"".into());
+        }
+        if !self.account_page_url.is_empty() && account_page_host(&self.account_page_url).is_none()
+        {
+            return Err(
+                "account_page_url is an http or https address with a plain host (no user part)"
+                    .into(),
+            );
+        }
+        if self.account_page_label.chars().count() > 60
+            || self.account_page_label.chars().any(char::is_control)
+        {
+            return Err("account_page_label is at most 60 characters, on one line".into());
         }
         Ok(())
     }
@@ -2505,6 +2649,80 @@ pub struct ExportedAttachment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_account_page_is_a_plain_web_address() {
+        for (url, host) in [
+            ("https://account.notekpr.md", "account.notekpr.md"),
+            ("https://auth.home.lan:9091/#/settings", "auth.home.lan"),
+            ("HTTP://192.168.1.2/user?tab=2fa", "192.168.1.2"),
+            ("http://[::1]:8080/", "[::1]"),
+            ("https://[2001:db8::1]/", "[2001:db8::1]"),
+            ("https://auth.home.lan:65535/", "auth.home.lan"),
+            ("http://10.0.0.2:9091/", "10.0.0.2"),
+            ("https://web2.example.com/", "web2.example.com"),
+        ] {
+            assert_eq!(account_page_host(url), Some(host), "{url}");
+        }
+        for url in [
+            "",
+            "account.notekpr.md",
+            "javascript:alert(1)",
+            "data:text/html,hi",
+            "ftp://files.example.com",
+            "https://",
+            "https://account.notekpr.md@elsewhere.example/",
+            "https://exa mple.com",
+            "https://example.com/\n",
+            "https://example.com:port/",
+            "https://-bad.example/",
+            "https://[nothost]/",
+            "https://[1234]/",
+            "https://example.com:99999/",
+            "https://example.com:0/",
+            "http://0x7f000001/",
+            "http://2130706433/",
+            "http://127.1/",
+            "http://0177.0.0.1/",
+            "http://example.0x10/",
+            "https://evil.example\\@account.notekpr.md",
+        ] {
+            assert_eq!(account_page_host(url), None, "{url:?}");
+        }
+    }
+
+    #[test]
+    fn the_account_page_says_where_it_goes_unless_told_otherwise() {
+        let mut s = InstanceSettings::default();
+        assert_eq!(AccountPage::from_settings(&s), None);
+        s.apply(&InstanceSettingsUpdate {
+            account_page_url: Some(" https://account.notekpr.md/ ".into()),
+            ..Default::default()
+        });
+        assert!(s.check().is_ok());
+        let page = AccountPage::from_settings(&s).unwrap();
+        assert_eq!(page.url, "https://account.notekpr.md/");
+        assert_eq!(page.label, "Account at account.notekpr.md");
+        s.account_page_label = "Plan & billing".into();
+        assert_eq!(
+            AccountPage::from_settings(&s).unwrap().label,
+            "Plan & billing"
+        );
+        // Refused: not a web address, or a label too long or on two lines.
+        s.account_page_url = "javascript:alert(1)".into();
+        assert!(s.check().is_err());
+        s.account_page_url = String::new();
+        s.account_page_label = "x".repeat(61);
+        assert!(s.check().is_err());
+        s.account_page_label = "two\nlines".into();
+        assert!(s.check().is_err());
+        // Older documents have neither.
+        let old: InstanceSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            (old.account_page_url, old.account_page_label),
+            (String::new(), String::new())
+        );
+    }
 
     #[test]
     fn ws_messages_are_tagged() {

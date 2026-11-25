@@ -1745,6 +1745,59 @@ async fn administrators_set_how_many_drawings_a_vault_may_hold() {
     assert_eq!(status(r).await, 404);
 }
 
+/// A page elsewhere where people manage their account: set by
+/// administrators, said to every app by `GET /info` (with what the link
+/// says, by default where it goes); only a plain web address.
+#[tokio::test]
+async fn an_account_page_elsewhere_is_linked_from_the_apps() {
+    let srv = start_with_operator().await;
+    let info = || async {
+        reqwest::Client::new()
+            .get(format!("{}/info", srv.base))
+            .send()
+            .await
+            .unwrap()
+            .json::<ServerInfo>()
+            .await
+            .unwrap()
+            .account_page
+    };
+    assert_eq!(info().await, None);
+    settings(
+        &srv,
+        serde_json::json!({"account_page_url": "https://auth.home.lan/"}),
+    )
+    .await;
+    assert_eq!(
+        info().await,
+        Some(AccountPage {
+            url: "https://auth.home.lan/".into(),
+            label: "Account at auth.home.lan".into(),
+        })
+    );
+    settings(
+        &srv,
+        serde_json::json!({"account_page_label": "Password & 2FA"}),
+    )
+    .await;
+    assert_eq!(info().await.unwrap().label, "Password & 2FA");
+    for bad in [
+        serde_json::json!({"account_page_url": "javascript:alert(1)"}),
+        serde_json::json!({"account_page_url": "https://auth.home.lan@evil.example/"}),
+        serde_json::json!({"account_page_label": "x".repeat(61)}),
+    ] {
+        let r = operator(&srv, Method::PATCH, "/admin/settings")
+            .json(&bad)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 400, "{bad}");
+    }
+    assert_eq!(info().await.unwrap().url, "https://auth.home.lan/");
+    settings(&srv, serde_json::json!({"account_page_url": ""})).await;
+    assert_eq!(info().await, None);
+}
+
 /// Sizes, rate limits, sign-ins and how people are found are instance
 /// settings too: changed while the server runs, they take effect at once.
 #[tokio::test]

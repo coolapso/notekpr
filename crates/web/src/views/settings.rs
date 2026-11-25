@@ -153,6 +153,21 @@ fn Account() -> impl IntoView {
             </div>
             <p class="muted small">"Your name and e-mail come from your sign-in provider."</p>
         })}
+        {move || super::account_page().map(|p| {
+            // Where it goes, always: the text is the server's.
+            let host = notekpr_core::protocol::account_page_host(&p.url).unwrap_or_default().to_string();
+            let said = if p.label.contains(&host) {
+                " — outside this app".to_string()
+            } else {
+                format!(" — at {host}, outside this app")
+            };
+            view! {
+                <p class="account-page-line">
+                    <a class="btn account-page" href=p.url.clone() title=p.url target="_blank" rel="noopener noreferrer"><Icon name="users"/>{format!(" {} ↗", p.label)}</a>
+                    <span class="muted small account-page-host">{said}</span>
+                </p>
+            }
+        })}
         <h3>"Your key fingerprint"</h3>
         <p class="fp big">{fp}</p>
         <p class="muted small">"When someone shares a vault with you, they can compare this fingerprint with what their screen shows to make sure nobody is in the middle."</p>
@@ -1348,12 +1363,15 @@ fn InstanceSettingsPanel(
         drawings_per_vault,
     ) = fields;
     let oldest_app = RwSignal::new(String::new());
+    let (account_url, account_label) = (RwSignal::new(String::new()), RwSignal::new(String::new()));
     // The server's sizes, history, deleting, rate limits, sign-ins: edited
     // here, saved together.
     let server = RwSignal::new(InstanceSettings::default());
     let show = move |a: AdminSettings| {
         let s = &a.settings;
         oldest_app.set(s.oldest_app_version.clone());
+        account_url.set(s.account_page_url.clone());
+        account_label.set(s.account_page_label.clone());
         server.set(s.clone());
         users.set(s.max_users);
         agents.set(s.max_agents);
@@ -1467,6 +1485,28 @@ fn InstanceSettingsPanel(
                     let build = status.get().map(|s| s.build_oldest_app_version).unwrap_or_default();
                     format!("Apps older than this (the command line now, desktop and phone apps later) are told to update instead of syncing, and keep their unsent edits; browsers get the current version with a reload. Empty: what this server's version needs ({build}).")
                 }}</p>
+                <div class="row account-page-settings">
+                    <label class="limit-field">
+                        <span class="limit-label">"Account page"</span>
+                        <input class="input small account-page-url" placeholder="https://…"
+                            prop:value=move || account_url.get()
+                            on:input=move |ev| account_url.set(event_target_value(&ev))/>
+                    </label>
+                    <label class="limit-field">
+                        <span class="limit-label">"Its link says"</span>
+                        <input class="input small account-page-label" maxlength="60"
+                            placeholder=move || notekpr_core::protocol::account_page_host(account_url.get().trim())
+                                .map(|h| format!("Account at {h}")).unwrap_or_default()
+                            prop:value=move || account_label.get()
+                            on:input=move |ev| account_label.set(event_target_value(&ev))/>
+                    </label>
+                    <button class="btn save-account-page" on:click=move |_| save(InstanceSettingsUpdate {
+                        account_page_url: Some(account_url.get_untracked()),
+                        account_page_label: Some(account_label.get_untracked()),
+                        ..Default::default()
+                    })>"Save"</button>
+                </div>
+                <p class="muted small">"Where people manage their account outside this app — your sign-in provider's own page (password, two-factor), a hosted service's account page: the apps link to it from the menu under one's name and from Settings → Account. An http or https address; empty: no link. What the link says, if not “Account at” and its address."</p>
                 <h4>"Server"</h4>
                 <div class="limits server-settings">
                     <SettingField label="Attachment size (MiB)" server=server get=|s| s.max_attachment_mb set=|s, n| s.max_attachment_mb = n class="max-attachment-mb"/>

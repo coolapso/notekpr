@@ -135,6 +135,7 @@ kbd { font-size: 11px; padding: 1px 5px; border: 1px solid var(--border-strong);
   transition: background 0.12s, border-color 0.12s;
 }
 .btn:hover { background: var(--bg-2); }
+a.btn { color: inherit; text-decoration: none; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
 .btn.primary:hover { filter: brightness(1.08); }
@@ -190,8 +191,9 @@ textarea.input { resize: vertical; }
   background: var(--bg); border: 1px solid var(--border); box-shadow: var(--shadow);
   display: flex; flex-direction: column;
 }
-.menu button { display: flex; align-items: center; gap: 8px; text-align: left; padding: 6px 9px; border: none; border-radius: 6px; background: none; cursor: pointer; font-size: 14px; }
-.menu button:hover { background: var(--bg-2); }
+.menu button, .menu a { display: flex; align-items: center; gap: 8px; text-align: left; padding: 6px 9px; border: none; border-radius: 6px; background: none; cursor: pointer; font-size: 14px; }
+.menu a { color: inherit; text-decoration: none; }
+.menu button:hover, .menu a:hover { background: var(--bg-2); }
 .menu button.danger { color: var(--danger); }
 .menu button.archived { opacity: 0.6; }
 .menu .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }

@@ -385,6 +385,10 @@ notes](writing.md) and [Drawings](drawings.md).
 * Backups, upgrades, Prometheus metrics, and an admin page for accounts
   (make admins, disable accounts), server statistics and the server's
   version — never content.
+* A link to where people manage their account outside notekpr — the
+  sign-in provider's own page, a hosted service's account page —, set by
+  the administrators with what it says: in the menu under one's name, in
+  Settings → Account and in `notekpr status`.
 * Instance settings that change without a restart (flags only for what the
   server needs to start): limits on accounts,
   agents and vaults, vaults, agents and quick notes per person (with each

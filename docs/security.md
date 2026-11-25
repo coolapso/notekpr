@@ -554,6 +554,13 @@ browser. What it adds to the above:
   sends nothing to anyone's app. The app's listener answers only its
   random path, on its own address (a page reaching the port under another
   name gets nothing).
+* **The server's own words** in the app are few: its sign-in provider's
+  name, and a link to an account page elsewhere if its administrators set
+  one — a plain web address, shown with the link (when its text doesn't
+  say it, beside it or on hover) and opened in the default browser like
+  any other. A malicious server could send people to a page of its
+  choosing that way, as it could by e-mail; it can't make the app show or
+  run anything of its own.
 * **Cross-origin API calls** are allowed for the app's fixed origins only
   (`tauri://localhost`, `http(s)://tauri.localhost`), without credentials:
   the API takes bearer tokens, so no web page gains anything, and other

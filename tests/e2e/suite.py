@@ -3789,6 +3789,39 @@ def test_admin(env):
         a.shot("admin-server")
         server_settings(25, "private")
 
+        # A page elsewhere where people manage their account (the sign-in
+        # provider's, a hosted service's): linked from the menu under one's
+        # name and from Settings → Account, saying where it goes.
+        def account_page(url, label):
+            a.js("const i = document.querySelector('.account-page-url'); i.value = arguments[0]; i.dispatchEvent(new Event('input', {bubbles: true}));", url)
+            a.js("const i = document.querySelector('.account-page-label'); i.value = arguments[0]; i.dispatchEvent(new Event('input', {bubbles: true}));", label)
+            a.js("document.querySelector('.save-account-page').scrollIntoView({block: 'center'})")
+            a.click(".save-account-page")
+            deadline = time.time() + 10
+            while (api_get(a, "/info") or {}).get("account_page", {}).get("url") != url:
+                if time.time() > deadline:
+                    raise AssertionError("the account page wasn't saved")
+                time.sleep(0.2)
+            b.js("location.reload()")
+            b.find(".sb-user .user-btn", 20)
+            b.click(".sb-user .user-btn")
+            b.find(".menu .account-page", 10)
+            return b.text(".menu .account-page"), b.js("return document.querySelector('.menu .account-page').getAttribute('href')")
+
+        text, href = account_page("https://auth.example.org/", "")
+        check(text.startswith("Account at auth.example.org") and href == "https://auth.example.org/",
+              "administrators link an account page elsewhere: in everyone's menu, saying where it goes")
+        b.shot("account-page-menu")
+        text, _ = account_page("https://auth.example.org/", "Password & 2FA")
+        check(text.startswith("Password & 2FA"), "and what the link says")
+        b.go(env.url + "settings/account")
+        b.find(".account-page-line .account-page", 15)
+        check(b.text(".account-page-line .account-page").startswith("Password & 2FA")
+              and "auth.example.org" in b.text(".account-page-line .account-page-host"),
+              "Settings → Account links it too, saying where it goes")
+        b.shot("account-page-settings")
+        api_patch(a, "/admin/settings", {"account_page_url": "", "account_page_label": ""})
+
         # An admin client for a billing system: its own token and scopes.
         token_call = """window.__api = undefined;
             fetch('/api/v1' + arguments[1], {method: arguments[2], body: arguments[3] ? JSON.stringify(arguments[3]) : undefined,
@@ -3839,7 +3872,8 @@ def test_admin(env):
         check(all(any(r in m for r in refused) for m in severe_logs(a, b)), "no browser errors but what was refused on purpose")
     finally:
         # Other tests share this server.
-        api_patch(a, "/admin/settings", {"read_only": False, "vaults_per_user": "unlimited", "oldest_app_version": ""})
+        api_patch(a, "/admin/settings", {"read_only": False, "vaults_per_user": "unlimited", "oldest_app_version": "",
+                                         "account_page_url": "", "account_page_label": ""})
         a.close()
         b.close()
 

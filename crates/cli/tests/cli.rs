@@ -118,6 +118,47 @@ async fn stops_quietly_when_nobody_reads_its_output() {
     }
 }
 
+/// `status` says where the server has people manage their account
+/// elsewhere, when it has such a page.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn status_says_where_the_account_is_managed() {
+    use notekpr_core::protocol::InstanceSettingsUpdate;
+    use std::process::{Command, Stdio};
+    let srv = start().await;
+    login(&srv, "alice").await;
+    let dirs = srv.dirs("alice");
+    let status = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_notekpr"))
+            .args(["--profile", "alice"])
+            .args(args)
+            .env("NOTEKPR_CONFIG_DIR", &dirs.config)
+            .env("NOTEKPR_DATA_DIR", &dirs.data)
+            .env_remove("NOTEKPR_LOG")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert!(!status(&["status"]).contains("Account:"));
+    let change = InstanceSettingsUpdate {
+        account_page_url: Some("https://auth.home.lan/".into()),
+        ..Default::default()
+    };
+    srv.state
+        .instance
+        .update(&srv.state.db, &change)
+        .await
+        .unwrap();
+    let text = status(&["status"]);
+    assert!(
+        text.contains("Account:   Account at auth.home.lan — https://auth.home.lan/"),
+        "{text}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&status(&["--json", "status"])).unwrap();
+    assert_eq!(json["account_page"]["url"], "https://auth.home.lan/");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn plaintext_mirror_is_confirmed_per_directory() {
     let srv = start().await;

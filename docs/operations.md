@@ -541,6 +541,13 @@ and sets them through it.
   current app with a reload. Each server version accepts apps from some
   version on by itself (shown next to the field); this only raises it. Empty:
   only that.
+* **Account page**: where people manage their account outside notekpr —
+  your sign-in provider's own page (Authelia's, say: password,
+  two-factor), or a hosted service's account page (`account_page_url`).
+  The apps link to it from the menu under one's name and from Settings →
+  Account, saying "Account at" and its address, or what you write
+  (`account_page_label`); `notekpr status` shows it too. Apps learn it when
+  they next start or reload. Empty: no link.
 
 Under *Server*, the rest (API names and defaults in parentheses):
 
@@ -638,6 +645,9 @@ url=https://notes.example.com/api/v1
 curl -H "Authorization: Bearer $t" $url/admin/settings
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/settings -H 'Content-Type: application/json' \
      -d '{"vaults_per_user": 1, "quick_notes_per_user": 30, "quick_notes_storage_mb": 100, "drawings_per_vault": 1, "max_storage_mb": 20480}'
+# where people manage their account outside notekpr, and what the link says ("" clears either)
+curl -H "Authorization: Bearer $t" -X PATCH $url/admin/settings -H 'Content-Type: application/json' \
+     -d '{"account_page_url": "https://account.example.com", "account_page_label": "Plan & billing"}'
 # one person, by e-mail or by their sign-in identity (issuer|subject)
 curl -H "Authorization: Bearer $t" "$url/admin/users?email=ana@example.com"
 curl -H "Authorization: Bearer $t" -X PATCH $url/admin/users/<id> -H 'Content-Type: application/json' \

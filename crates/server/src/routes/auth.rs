@@ -6,8 +6,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use notekpr_core::protocol::{
-    DEV_EMAIL_DOMAIN, DEV_ISSUER, DevLoginRequest, ExchangeRequest, ServerInfo, SessionEntry,
-    SessionResponse,
+    AccountPage, DEV_EMAIL_DOMAIN, DEV_ISSUER, DevLoginRequest, ExchangeRequest, ServerInfo,
+    SessionEntry, SessionResponse,
 };
 use serde::Deserialize;
 
@@ -41,6 +41,7 @@ pub async fn info(State(state): State<AppState>) -> Json<ServerInfo> {
         // Apps sign in through OIDC (`/auth/oidc/app`); development mode
         // has its own sign-in.
         app_sign_in: state.oidc.is_some(),
+        account_page: AccountPage::from_settings(&settings),
         demo_resets_at: state
             .config
             .demo_resets_at

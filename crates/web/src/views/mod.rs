@@ -28,7 +28,7 @@ use crate::state::{self, Modal, Route, ToastKind, ViewMode, step, ui};
 use crate::util;
 use crate::ws::ConnState;
 use icons::Icon;
-use notekpr_core::protocol::{ReadOnly, Role};
+use notekpr_core::protocol::{AccountPage, ReadOnly, Role};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -378,6 +378,17 @@ fn Toasts() -> impl IntoView {
             </For>
         </div>
     }
+}
+
+/// The server's link to where people manage their account elsewhere (a
+/// hosted service's account app, the identity provider's user page), if it
+/// has one: what it says, and a plain web address (checked again here, as
+/// it becomes a link). The desktop app opens it in the browser.
+pub fn account_page() -> Option<AccountPage> {
+    ui().server
+        .get()
+        .and_then(|s| s.account_page)
+        .filter(|p| notekpr_core::protocol::account_page_host(&p.url).is_some())
 }
 
 /// Connection / sync status indicator.

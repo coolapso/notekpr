@@ -230,6 +230,9 @@ pub fn Sidebar() -> impl IntoView {
                                 <div class="menu-sep"></div>
                             })}
                             <button on:click=move |_| state::navigate(Route::Settings("account".into()))><Icon name="settings"/>" Settings"</button>
+                            {move || super::account_page().map(|p| view! {
+                                <a class="account-page" href=p.url.clone() title=p.url target="_blank" rel="noopener noreferrer"><Icon name="users"/>{format!(" {} ↗", p.label)}</a>
+                            })}
                             <button on:click=move |_| state::navigate(Route::Settings("devices".into()))><Icon name="device"/>" Devices"</button>
                             <button on:click=move |_| ui.modal.set(Some(Modal::Help))><Icon name="keyboard"/>" Keyboard shortcuts"</button>
                             <button on:click=move |_| state::set_ui_prefs(|p| p.theme = match p.theme.as_str() { "dark" => "light".into(), "light" => "system".into(), _ => "dark".into() })>

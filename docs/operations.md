@@ -686,7 +686,8 @@ store, mounted for both notekpr and the service that uses it. An init
 container (same image, same volume) runs `ensure` before every start: it
 creates the client if it's missing, sets its scopes and makes its tokens
 exactly the ones in the file (one per line); running it again changes
-nothing.
+nothing. It logs what it did (`admin client ensured`, with how many tokens
+it added and removed, never the tokens).
 
 ```sh
 echo "notekpr_a_$(openssl rand -hex 32)"      # a token: the prefix and ≥ 32 characters
@@ -749,7 +750,8 @@ at least as long as you keep backups.
 `--out-dir` names files `notekpr-YYYYMMDD-HHMMSS.db` (UTC); `--keep`
 prunes only files named `notekpr-*.db` there, so the automatic
 `pre-migration-*.db` backups (§7), which land in `<data dir>/backups`, stay
-until you delete them.
+until you delete them. It logs each file it writes (`backup written`) and
+removes (`removed an old backup`), as JSON with `--log-format json`.
 
 **Docker Compose**: backups land in the data volume, next to the
 attachments (`/data/files`); copy both off the machine.
@@ -935,7 +937,11 @@ reads and, after holding them, refuses changes. Run one.
   and on Linux the process's own `process_cpu_seconds_total` (a gauge) and
   `process_resident_memory_bytes`. Keep it internal (§4).
 * Logs: one line per request (method, redacted path, status, latency) plus
-  lifecycle events; `--log-format json` for log shippers. No user ids, IP
+  lifecycle events; `--log-format json` for log shippers. The commands a
+  deployment runs unattended (`migrate`, `backup`, `admin-client ensure`)
+  log what they did the same way, so with JSON every line they write is
+  JSON with a level; what a person reads, such as a new admin client's
+  token or `admin-client list`, is printed. No user ids, IP
   addresses or names.
 * The version that runs: `notekpr-server --version`, the start-up log
   (`notekpr server ready`), `version` in `GET /api/v1/info`.

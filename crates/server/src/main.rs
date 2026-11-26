@@ -24,13 +24,17 @@ async fn main() -> anyhow::Result<()> {
     let mut cli = Cli::parse();
     cli.config.normalize();
     init_logging(cli.config.log_format);
+    // What the commands a deployment runs unattended (migrate, backup,
+    // admin-client ensure) did goes to the log, so `--log-format json` makes it
+    // JSON with a level, as log shippers read it. What a person or a script reads
+    // (a token, a list) and the reports of commands run by hand are printed.
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve(cli.config).await,
         Command::Migrate => {
             let path = cli.config.db_path();
             let pool = db::connect(&path).await?;
             db::migrate(&pool, &path).await?;
-            println!("database at {} is up to date", path.display());
+            tracing::info!(path = %path.display(), "database is up to date");
             Ok(())
         }
         Command::Backup { out, out_dir, keep } => {
@@ -55,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let pool = db::connect(&path).await?;
             db::backup_to(&pool, &out).await?;
-            println!("backup written to {}", out.display());
+            tracing::info!(path = %out.display(), "backup written");
             if let (Some(dir), Some(keep)) = (out_dir, keep) {
                 let mut files: Vec<_> = std::fs::read_dir(&dir)?
                     .filter_map(|e| e.ok().map(|e| e.path()))
@@ -69,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
                 while files.len() > keep.max(1) {
                     let old = files.remove(0);
                     std::fs::remove_file(&old)?;
-                    println!("removed old backup {}", old.display());
+                    tracing::info!(path = %old.display(), "removed an old backup");
                 }
             }
             Ok(())
@@ -120,12 +124,13 @@ async fn admin_client(config: &Config, command: AdminClientCommand) -> anyhow::R
                 .map(str::to_string)
                 .collect();
             let r = admin_clients::ensure(&pool, &name, &scopes, &tokens).await?;
-            println!(
-                "admin client {name} {} with {}: {} token(s) added, {} removed",
-                if r.created { "created" } else { "is there" },
-                scope_list(&scopes),
-                r.added,
-                r.removed
+            tracing::info!(
+                name,
+                created = r.created,
+                scopes = %scope_list(&scopes),
+                tokens_added = r.added,
+                tokens_removed = r.removed,
+                "admin client ensured"
             );
         }
         AdminClientCommand::List => {

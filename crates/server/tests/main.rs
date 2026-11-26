@@ -7,6 +7,7 @@ mod common;
 
 mod admin;
 mod api;
+mod commands;
 mod embedded;
 mod export;
 mod files;
